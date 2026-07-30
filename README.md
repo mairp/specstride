@@ -83,6 +83,54 @@ wiggum run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md
 (`wiggum` is the single front-door command — see **Install it permanently**
 just below.)
 
+### Pre-loop test automation
+
+Wiggum can derive a Lisa-compatible `VerificationPlan v1` before the first
+proposer pass. The canonical JSON is hash-bound to the authoritative
+specification, while `TEST_PLAN.md` is its human-readable projection.
+
+- `--verification off` preserves the legacy loop.
+- `--verification plan` creates the plan and injects its obligations into the
+  proposer and critic.
+- `--verification required` additionally runs fixed-argv tests before each
+  approval and runs a cumulative release gate, including on an already-approved
+  resumed workspace.
+
+All operator-supplied filesystem paths must be absolute. A maximum-observability
+run against Lisa is:
+
+```bash
+WIGGUM_AGENT_STREAM=true WIGGUM_LIVE_DETAIL=full \
+$WIGGUM_HOME/wiggum run \
+  --workdir ~/projects/app \
+  --specs ~/projects/app/SPECS.md \
+  --spec-format native \
+  --feature specification-bundle-v2 \
+  --verification required \
+  --test-plan ~/projects/app/testautomation/AUTO_TEST_PLAN.md \
+  --generate-tests ~/projects/app/testautomation/generated \
+  --live \
+  --debug \
+  --telemetry \
+  --loki-url http://127.0.0.1:13011 \
+  --otel \
+  --otel-url http://127.0.0.1:13018
+```
+
+Planning can also be run independently, before any loop:
+
+```bash
+/usr/bin/python3 \
+  $WIGGUM_HOME/lib/verification_plan.py create \
+  --workdir ~/projects/app \
+  --specs ~/projects/app/SPECS.md \
+  --format native \
+  --output ~/projects/app/testautomation/AUTO_TEST_PLAN.md \
+  --json-output ~/projects/app/.wiggum/verification/verification-plan.json \
+  --generate-tests ~/projects/app/testautomation/generated \
+  --required
+```
+
 The Bash entry points (`orchestrator.sh`, `proposer.sh`, `wiggum`) sit at the top
 level; all Python components live under **`lib/`** (`lib/critic.py`,
 `lib/present.py`, `lib/ralph_loki_ship.py`, `lib/ralph_otel_ship.py`).
