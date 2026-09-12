@@ -1556,7 +1556,17 @@ def full_dump_snapshot(paths, workdir, search_dirs=None, members=None,
             out.append("### `%s` — could not read (%s)" % (p, e))
             continue
         truncated = len(data) > file_cap
-        text = data[:file_cap].decode("utf-8", errors="replace")
+        # W25: a binary file (font, image, archive) cited by a criterion must not be
+        # dumped into the diagnostician prompt — a literal NUL poisons argv-based
+        # providers ("embedded null byte", semantic-router-sovereign 003 phase 10,
+        # 2026-09-13: the diagnostician died and the attempt ran without a hint).
+        # Describe it, as grounding_snapshot already does.
+        if b"\x00" in data[:8192]:
+            kind, dims = _sniff_binary(data[:8192])
+            out.append("### `%s` — binary (%s%s), %d bytes on disk; content not dumped" %
+                       (p, kind, (", %s" % dims) if dims else "", os.path.getsize(full)))
+            continue
+        text = data[:file_cap].decode("utf-8", errors="replace").replace("\x00", "\ufffd")
         if total + len(text) > total_cap:
             out.append("### `%s` — SKIPPED (diagnostician total budget reached; "
                        "file verified present on disk)" % p)
