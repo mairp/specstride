@@ -1302,3 +1302,20 @@ def test_brace_expansion_is_bounded():
     cand = "x-{a,b,c,d}-{1,2,3,4}-{p,q,r,s}.txt"
     got = _expand_braces(cand)
     assert len(got) <= 16 and all("{" not in g or True for g in got)
+
+
+# ── W25: the diagnostician never dumps a binary file ─────────────────────────
+def test_full_dump_snapshot_describes_a_binary_instead_of_dumping_it():
+    """A cited font or image carries NUL bytes; dumped into the prompt they kill
+    an argv-based provider with "embedded null byte" (003 phase 10, 2026-09-13,
+    diagnostician_error). The dump must describe the file and carry no NUL."""
+    from critic import full_dump_snapshot
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "public", "fonts"))
+        with open(os.path.join(d, "public", "fonts", "geist.woff2"), "wb") as fh:
+            fh.write(b"wOF2\x00\x00\x01\x00" + b"\x00" * 64)
+        open(os.path.join(d, "note.md"), "w").write("plain text\n")
+        snap = full_dump_snapshot(["public/fonts/geist.woff2", "note.md"], d)
+        assert "\x00" not in snap
+        assert "geist.woff2` — binary" in snap, snap
+        assert "plain text" in snap
