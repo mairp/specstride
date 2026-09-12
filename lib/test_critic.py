@@ -1319,3 +1319,22 @@ def test_full_dump_snapshot_describes_a_binary_instead_of_dumping_it():
         assert "\x00" not in snap
         assert "geist.woff2` — binary" in snap, snap
         assert "plain text" in snap
+
+
+# ── W26: an ellipsis prefix is prose, not a path component ───────────────────
+def test_ellipsis_prefixed_citation_is_grounded_without_the_prefix():
+    """`…/offline-routing.json` means "in the directory named above". Taken
+    literally it read MISSING for four present records (003 phase 10, 2026-09-13).
+    The prefix is stripped; a slash path under it grounds normally."""
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "runs", "us8"))
+        open(os.path.join(d, "runs", "us8", "offline-routing.json"), "w").write("{}\n")
+        sd = grounding_search_dirs(os.path.join(".wiggum", "features", "default", "gates"), d)
+        got = extract_paths("Records: `…/runs/us8/offline-routing.json` and "
+                            "`.../runs/us8/offline-about.json`.", d, sd)
+        assert "runs/us8/offline-routing.json" in got, got
+        assert "runs/us8/offline-about.json" in got, got     # absent: still cited, reads MISSING
+        assert not any(p.startswith(("…", "...")) for p in got), got
+        snap = grounding_snapshot(got, d, sd)
+        assert "offline-routing.json` — **MISSING**" not in snap
+        assert "- `runs/us8/offline-about.json` — **MISSING**" in snap
