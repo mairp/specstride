@@ -383,8 +383,17 @@ PATH_RE = re.compile(
 _LINE_SUFFIX_RE = re.compile(r'(?:::\S+|:L?\d+(?:[-–:,]L?\d+)*|#L\d+(?:-L?\d+)?)$')
 
 
+# W26: an ellipsis prefix — `…/offline-routing.json`, `.../us8/offline-about.json` —
+# is prose shorthand for "the directory named above", not a path component. Taken
+# literally it exists nowhere (003 phase 10, 2026-09-13: four present records read
+# MISSING and the phase was rejected on them). Strip it; what remains is grounded
+# like any other citation, and a bare name that resolves nowhere is de-noised
+# rather than reported.
+_ELLIPSIS_PREFIX_RE = re.compile(r'^(?:\u2026|\.\.\.)/+')
+
+
 def _strip_line_suffix(cand):
-    return _LINE_SUFFIX_RE.sub("", cand)
+    return _ELLIPSIS_PREFIX_RE.sub("", _LINE_SUFFIX_RE.sub("", cand))
 
 
 # W24: a brace shorthand names EVERY file it expands to. Proposers write
