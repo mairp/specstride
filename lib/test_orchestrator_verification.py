@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import subprocess
+from pathlib import Path
 
 
 ORCHESTRATOR = os.path.join(
@@ -81,7 +82,7 @@ def _fake_prime(tmp_path):
 
 def _run_orchestrator(tmp_path, *, verdict="APPROVED", extra_env=None,
                       max_iter="1", max_rejects="3", proposer_timeout=None,
-                      phase_timeouts=(), timeout=120):
+                      phase_timeouts=(), timeout=120, orchestrator=None):
     """Drive orchestrator.sh with the fake Prime backend; return the result plus
     the parsed events from the run's authoritative events.jsonl."""
     workdir = tmp_path / "work"
@@ -101,7 +102,7 @@ def _run_orchestrator(tmp_path, *, verdict="APPROVED", extra_env=None,
     env.update(extra_env or {})
 
     argv = [
-        "/usr/bin/bash", ORCHESTRATOR,
+        "/usr/bin/bash", str(orchestrator or ORCHESTRATOR),
         "--workdir", str(workdir),
         "--specs", str(spec),
         "--proposer", "prime",
@@ -1013,3 +1014,149 @@ def test_an_explicit_override_outranks_a_learned_value(tmp_path):
         extra_env={"WIGGUM_LEARNING": "apply"})
     caps = {c["phase"]: c for c in _caps(events)}
     assert caps["1"]["seconds"] == "777" and caps["1"]["source"] == "override"
+
+
+# ── the phase_done observation hook (design §5.4) ────────────────────────────
+# The loop's per-phase observations are written where the phase closes, not
+# recomputed on demand from a run's events later. The hook is deliberately the
+# weakest thing that can work: one call site, guarded by WIGGUM_LEARNING, and
+# best-effort in every direction — because an observation that can fail an
+# APPROVED phase is worse than no observation at all.
+#
+# `learn.py observe` itself is landing on another branch, so these tests run the
+# orchestrator from a script root whose lib/learn.py is a stand-in: one that has
+# the subcommand, one that does not, one that fails. That is also how the
+# absence is pinned — a Wiggum whose learn.py predates `observe` must run
+# exactly as it always did.
+_LEARN_HEAD = '''#!/usr/bin/env python3
+import argparse, json, sys
+
+parser = argparse.ArgumentParser()
+sub = parser.add_subparsers(dest="cmd", required=True)
+resolve = sub.add_parser("resolve")
+for flag in ("--knob", "--phase", "--default", "--feature-dir"):
+    resolve.add_argument(flag)
+'''
+
+_LEARN_OBSERVE = '''observe = sub.add_parser("observe")
+observe.add_argument("--events", required=True)
+observe.add_argument("--phase", required=True)
+observe.add_argument("--out", required=True)
+'''
+
+_LEARN_TAIL = '''args = parser.parse_args()
+if args.cmd == "resolve":
+    print(args.default or "")
+    sys.exit(0)
+sys.stderr.write("observe: stand-in for phase " + args.phase + "\\n")
+if "__OUTCOME__" == "fail":
+    sys.exit(1)
+with open(args.out, "w") as handle:
+    json.dump({"phase": args.phase, "events": args.events}, handle)
+'''
+
+
+def _learn_stub(*, observe=True, fails=False):
+    tail = _LEARN_TAIL.replace("__OUTCOME__", "fail" if fails else "ok")
+    return _LEARN_HEAD + (_LEARN_OBSERVE if observe else "") + tail
+
+
+def _script_root(tmp_path, learn_source):
+    """A hermetic script root whose lib/learn.py is `learn_source`.
+
+    orchestrator.sh derives LIB_DIR from its own location, so the way to put a
+    different learn.py in front of it — without editing the repo and without
+    adding a production knob that exists only for a test — is to run it from a
+    directory that symlinks every real script and every real lib module except
+    that one file.
+    """
+    repo = Path(ORCHESTRATOR).parent
+    root = tmp_path / "script-root"
+    (root / "lib").mkdir(parents=True)
+    for entry in repo.iterdir():
+        if entry.name in (".git", "lib"):
+            continue
+        (root / entry.name).symlink_to(entry)
+    for entry in (repo / "lib").iterdir():
+        if entry.name == "learn.py":
+            continue
+        (root / "lib" / entry.name).symlink_to(entry)
+    (root / "lib" / "learn.py").write_text(learn_source)
+    return root / "orchestrator.sh"
+
+
+def _observations(workdir):
+    learning = workdir / ".wiggum" / "features" / "obs-lifecycle" / "learning"
+    return sorted(p.name for p in learning.glob("phase-*.json")) if learning.is_dir() else []
+
+
+def test_learning_unset_observes_nothing_at_phase_done(tmp_path):
+    """§5.5 invariant: with the layer off, the hook does not run at all — even
+    where a learn.py that CAN observe is installed."""
+    orchestrator = _script_root(tmp_path, _learn_stub())
+    result, workdir, events = _run_orchestrator(tmp_path, orchestrator=orchestrator)
+
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert _observations(workdir) == []
+    assert [e for e in events if e["event"] == "learning_observed"] == []
+
+
+def test_phase_done_writes_one_observation_per_phase_and_announces_it(tmp_path):
+    """With the layer on, each approved phase leaves one observation at the §5.4
+    path and one `learning_observed` event naming it."""
+    orchestrator = _script_root(tmp_path, _learn_stub())
+    result, workdir, events = _run_orchestrator(
+        tmp_path, orchestrator=orchestrator,
+        extra_env={"WIGGUM_LEARNING": "suggest"})
+
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert _observations(workdir) == ["phase-1.json", "phase-2.json"]
+
+    observed = [e for e in events if e["event"] == "learning_observed"]
+    assert [e["phase"] for e in observed] == ["1", "2"]
+    for event in observed:
+        path = Path(event["path"])
+        assert path.is_file(), event
+        # Written from THIS run's events, for THIS phase — not recomputed later
+        # from whatever stream happened to be newest.
+        written = json.loads(path.read_text())
+        assert written["phase"] == event["phase"]
+        assert written["events"].endswith("events.jsonl")
+
+    # An observation is a by-product of the closed phase: it follows phase_done.
+    order = [e["event"] for e in events
+             if e["event"] in ("phase_done", "learning_observed")]
+    assert order == ["phase_done", "learning_observed"] * 2
+
+
+def test_a_learn_py_without_observe_leaves_the_run_untouched(tmp_path):
+    """`observe` lands on another branch. A Wiggum whose learn.py predates it
+    must run exactly as before — silently, with no observation and no failure."""
+    orchestrator = _script_root(tmp_path, _learn_stub(observe=False))
+    result, workdir, events = _run_orchestrator(
+        tmp_path, orchestrator=orchestrator,
+        extra_env={"WIGGUM_LEARNING": "suggest"})
+
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert _observations(workdir) == []
+    assert [e for e in events if e["event"] == "learning_observed"] == []
+    assert _names(events)[-1] == "run_end"
+
+
+def test_a_failing_observe_never_fails_the_phase(tmp_path):
+    """The hook is best-effort in both directions: a learn.py that HAS observe
+    and fails it must not cost an approved phase — the failure is logged and the
+    run finishes."""
+    orchestrator = _script_root(tmp_path, _learn_stub(fails=True))
+    result, workdir, events = _run_orchestrator(
+        tmp_path, orchestrator=orchestrator,
+        extra_env={"WIGGUM_LEARNING": "suggest"})
+
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert _observations(workdir) == []
+    assert [e for e in events if e["event"] == "learning_observed"] == []
+    gates = workdir / ".wiggum" / "features" / "obs-lifecycle" / "gates"
+    assert (gates / "GATE1-APPROVED").is_file() and (gates / "GATE2-APPROVED").is_file()
+    run_log = sorted((workdir / ".wiggum" / "features" / "obs-lifecycle" / "runs")
+                     .rglob("run.log"))[-1].read_text()
+    assert "observing phase 1 failed" in run_log
