@@ -1763,25 +1763,59 @@ for (( i=1; i<=MAX_ITER; i++ )); do
     last_invocation_dir=""
     [[ -f "$STATE_DIR/.last-invocation-dir" ]] && last_invocation_dir="$(cat "$STATE_DIR/.last-invocation-dir" 2>/dev/null)"
     if [[ -n "$last_invocation_dir" && -f "$last_invocation_dir/metadata.json" ]]; then
-      # The finalizer prints four lines: decision, reason_code, is_error, count.
-      # Read all four (a single `read` would capture only the first line and leave
-      # the durable reason/is_error/count empty — the visible iter_error emission
-      # below depends on them).
+      # The finalizer prints six lines: decision, reason_code, is_error, the error
+      # count, the kill class, the cap count. Read all of them (a single `read`
+      # would capture only the first line and leave the durable reason/is_error/
+      # count empty — the visible iter_error emission below depends on them).
+      #
+      # The watchdog kill is handed IN, because the controller is the only party
+      # that can see it: a kill severs the provider stream, so neither the
+      # producer status nor the terminal sidecar can name it. The finalizer
+      # records the reason and its class in the ONE durable result.json (so a
+      # killed invocation keeps its artifact and `learn.py summarize` classifies
+      # it exactly as it classifies a legacy-path kill) and charges the pass to
+      # exactly one breaker: a budget kill to the cap counter, anything else to
+      # the error counter — never both, never neither.
       mapfile -t fin_lines < <(
         python3 "$FINALIZER" "$last_invocation_dir" "$WIGGUM_EVENTS" \
-          "$BREAKER_STATE" "$WIGGUM_PROPOSER_MAX_ERRORS" 2>/dev/null)
+          "$BREAKER_STATE" "$WIGGUM_PROPOSER_MAX_ERRORS" \
+          "$pass_kill_reason" "$WIGGUM_PROPOSER_MAX_CAPS" 2>/dev/null)
       fin_decision="${fin_lines[0]:-}"
       fin_reason="${fin_lines[1]:-}"
       fin_iserror="${fin_lines[2]:-}"
       fin_count="${fin_lines[3]:-}"
+      fin_kill_class="${fin_lines[4]:-}"
+      fin_cap_count="${fin_lines[5]:-}"
       consec_err="${fin_count:-$consec_err}"
-      if [[ "$fin_iserror" == "true" ]]; then
+      consec_cap="${fin_cap_count:-$consec_cap}"
+      if [[ "$fin_kill_class" == "budget" ]]; then
+        # A hard_cap kill is a BUDGET signal, not an agent error — the same split
+        # the legacy ladder makes below, so both backends halt on the same facts
+        # with the same exit code. is_error is true here (the pass WAS killed),
+        # which is exactly why the class, not the flag, decides the counter.
+        echo "proposer.sh: pass $i hit the pass ceiling (${pass_kill_reason}, ${pass_kill_elapsed}s) — consecutive cap kills: $consec_cap/$WIGGUM_PROPOSER_MAX_CAPS" >&2
+        wiggum_emit iter_cap iter "$i" reason "$pass_kill_reason" \
+          elapsed "$pass_kill_elapsed" consec "$consec_cap" max "$WIGGUM_PROPOSER_MAX_CAPS"
+        # A kill severs the provider stream, so the pass reports no usage at all:
+        # say "unmeasured" out loud so a reader can tell it from "cheap" (§4.2).
+        wiggum_emit pass_cost_unknown iter "$i" reason "$pass_kill_reason" elapsed "$pass_kill_elapsed"
+      elif [[ "$fin_iserror" == "true" ]]; then
         echo "proposer.sh: pass $i errored (reason '$fin_reason') — consecutive errors: $consec_err/$WIGGUM_PROPOSER_MAX_ERRORS" >&2
-        wiggum_emit iter_error iter "$i" subtype "$fin_reason" consec "$consec_err"
+        # `reason`/`kill_class` are the STABLE machine-readable fields, matching
+        # the legacy ladder's iter_error, so one consumer reads both paths.
+        wiggum_emit iter_error iter "$i" subtype "$fin_reason" consec "$consec_err" \
+          reason "${pass_kill_reason:-agent_error}" kill_class "${fin_kill_class:-agent}"
+      fi
+      if [[ "$fin_decision" == "cap_halt" ]]; then
+        echo "proposer.sh: $consec_cap consecutive passes hit the pass ceiling — aborting (exit 10). This phase's work does not fit one pass; do NOT just raise the cap. Declare the long step as a yield, or pre-stage it as a verification command, or split the phase." >&2
+        wiggum_emit run_stop reason proposer_cap_exhausted iter "$i" \
+          kill_reason "$pass_kill_reason" consec "$consec_cap"
+        exit 10
       fi
       if [[ "$fin_decision" == "halt" ]]; then
         echo "proposer.sh: $consec_err consecutive agent errors — aborting (exit 7). Raise --timeout or WIGGUM_PROPOSER_MAX_ERRORS, or fix the phase harness (e.g. an over-long prompt or a run that never reaches a verdict)." >&2
-        wiggum_emit run_stop reason proposer_consecutive_errors iter "$i" subtype "$fin_reason"
+        wiggum_emit run_stop reason proposer_consecutive_errors iter "$i" subtype "$fin_reason" \
+          kill_reason "${pass_kill_reason:-agent_error}" kill_class "${fin_kill_class:-agent}"
         exit 7
       fi
     fi

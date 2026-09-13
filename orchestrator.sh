@@ -1883,6 +1883,27 @@ run_phase() {
       fi
       rm -f "$GATES_DIR/.diagnosed-phase${n}" "$GATES_DIR/.accelerated-phase${n}"
       wiggum_emit phase_done phase "$n" attempt "$attempt" title "$title"
+      # ── learning: observe at phase_done ──────────────────────────────────
+      # One per-phase observation written from every run of this feature (design §5.4;
+      # the learn.py docstring explains why the runs directory, not this run's events:
+      # observations are a by-product of the phase that just closed; decisions
+      # live elsewhere, in applied.json). Best-effort by construction — it is
+      # skipped unless the learning layer is on, skipped again when the
+      # installed learn.py has no `observe` subcommand, and any failure is
+      # logged to the run log and dropped. An approved phase is never undone by
+      # a measurement of it.
+      if [[ -n "${WIGGUM_LEARNING:-}" && "${WIGGUM_LEARNING}" != "off" ]] \
+         && python3 "$LIB_DIR/learn.py" observe --help >/dev/null 2>&1; then
+        local observation="$FEATURE_DIR/learning/phase-$n.json"
+        mkdir -p "$FEATURE_DIR/learning" 2>/dev/null || true
+        if python3 "$LIB_DIR/learn.py" observe --events "$FEATURE_DIR/runs" \
+             --phase "$n" --out "$observation" >>"$LOG" 2>&1; then
+          wiggum_emit learning_observed phase "$n" path "$observation"
+        else
+          log "#   (learning: observing phase $n failed — continuing; the run is unaffected)"
+        fi
+      fi
+      # ── end learning: observe at phase_done ──────────────────────────────
       maybe_git_checkpoint "$n" "$title"
       return 0
     fi
