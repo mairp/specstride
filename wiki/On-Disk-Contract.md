@@ -88,6 +88,15 @@ the prior file intact (or, for the first write, no file at all).
 | `unsupported_schema` | `degraded` | Provider stream used an unsupported schema |
 | `status_conflict` | `error` | Provider and process terminal observations conflict |
 
+A pass the watchdog ended reconciles as `timeout` (the producer was terminated),
+which says nothing about WHY. The controller's own observation therefore rides on
+the same record: `kill_reason` (`hard_cap` | `idle_timeout` | `repeat_stall` |
+`progress_stall`) and its stable `kill_class` (`budget` | `hang` | `futility`),
+present only when the pass was killed. The class is what decides the accounting —
+a `budget` kill is charged to `WIGGUM_PROPOSER_MAX_CAPS` (exit 10), never to the
+error breaker — and it is written here so a consumer never re-derives it from a
+reason string, and so a killed invocation keeps one durable, classified result.
+
 ### Retention
 
 Raw provider capture is **disabled by default**. When enabled, retention is governed by
@@ -111,6 +120,7 @@ stream-json tap ([`lib/agent_stream.py`](../lib/agent_stream.py), gated by `WIGG
 | `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`) |
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
+| `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `WIGGUM_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `declared` \| `global`). An unsourced budget is what makes budget archaeology expensive six hours in |
 | `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `WIGGUM_PROPOSER_MAX_CAPS`. A budget signal, not an error |
