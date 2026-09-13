@@ -1121,7 +1121,8 @@ def test_phase_done_writes_one_observation_per_phase_and_announces_it(tmp_path):
         # from whatever stream happened to be newest.
         written = json.loads(path.read_text())
         assert written["phase"] == event["phase"]
-        assert written["events"].endswith("events.jsonl")
+        # The hook observes the feature's whole runs directory (cross-run view), not one run.
+        assert written["events"].rstrip("/").endswith("/runs"), written["events"]
 
     # An observation is a by-product of the closed phase: it follows phase_done.
     order = [e["event"] for e in events
