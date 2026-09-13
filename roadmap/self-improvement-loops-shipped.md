@@ -49,11 +49,18 @@ checkout mid-run refuses the next relaunch (exit 23) and editing a running bash
 script is unsafe. Merge to `main` in `/root/wiggum` only while no run is live,
 then regenerate the affected contracts.
 
+## Closed since (branch `prime-cap-accounting`, from `main` 43ba4fb)
+
+| Item | Commit | What changed |
+|---|---|---|
+| Cap accounting in the Prime-backed proposer path | bf41a9d | `proposer.sh` hands the watchdog kill to `finalize_invocation.py`, which records `kill_reason` + the stable `kill_class` on the ONE durable `result.json` (and its `agent_result`) and charges the pass to exactly one breaker: `budget` → the new cap counter in `error_breaker.py` (`WIGGUM_PROPOSER_MAX_CAPS`, exit **10**, `iter_cap` + `pass_cost_unknown`), anything else → the per-invocation error breaker, which a budget kill neither increments nor resets. Both backends now halt on the same facts with the same exit code, and `learn.py summarize` classifies a Prime kill exactly as a legacy one |
+| The `phase_done` observation hook | d271bbb | one delimited call site in `orchestrator.sh` runs `learn.py observe` over this run's `events.jsonl` into `<feature-dir>/learning/phase-<N>.json` and emits `learning_observed`. Guarded by `WIGGUM_LEARNING` (unset/`off` = nothing happens), skipped silently when the installed `learn.py` has no `observe` subcommand, and best-effort otherwise: a failure is logged to the run log and never costs an approved phase |
+
+`learn.py observe` itself is being added on another branch; until it lands the
+hook is inert by the subcommand check, which is also pinned by a test.
+
 ## Still open
 
-- Cap accounting in the Prime-backed proposer path (its breaker is separate).
 - Suggestion engines for `yield_poll_interval` and `inject_yield_hint`.
-- An orchestrator hook writing per-phase observations at `phase_done` (today
-  `advise` computes them on demand from `events.jsonl`).
 - The MoL contract generator's task-tick postcondition (`[x]` vs `[X]`, F15 in
   002's troubleshooting log) lives in the projects' regenerate scripts, not here.
