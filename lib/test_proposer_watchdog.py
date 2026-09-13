@@ -151,6 +151,56 @@ def test_rerunning_one_command_ends_the_pass_without_any_agent_stream(tmp_path):
     assert "tail -f /dev/null" in kills[0]["detail"]
 
 
+def test_same_command_under_distinct_tool_calls_is_not_repetition(tmp_path):
+    """Identical argv is not identical work. An agent OCRing six screenshots runs
+    one command line six times, once per image, each from a DIFFERENT tool call
+    (semantic-router-sovereign 003 phase 14, 2026-09-13: `tesseract - - --psm 6`
+    x12 over twelve images was killed as a stall). The process counter is keyed
+    per tool call, so each of these counts 1."""
+    events = tmp_path / ".wiggum" / "events.jsonl"
+    body = "".join(
+        _emit_tool(events, "Bash", "ocr screenshot-%d.png with tesseract" % i)
+        + "timeout 2 tail -f /dev/null\n"
+        for i in range(1, 7)
+    ) + "exit 0\n"
+    result, evs = _run(tmp_path, _agent(tmp_path, body),
+                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+
+    assert result.returncode == 4, result.stderr
+    assert _kills(evs) == []
+    assert _checkpoints(tmp_path) == []
+
+
+def test_one_command_rerun_under_one_tool_call_still_ends_the_pass(tmp_path):
+    """The guarantee the tool-call keying must not weaken: the same argv spawned
+    over and over from a SINGLE tool call is a retry loop, and is still killed."""
+    events = tmp_path / ".wiggum" / "events.jsonl"
+    body = (_emit_tool(events, "Bash", "for f in shots/*.png; do tesseract $f; done")
+            + "for i in 1 2 3 4 5 6 7; do timeout 2 tail -f /dev/null; done\n"
+            + "sleep 120\n")
+    result, evs = _run(tmp_path, _agent(tmp_path, body),
+                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+
+    assert result.returncode == 4, result.stderr
+    kills = _kills(evs)
+    assert len(kills) == 1 and kills[0]["reason"] == "repeat_stall"
+    assert "tail -f /dev/null" in kills[0]["detail"]
+
+
+def test_default_ignore_pattern_exempts_per_file_batch_tools(tmp_path):
+    """A per-file batch tool has one command line and N pieces of work by
+    construction, so the default ignore list names them: counting their repeats
+    can only ever be wrong. No tool events here, so nothing but the ignore list
+    saves the pass."""
+    body = ("for i in 1 2 3 4 5 6; do (exec -a tesseract sleep 2); done\n"
+            "exit 0\n")
+    result, evs = _run(tmp_path, _agent(tmp_path, body),
+                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+
+    assert result.returncode == 4, result.stderr
+    assert _kills(evs) == []
+
+
 def test_ignored_commands_are_not_process_repetition(tmp_path):
     """A test-driven pass re-runs its suite between edits; that is progress, not a
     stall. WIGGUM_PROPOSER_REPEAT_IGNORE names the command lines to leave alone."""

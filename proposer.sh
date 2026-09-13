@@ -161,9 +161,14 @@ REPEAT_LIMIT="${WIGGUM_PROPOSER_REPEAT_LIMIT:-12}"
 # between edits (2026-09-08, semantic-router-sovereign phase 3: pytest x5 in 23
 # minutes of landing work was killed as a stall). Set it to the project's test
 # runners and linters, e.g. 'pytest|ruff|mypy'. The tool-level check still runs.
-# Default covers the usual test runners, linters and type checkers; override to
+# The default covers the usual test runners, linters and type checkers, plus the
+# per-file batch tools an agent runs once per input file (OCR, image and media
+# conversion, pdf text extraction): those have one command line and N pieces of
+# work by construction, so counting their repeats can only ever be wrong. The
+# batch-tool group is anchored at the command name, so `python3 convert_data.py`
+# is still counted while `/usr/bin/convert a.png b.jpg` is not. Override to
 # extend or (with an empty value) to count everything except sleep.
-REPEAT_IGNORE="${WIGGUM_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)}"
+REPEAT_IGNORE="${WIGGUM_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)|(^|/)(tesseract|convert|magick|compare|ffmpeg|pdftotext|identify)( |$)}"
 PROGRESS_PATHS=()
 STREAM_JSON="false"
 LOKI_URL="${WIGGUM_LOKI_URL:-http://localhost:3100}"
@@ -574,7 +579,11 @@ PY
 #      implementation work is never mistaken for a stall.
 #    * REPETITION — the same tool call (identical tool + target) issued
 #      REPEAT_LIMIT times in this pass, and still the most recent thing the agent
-#      did. A retry loop is caught while it is looping, not an hour later.
+#      did. A retry loop is caught while it is looping, not an hour later. The
+#      same check is also made one level down, on the process tree, so a backend
+#      that emits no tool events at all (dsh, codex) is still covered; that half
+#      counts per <agent tool call> x <command line>, and skips the command lines
+#      REPEAT_IGNORE names — see WATCHDOG_TOOL_SIG below for why both are needed.
 #  Every kill — including the hard cap — writes a checkpoint of what the pass was
 #  doing (write_pass_checkpoint), which the next pass's prompt carries forward.
 #
@@ -622,6 +631,77 @@ _proc_tree_cmdlines() {
   for pid in $(_proc_tree_pids "$1"); do
     args="$(ps -o args= -p "$pid" 2>/dev/null | tr -d '\n' | cut -c1-400)"
     [[ -n "$args" ]] && printf '%s\t%s\n' "$pid" "$args"
+  done
+}
+
+# ─── Which agent tool call spawned this process ──────────────────────────────
+# The process-level repeat counter keys on the child's command line. Identical
+# command line is NOT identical work: an agent reading twelve screenshots runs
+# `tesseract - - --psm 6` twelve times, once per image, each image piped on
+# stdin from a DIFFERENT tool call — twelve distinct pieces of work sharing one
+# argv (semantic-router-sovereign 003 phase 14, 2026-09-13: the pass was killed
+# as `repeat_stall` on the twelfth image; the event-level detector below, which
+# keys on the tool call, was not fooled). The count is therefore kept per
+# <tool call> x <argv>: twelve identical argv under twelve distinct tool calls
+# count 1 each, while the same argv re-spawned under one tool call still reaches
+# REPEAT_LIMIT and is killed exactly as before — that guarantee is unchanged.
+#
+# The tool call is read from the event stream the watchdog already tails, in
+# pure bash. This runs on every tick, and the sampler's design rule is that a
+# tick must not fork (that is why the basename above is a parameter expansion),
+# so a json parser per tick is out. WATCHDOG_TOOL_SIG is a cheap digest of the
+# tool name plus the length, head and tail of its argument text — constant work
+# per event, no loop over characters. Two calls with identical text share a
+# signature, which is the conservative side of the trade: an agent genuinely
+# re-issuing one call in a retry loop is still caught. With no agent_tool event
+# yet (dsh and codex emit none at all; any backend before its first tool call)
+# the signature is empty and the key is the argv alone — today's behaviour.
+WATCHDOG_TOOL_SIG=""
+WATCHDOG_EV_FD=""
+_WATCHDOG_EV_PARTIAL=""
+_WATCHDOG_EVENT_RE='"event"[[:space:]]*:[[:space:]]*"agent_tool"'
+_WATCHDOG_TOOL_RE='"tool"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
+_WATCHDOG_TARGET_RE='"target"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
+
+# Start tailing the event stream at its current end: everything already written
+# belongs to an earlier pass, which is the same cut the byte `offset` makes for
+# the checkpoint. One fd is held for the whole pass and closed by the next open,
+# so no return path out of the watchdog can leak it.
+_watchdog_events_open() {
+  local events="$1" junk
+  if [[ -n "$WATCHDOG_EV_FD" ]]; then
+    exec {WATCHDOG_EV_FD}<&- 2>/dev/null || true
+    WATCHDOG_EV_FD=""
+  fi
+  WATCHDOG_TOOL_SIG=""; _WATCHDOG_EV_PARTIAL=""
+  [[ -n "$events" && -f "$events" ]] || return 0
+  exec {WATCHDOG_EV_FD}<"$events" 2>/dev/null || { WATCHDOG_EV_FD=""; return 0; }
+  while IFS= read -r -u "$WATCHDOG_EV_FD" junk; do :; done
+  return 0
+}
+
+# Consume every line appended since the last tick and remember the newest
+# agent_tool call in WATCHDOG_TOOL_SIG. Fork-free: one builtin read per line and
+# at most three regex matches per tool event.
+_watchdog_drain_tool_events() {
+  local line rc tool target
+  [[ -n "$WATCHDOG_EV_FD" ]] || return 0
+  while :; do
+    line=""
+    IFS= read -r -u "$WATCHDOG_EV_FD" line
+    rc=$?
+    # A short read is the writer caught mid-append: keep the fragment and stitch
+    # the rest of the line on a later tick rather than parsing half a record.
+    _WATCHDOG_EV_PARTIAL+="$line"
+    (( rc == 0 )) || return 0
+    line="$_WATCHDOG_EV_PARTIAL"; _WATCHDOG_EV_PARTIAL=""
+    [[ "$line" == *agent_tool* ]] || continue
+    [[ "$line" =~ $_WATCHDOG_EVENT_RE ]] || continue
+    [[ "$line" =~ $_WATCHDOG_TOOL_RE ]] || continue
+    tool="${BASH_REMATCH[1]}"
+    target=""
+    [[ "$line" =~ $_WATCHDOG_TARGET_RE ]] && target="${BASH_REMATCH[1]}"
+    WATCHDOG_TOOL_SIG="${tool}"$'\x1f'"${#target}"$'\x1f'"${target:0:96}"$'\x1f'"${target: -96}"
   done
 }
 
@@ -750,6 +830,10 @@ run_with_idle_watchdog() {
   # ran on. Sampling also self-selects for expensive commands: a `make` that runs
   # for minutes is always caught, a sub-second `docker ps` poll almost never is.
   local -A seen_procs=() cmd_runs=()
+  # Tool-call attribution for that counter, from the same stream (see
+  # WATCHDOG_TOOL_SIG): identical argv under distinct tool calls is N pieces of
+  # work, not one command re-run N times.
+  _watchdog_events_open "$events"
   # An async command without job control gets /dev/null on stdin unless the
   # command itself carries a redirection, so a caller that piped into this
   # function never reached the agent. WIGGUM_STDIN_FILE names a file to feed the
@@ -762,7 +846,7 @@ run_with_idle_watchdog() {
     "$@" &
   fi
   local cmd_pid=$! start_ts last_cpu last_change_ts last_disk_ts now cpu elapsed offender
-  local sample_pid sample_args sample_key sample_head
+  local sample_pid sample_args sample_key sample_head sample_cmd_key
   start_ts="$(date +%s)"; last_cpu=-1; last_change_ts="$start_ts"; last_disk_ts="$start_ts"
 
   # One kill path for every reason: report it, checkpoint it, terminate the whole
@@ -791,6 +875,9 @@ run_with_idle_watchdog() {
     fi
     # Repetition, process level: same command line, a new process each time.
     if (( REPEAT_LIMIT > 0 )); then
+      # Newest tool call first, so every process sampled below is attributed to
+      # the call that spawned it.
+      _watchdog_drain_tool_events
       while IFS=$'\t' read -r sample_pid sample_args; do
         [[ -n "$sample_args" ]] || continue
         # `sleep` is the one command whose repetition is normal and cheap (an
@@ -803,11 +890,14 @@ run_with_idle_watchdog() {
         sample_key="${sample_pid}|${sample_args}"
         [[ -n "${seen_procs[$sample_key]:-}" ]] && continue
         seen_procs["$sample_key"]=1
-        cmd_runs["$sample_args"]=$(( ${cmd_runs["$sample_args"]:-0} + 1 ))
-        if (( ${cmd_runs["$sample_args"]} >= REPEAT_LIMIT )); then
+        # Per tool call, not per argv: an empty signature (no agent_tool event
+        # yet) collapses this to the single bucket it has always been.
+        sample_cmd_key="${WATCHDOG_TOOL_SIG}"$'\x1e'"${sample_args}"
+        cmd_runs["$sample_cmd_key"]=$(( ${cmd_runs["$sample_cmd_key"]:-0} + 1 ))
+        if (( ${cmd_runs["$sample_cmd_key"]} >= REPEAT_LIMIT )); then
           _watchdog_kill repeat_stall \
-            "the agent has re-run the same command ${cmd_runs[$sample_args]}x in this pass (busy, but not progressing): ${sample_args}" \
-            "re-ran ${cmd_runs[$sample_args]}x: ${sample_args}" "$elapsed"
+            "the agent has re-run the same command ${cmd_runs[$sample_cmd_key]}x under one tool call in this pass (busy, but not progressing): ${sample_args}" \
+            "re-ran ${cmd_runs[$sample_cmd_key]}x: ${sample_args}" "$elapsed"
           return 124
         fi
       done < <(_proc_tree_cmdlines "$cmd_pid")
