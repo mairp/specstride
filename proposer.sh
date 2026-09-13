@@ -168,6 +168,10 @@ REPEAT_LIMIT="${WIGGUM_PROPOSER_REPEAT_LIMIT:-12}"
 # batch-tool group is anchored at the command name, so `python3 convert_data.py`
 # is still counted while `/usr/bin/convert a.png b.jpg` is not. Override to
 # extend or (with an empty value) to count everything except sleep.
+# The batch-tool group arrived as the W28a stopgap (2026-09-13) while the
+# process-level detector still counted bare argv; it stays as belt and braces
+# now that W28 keys that detector by the spawning tool call, in the anchored
+# form so it exempts the tools and not every command line that mentions them.
 REPEAT_IGNORE="${WIGGUM_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)|(^|/)(tesseract|convert|magick|compare|ffmpeg|pdftotext|identify)( |$)}"
 PROGRESS_PATHS=()
 STREAM_JSON="false"
