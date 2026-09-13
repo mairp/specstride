@@ -163,7 +163,11 @@ REPEAT_LIMIT="${WIGGUM_PROPOSER_REPEAT_LIMIT:-12}"
 # runners and linters, e.g. 'pytest|ruff|mypy'. The tool-level check still runs.
 # Default covers the usual test runners, linters and type checkers; override to
 # extend or (with an empty value) to count everything except sleep.
-REPEAT_IGNORE="${WIGGUM_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)}"
+# W28a (stopgap, 2026-09-13): per-file batch tools fed on stdin — `tesseract - -`, `convert`,
+# `magick`, `compare`, `identify`, `ffmpeg`, `pdftotext` — spawn identical argv once per
+# tool call and read as one command re-run 12x; they are legitimate varied work. W28
+# proper keys the process-level detector by the spawning tool call.
+REPEAT_IGNORE="${WIGGUM_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)|tesseract|convert|magick|compare|identify|ffmpeg|pdftotext}"
 PROGRESS_PATHS=()
 STREAM_JSON="false"
 LOKI_URL="${WIGGUM_LOKI_URL:-http://localhost:3100}"
