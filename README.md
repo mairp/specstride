@@ -661,9 +661,18 @@ python3 "$LIB_DIR/learn.py" observe --events "$FEATURE_DIR/runs" --phase "$n" \
 `--events "$FEATURE_DIR/runs"` (a directory of run directories) is deliberate,
 not the current run's `events.jsonl` alone: a phase's observation should reflect
 every run that has ever touched it, the same cross-run view `summarize`'s
-`phases` map already gives `attempts_to_approval` and `runs_seen`. This hook is
-not wired into `orchestrator.sh` yet — see "Still open" in
-`roadmap/self-improvement-loops-shipped.md`.
+`phases` map already gives `attempts_to_approval` and `runs_seen`. The hook IS wired at
+`phase_done` (see the next section).
+
+- **Observations are written where the phase closes.** With `WIGGUM_LEARNING` set
+  to anything but `off`, an approved phase writes one observation of itself —
+  `python3 lib/learn.py observe` over that run's `events.jsonl` into
+  `.wiggum/features/<slug>/learning/phase-<N>.json` — and emits one
+  `learning_observed` event naming it. Observations and decisions stay separate
+  files on purpose (design §5.4). The hook is best-effort in every direction: it
+  is skipped when the layer is off, skipped silently when the installed
+  `learn.py` has no `observe` subcommand, and a failure is logged to the run log
+  and dropped. Measuring an approved phase may never un-approve it.
 
 ## The on-disk contract
 
@@ -720,6 +729,7 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 | `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`) |
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
+| `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `WIGGUM_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `declared` \| `global`). An unsourced budget is what makes budget archaeology expensive six hours in |
 | `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `WIGGUM_PROPOSER_MAX_CAPS`. A budget signal, not an error |
@@ -998,7 +1008,10 @@ guarded, all cheap:
   (exit 4) rather than repeating for hours, with different remedies — see the
   exit-code table. Every `pass_killed` event carries a stable `class` field, and
   a capped pass also emits `pass_cost_unknown`: a kill severs the provider stream,
-  so the most expensive passes of a run report no cost at all.
+  so the most expensive passes of a run report no cost at all. The accounting is
+  backend-neutral: the structured Prime path reaches the same two breakers from
+  the invocation's durable `result.json`, which records the kill as
+  `kill_reason` + `kill_class` beside its reason code.
 
   | Signal | Fires when | Knob (default) |
   |---|---|---|
