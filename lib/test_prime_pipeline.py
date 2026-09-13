@@ -58,6 +58,26 @@ case "$FAKE_MODE" in
     printf '%s\n' "$session"
     printf '%s\n' '{"type":"agent_end","status":"success","stopReason":"end_turn"}'
     exit 0 ;;
+  capped)
+    # Busy and PRODUCTIVE until the ceiling: a file every second under the
+    # workdir, so neither the disk-progress watchdog nor the repeat detector can
+    # fire and the only thing that can end this pass is the hard cap.
+    printf '%s\n' "$session"
+    for i in $(seq 1 120); do
+      echo "$i" > "$TICK_DIR/tick-$i.txt"
+      sleep 1 >/dev/null 2>&1
+    done ;;
+  stalled)
+    # Alive and doing NOTHING: no CPU anywhere in the process tree, which the
+    # idle watchdog reads as a hang — an agent failure, so it belongs on the
+    # error breaker. (The disk-progress detector cannot be used here: this
+    # harness keeps the run's events.jsonl inside the workdir, so the tap's own
+    # appends register as disk progress every second.)
+    printf '%s\n' "$session"
+    # The idle sleep must NOT inherit the stdout pipe: a watchdog kill reaches
+    # the launcher, and a child still holding that pipe open would keep the tap
+    # waiting for an EOF that never comes.
+    sleep 120 >/dev/null 2>&1 ;;
   *)
     echo "unknown FAKE_MODE '$FAKE_MODE'" >&2; exit 2 ;;
 esac
@@ -71,7 +91,8 @@ esac
 FAKE_TAP = "#!/bin/bash\ncat >/dev/null\nexit 3\n"
 
 
-def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=None):
+def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=None,
+         env_extra=None):
     evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
     events = tmp_path / "events.jsonl"
     prompt = tmp_path / "prompt.txt"
@@ -81,6 +102,8 @@ def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=Non
     fake.write_text(FAKE_LAUNCHER)
     fake.chmod(0o755)
     launch_count = tmp_path / "launches"
+    ticks = tmp_path / "ticks"
+    ticks.mkdir(exist_ok=True)
 
     env = os.environ.copy()
     env.update({
@@ -92,7 +115,11 @@ def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=Non
         "WIGGUM_EVENTS": str(events),
         "WIGGUM_RUN_ID": "run-pipeline",
         "WIGGUM_PROPOSER_MAX_ERRORS": str(max_errors),
+        # Where the `capped` launcher writes its per-second proof of work: inside
+        # the workdir (so it counts as disk progress) and never in the repo.
+        "TICK_DIR": str(ticks),
     })
+    env.update(env_extra or {})
     if mode == "parser":
         tap = tmp_path / "fake-tap"
         tap.write_text(FAKE_TAP)
@@ -125,6 +152,14 @@ def _terminals(records):
 
 def _iter_errors(records):
     return [r for r in records if r.get("event") == "iter_error"]
+
+
+def _iter_caps(records):
+    return [r for r in records if r.get("event") == "iter_cap"]
+
+
+def _kills(records):
+    return [r for r in records if r.get("event") == "pass_killed"]
 
 
 # mode -> (expected reason_code, expected status)
@@ -183,6 +218,20 @@ def test_failure_class_emits_visible_reason_through_the_loop(tmp_path, mode):
         kwargs["bin_path"] = str(tmp_path / "does-not-exist-prime")
     _proc, records, _results, _ = _run(tmp_path, mode, **kwargs)
 
+    if mode == "timeout":
+        # The one mode that is NOT an agent error. The pass ceiling is a budget
+        # signal (design §4.2): the pass may have been productive right up to it,
+        # so it is charged to the cap breaker and made visible as `iter_cap`.
+        # This assertion used to read `iter_error` — it encoded the conflation
+        # the Prime path inherited from the legacy ladder, which is precisely
+        # what put WIGGUM_PROPOSER_MAX_ERRORS=30 into a real .env.
+        caps = _iter_caps(records)
+        assert len(caps) == 1, f"{mode}: expected one iter_cap, got {caps}"
+        assert caps[0]["reason"] == "hard_cap"
+        assert caps[0].get("consec") == "1"
+        assert _iter_errors(records) == [], "a cap kill is not an agent error"
+        return
+
     errors = _iter_errors(records)
     assert len(errors) == 1, f"{mode}: expected one iter_error, got {errors}"
     assert errors[0]["subtype"] == reason_code
@@ -226,6 +275,113 @@ def test_each_pass_emits_exactly_one_terminal_result(tmp_path):
     assert launches == 2, proc.stderr
     assert len(_terminals(records)) == 2
     assert len(results) == 2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Cap accounting in the Prime-backed path (design §4.2, step 1's split).
+#
+#  The legacy tail-scan ladder already splits a watchdog kill by CLASS: hard_cap
+#  is a BUDGET signal (its own counter, exit 10) and repeat_stall/progress_stall/
+#  idle_timeout are agent errors (the error breaker, exit 7). The Prime path
+#  counted every kill as an agent error, because a kill surfaces there as a
+#  `timeout` reason code on the reconciled result and nothing downstream could
+#  tell "the work did not fit" from "the pass crashed". These three tests mirror
+#  step 1's watchdog tests on the Prime pipeline: same watchdog, two counters,
+#  two exit codes — and, unlike the legacy path, one durable result.json per
+#  killed invocation that carries the classification.
+#
+#  The kill knobs are driven down so a ceiling behaviour proves in seconds:
+#  a 1s watchdog tick, the idle detector far out of reach, and (for the cap
+#  cases) a launcher that writes a file every second so it is productive right
+#  up to the ceiling.
+_KILL_ENV = {
+    "WIGGUM_WATCHDOG_TICK": "1",
+    "WIGGUM_PROPOSER_IDLE_TIMEOUT": "900",
+    "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "0",
+    "WIGGUM_PROPOSER_REPEAT_LIMIT": "0",
+}
+
+
+def _results_json(results):
+    return [json.loads(path.read_text()) for path in results]
+
+
+def test_repeated_prime_hang_kills_still_halt_on_the_error_breaker(tmp_path):
+    """A kill that is NOT a budget kill (here idle_timeout: the process tree is
+    dead) says the agent failed, so it stays on the consecutive-error breaker and
+    exits 7 — the half of the split that must not move."""
+    env = dict(_KILL_ENV, WIGGUM_PROPOSER_IDLE_TIMEOUT="4")
+    proc, records, results, launches = _run(
+        tmp_path, "stalled", max_iter=6, max_errors=2, env_extra=env)
+
+    assert proc.returncode == 7, proc.stderr
+    kills = _kills(records)
+    assert len(kills) == 2
+    assert all(k["reason"] == "idle_timeout" and k["class"] == "hang" for k in kills)
+    assert [e.get("consec") for e in _iter_errors(records)] == ["1", "2"]
+    assert all(e["kill_class"] == "hang" for e in _iter_errors(records))
+    assert _iter_caps(records) == []
+    assert launches == 2
+    stops = [r for r in records if r.get("event") == "run_stop"]
+    assert stops and stops[0]["reason"] == "proposer_consecutive_errors"
+    assert stops[0]["kill_class"] == "hang"
+    # The kill is durable, and classified, on every result artifact.
+    assert [r["kill_class"] for r in _results_json(results)] == ["hang", "hang"]
+
+
+def test_repeated_prime_cap_kills_halt_with_the_cap_code(tmp_path):
+    """Cap kills have their own bounded counter and their own exit code (10), so
+    the halt can name the right remedy instead of 'raise the cap'."""
+    proc, records, results, launches = _run(
+        tmp_path, "capped", max_iter=6, max_errors=2, timeout=3,
+        env_extra=dict(_KILL_ENV, WIGGUM_PROPOSER_MAX_CAPS="2"))
+
+    assert proc.returncode == 10, proc.stderr
+    kills = _kills(records)
+    assert len(kills) == 2
+    assert all(k["reason"] == "hard_cap" and k["class"] == "budget" for k in kills)
+    caps = _iter_caps(records)
+    assert [c["consec"] for c in caps] == ["1", "2"]
+    assert all(c["reason"] == "hard_cap" for c in caps)
+    # A killed pass reports no usage at all; say "unmeasured", never "cheap".
+    assert [r["event"] for r in records].count("pass_cost_unknown") == 2
+    assert launches == 2, "the cap breaker must stop before pass N+1"
+    stops = [r for r in records if r.get("event") == "run_stop"]
+    assert stops and stops[0]["reason"] == "proposer_cap_exhausted"
+    assert "does not fit one pass" in proc.stderr
+
+
+def test_a_prime_cap_kill_is_durable_and_not_an_agent_error(tmp_path):
+    """The accounting split itself: three cap kills with MAX_ERRORS=2 must NOT
+    trip the error breaker (before the split this halted at exit 7 and told the
+    operator to raise a number that was never the problem) — and each killed
+    invocation must still leave exactly one durable result.json carrying the
+    stable kill_class, so `learn.py summarize` reads a budget kill here exactly
+    as it reads one from the legacy path."""
+    proc, records, results, launches = _run(
+        tmp_path, "capped", max_iter=3, max_errors=2, timeout=3,
+        env_extra=dict(_KILL_ENV, WIGGUM_PROPOSER_MAX_CAPS="9"))
+
+    # max-iter, not the error breaker: the loop ran all three passes.
+    assert proc.returncode == 4, proc.stderr
+    assert launches == 3
+    assert len(_kills(records)) == 3
+    assert _iter_errors(records) == []
+    assert [c["consec"] for c in _iter_caps(records)] == ["1", "2", "3"]
+    assert "consecutive agent errors" not in proc.stderr
+
+    # One durable, classified result per killed invocation — never lost to the
+    # kill, and never re-derived by re-parsing a reason string.
+    assert len(results) == 3
+    for result in _results_json(results):
+        assert result["kill_reason"] == "hard_cap"
+        assert result["kill_class"] == "budget"
+        assert result["reason_code"] == "timeout"
+        assert result["is_error"] is True
+    # Exactly one terminal event per pass, still mirroring the artifacts.
+    terminals = _terminals(records)
+    assert len(terminals) == 3
+    assert all(t["kill_class"] == "budget" for t in terminals)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

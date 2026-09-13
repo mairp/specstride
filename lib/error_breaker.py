@@ -13,6 +13,15 @@ per-invocation result consumption (data-model ``ConsecutiveErrorState``):
 * a result whose scope (run/feature/role/phase/attempt) does not match the
   breaker is rejected, isolating concurrent features and scopes;
 * the breaker halts exactly at the configured limit, before the next pass.
+
+A watchdog kill is accounted by CLASS, exactly as the legacy tail-scan ladder in
+``proposer.sh`` accounts it (design §4.2): a ``budget`` kill (``hard_cap``) says
+only that the work did not fit the pass, so it feeds a SECOND bounded counter
+(``cap_count`` / ``WIGGUM_PROPOSER_MAX_CAPS``, exit 10) and leaves the error
+count untouched in both directions — it is neither a failing pass nor a clean
+one. A ``futility``/``hang`` kill is an agent error and counts here as before.
+One invocation is therefore counted by exactly one of the two breakers, never
+both and never neither.
 """
 
 import json
@@ -20,6 +29,27 @@ from pathlib import Path
 
 
 _SCOPE_FIELDS = ("run_id", "feature", "role", "phase", "attempt")
+
+# The class of each watchdog kill reason. Mirrors ``proposer.sh``'s
+# ``watchdog_kill_class`` and ``lib/learn.py``'s ``KILL_CLASS`` so the Prime path
+# and the legacy path classify one kill identically (and ``learn.py summarize``
+# reads the same outcome from either). An unknown reason is treated as futility:
+# fail safe, counting it as an agent error exactly as every reason did before the
+# split.
+KILL_CLASS = {
+    "hard_cap": "budget",
+    "repeat_stall": "futility",
+    "progress_stall": "futility",
+    "idle_timeout": "hang",
+}
+BUDGET_KILL_CLASS = "budget"
+
+
+def classify_kill(reason):
+    """Class of one watchdog kill reason, or None when the pass was not killed."""
+    if not reason:
+        return None
+    return KILL_CLASS.get(reason, "futility")
 
 
 def resolve_result_path(root, result):
@@ -67,7 +97,8 @@ def select_result_event(records, invocation_id):
 class ConsecutiveErrorBreaker:
     """Track consecutive failing invocations for one proposer scope."""
 
-    def __init__(self, *, run_id, feature, role, phase, attempt, limit):
+    def __init__(self, *, run_id, feature, role, phase, attempt, limit,
+                 cap_limit=0):
         self.scope = {
             "run_id": run_id,
             "feature": feature,
@@ -77,8 +108,14 @@ class ConsecutiveErrorBreaker:
         }
         self.limit = limit
         self.count = 0
+        # The second, independent budget counter: consecutive passes killed at
+        # the absolute pass ceiling. Zero (the default) means "not configured",
+        # which never halts — callers that do not care are unchanged.
+        self.cap_limit = int(cap_limit or 0)
+        self.cap_count = 0
         self.last_invocation_id = None
         self.last_reason_code = None
+        self.last_kill_class = None
 
     def _check_scope(self, result):
         for field in _SCOPE_FIELDS:
@@ -89,7 +126,14 @@ class ConsecutiveErrorBreaker:
                 )
 
     def record(self, result):
-        """Fold one terminal invocation result into the consecutive count."""
+        """Fold one terminal invocation result into the consecutive counts.
+
+        Exactly one counter moves per invocation. A budget kill increments the
+        cap count and leaves the error count alone — not incremented (the pass
+        did not fail) and not reset (it was not a clean pass either), which is
+        what the legacy ladder does. Anything else moves the error count and
+        clears the cap streak, so "three caps in a row" means three in a row.
+        """
         self._check_scope(result)
         invocation_id = result.get("invocation_id")
         if invocation_id is not None and invocation_id == self.last_invocation_id:
@@ -97,11 +141,26 @@ class ConsecutiveErrorBreaker:
             return
         self.last_invocation_id = invocation_id
         self.last_reason_code = result.get("reason_code")
+        kill_class = result.get("kill_class") or classify_kill(result.get("kill_reason"))
+        self.last_kill_class = kill_class
+        if kill_class == BUDGET_KILL_CLASS:
+            self.cap_count += 1
+            return
         if result.get("is_error"):
             self.count += 1
         else:
             self.count = 0
+        self.cap_count = 0
 
     def should_halt(self):
         """True once the consecutive-error count has reached the limit."""
         return self.count >= self.limit
+
+    def should_halt_cap(self):
+        """True once the consecutive CAP count has reached its own limit.
+
+        A separate decision from ``should_halt`` on purpose: the remedy differs
+        (make the work fit a pass vs. fix the failing pass), and so does the
+        proposer's exit code — 10, not 7.
+        """
+        return self.cap_limit > 0 and self.cap_count >= self.cap_limit
