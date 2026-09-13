@@ -911,6 +911,38 @@ def _loose_citations(evidence_text):
     return out
 
 
+# W27: the previous verdict's NEEDS-GROUNDING list is the critic telling us what it
+# could not see. Carry those files into the NEXT attempt's priority set, so the
+# byte budget cannot elide them twice. 003 phases 5, 10 and 12 (2026-09-12/13)
+# were each rejected on grounding alone, the artefacts present and the criteria
+# accepted on their merits, because large run records fell out of the snapshot —
+# and the proposer's only recourse was to paste excerpts by hand.
+_NEEDS_GROUNDING_RE = re.compile(r'NEEDS-GROUNDING:\s*`?([^\s`]+)`?')
+_CARRY_MAX = 12
+
+
+def carried_grounding(feedback_path, workdir, search_dirs=None):
+    """Paths the previous feedback marked NEEDS-GROUNDING that resolve on disk,
+    in first-mention order, bounded. Empty when there is no feedback yet."""
+    try:
+        with open(feedback_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return []
+    out = []
+    for m in _NEEDS_GROUNDING_RE.finditer(text):
+        cand = _strip_line_suffix(m.group(1).strip().rstrip(".,:;)"))
+        for sub in _expand_braces(cand):
+            if "{" in sub or sub in out:
+                continue
+            full = _resolve_cited(sub, workdir, search_dirs)
+            if full and os.path.isfile(full):
+                out.append(sub)
+            if len(out) >= _CARRY_MAX:
+                return out
+    return out
+
+
 def grounding_gap(evidence_text, grounded, workdir, search_dirs=None):
     """Return the sorted list of tokens the evidence cites that the strict extractor
     did NOT ground but which DO resolve on disk — i.e. tooling blind spots, not
@@ -2502,6 +2534,14 @@ def main():
         # at GROUNDING_TOTAL_CAP, and GROUNDING_MAX_FILES still caps presence lines.
         if not priority:
             priority = list(ev_paths)
+        # W27: what the previous verdict said it could not see is emitted this time.
+        carried = carried_grounding(
+            os.path.join(gates_dir, "GATE%d-FEEDBACK.md" % n), workdir, search_dirs)
+        if carried:
+            paths = list(paths) + [p for p in carried if p not in set(paths)]
+            priority = list(priority) + [p for p in carried if p not in set(priority)]
+            emit(events_path, "grounding_carried", phase=n, attempt=args.attempt,
+                 paths=",".join(carried))
         # W2: symbols the criteria name — greppable anchors for the priority files.
         anchors = extract_anchor_tokens(ground_sec)
         # W10/W11: workspace members (for package-relative resolution), the member the

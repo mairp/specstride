@@ -1338,3 +1338,31 @@ def test_ellipsis_prefixed_citation_is_grounded_without_the_prefix():
         snap = grounding_snapshot(got, d, sd)
         assert "offline-routing.json` — **MISSING**" not in snap
         assert "- `runs/us8/offline-about.json` — **MISSING**" in snap
+
+
+# ── W27: the previous verdict's NEEDS-GROUNDING list is carried into priority ─
+def test_previous_needs_grounding_files_are_carried_and_emitted_whole():
+    """A verdict that says NEEDS-GROUNDING: <path> for a present file must not be
+    able to say it again next attempt because the budget elided the file. The
+    carried set resolves on disk, is bounded, and joins the priority list, so
+    W15 whole-file emission applies to it."""
+    from critic import carried_grounding
+    with tempfile.TemporaryDirectory() as d:
+        gates_rel = os.path.join(".wiggum", "features", "default", "gates")
+        os.makedirs(os.path.join(d, gates_rel))
+        os.makedirs(os.path.join(d, "runs", "us10"))
+        open(os.path.join(d, "runs", "us10", "chips.json"), "w").write('{"chips": 16}\n')
+        fb = os.path.join(d, gates_rel, "GATE12-FEEDBACK.md")
+        open(fb, "w").write(
+            "- T571 — only asserted in prose.\n"
+            "    - NEEDS-GROUNDING: runs/us10/chips.json\n"
+            "    - NEEDS-GROUNDING: runs/us10/absent.json\n"
+            "    - NEEDS-GROUNDING: `runs/us10/chips.json`\n")
+        sd = grounding_search_dirs(gates_rel, d)
+        got = carried_grounding(fb, d, sd)
+        assert got == ["runs/us10/chips.json"], got      # present, deduplicated, absent dropped
+        # As a priority file its content is emitted, not just its presence line.
+        snap = grounding_snapshot(got, d, sd, priority=set(got))
+        assert '"chips": 16' in snap, snap
+        # No feedback file: nothing carried, nothing raised.
+        assert carried_grounding(os.path.join(d, "nope.md"), d, sd) == []
