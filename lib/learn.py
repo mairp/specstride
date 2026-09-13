@@ -42,16 +42,49 @@ Outcome taxonomy (per pass, recommendation 2 / design §4.2)
 Step 5 — the learning loop
 ---------------------------
 ``advise``/``apply``/``revert``/``resolve``/``off`` turn the §5.3 metrics into a
-*suggested*, then optionally *applied*, per-phase ``proposer_timeout``. Storage
-follows §5.4 exactly: an attempt/phase summary is an **observation**; a knob value
-this module has decided to use is a separate, append-only **decision** log
-(``<feature-dir>/learning/applied.json``, JSON-lines, one entry per apply/revert,
-each keyed by a ``run_id``) so the two can never be conflated. The adjustable-knob
-allowlist (``ADJUSTABLE_KNOBS``, §5.5) is a locked literal set: nothing the critic
-reads may ever appear in it. ``resolve`` is the one integration point another
-component may call — see ``resolve_knob`` — and it is a total no-op unless
-``WIGGUM_LEARNING=apply`` is set in its environment, matching the "suggest is the
-default; unset/off changes nothing" rule of §5.5 invariant 5.
+*suggested*, then optionally *applied*, per-phase knob value. All three §5.5
+allowlisted knobs have an engine: ``proposer_timeout`` (§4.1, from measured
+``work_sec``), ``yield_poll_interval`` (§2.1, from measured yield job durations),
+and ``inject_yield_hint`` (§2.2, a boolean, from the wait/work classification).
+Storage follows §5.4 exactly: an attempt/phase summary is an **observation**
+(``observe``, below); a knob value this module has decided to use is a separate,
+append-only **decision** log (``<feature-dir>/learning/applied.json``, JSON-lines,
+one entry per apply/revert, each keyed by a ``run_id``) so the two can never be
+conflated. The adjustable-knob allowlist (``ADJUSTABLE_KNOBS``, §5.5) is a locked
+literal set: nothing the critic reads may ever appear in it. ``resolve`` is the
+one integration point another component may call — see ``resolve_knob`` — and it
+is a total no-op unless ``WIGGUM_LEARNING=apply`` is set in its environment,
+matching the "suggest is the default; unset/off changes nothing" rule of §5.5
+invariant 5.
+
+Observations (§5.4, ``observe``)
+---------------------------------
+``observe`` writes the §5.4 per-phase **observation** document — exactly the
+phase's entry from ``summarize``'s ``phases`` map, wrapped with provenance — to
+``<feature-dir>/learning/phase-<N>.json``. It is the measurement half of §5.4's
+table; it never reads or writes ``applied.json`` and nothing here decides
+anything from it automatically. It exists so an orchestrator hook can call one
+line at ``phase_done`` and leave a phase's own history somewhere the *next* run
+of that phase (or a human, or `wiggum learn --show`) can read it without
+re-deriving it from every run's raw ``events.jsonl`` each time:
+
+    python3 lib/learn.py observe --events <events.jsonl|run-dir|runs-dir> \\
+                                 --phase <N> [--out <feature-dir>/learning/phase-<N>.json]
+
+The documented call for an orchestrator's ``phase_done`` hook (one line, run
+after ``wiggum_emit phase_done ...``, using the orchestrator's own ``$LIB_DIR``,
+``$FEATURE_DIR`` and current-phase ``$n``):
+
+    python3 "$LIB_DIR/learn.py" observe --events "$FEATURE_DIR/runs" --phase "$n" \\
+      --out "$FEATURE_DIR/learning/phase-$n.json"
+
+``--events "$FEATURE_DIR/runs"`` (a dir-of-run-dirs, per ``find_event_files``) is
+deliberate, not ``$RUN_DIR/events.jsonl`` alone: a phase's observation should
+reflect every run that has ever touched it, the same cross-run view
+``summarize``'s ``phases`` map already gives ``attempts_to_approval`` and
+``runs_seen``. Idempotent: the same input always overwrites ``--out`` with the
+same ``"observation"`` content (only ``generated_at`` differs run to run) — safe
+to call once per ``phase_done``, and safe to call again by hand.
 
 Output schema (``wiggum.learn.summary/1``)
 ------------------------------------------
@@ -83,7 +116,9 @@ Output schema (``wiggum.learn.summary/1``)
   "phases": { "<phase>": {
       "title", "runs_seen", "attempts_total", "attempts_to_approval",
       "approved_in_run", "attempt_number_reset", "cost_usd",
-      "work_sec_p50", "work_sec_p90", "kills_by_reason" } },
+      "work_sec_p50", "work_sec_p90", "work_sec_samples", "kills_by_reason",
+      "job_duration_p50", "job_duration_samples",           # yield_poll_interval's evidence
+      "wait_share_p50", "wait_share_samples", "hard_cap_kills_with_wait" } },  # inject_yield_hint's
   "totals": { "runs", "attempts", "passes", "cost_usd", "unbilled_passes",
               "kills_by_reason", "outcomes", "approved_phases",
               "cost_per_approved_phase", "non_approved_cost_share",
@@ -231,6 +266,9 @@ class _Pass:
         self.kill_detail: Optional[str] = None
         self.result: Optional[dict] = None
         self.evidence = False
+        # set from a ``yield_resume`` event (design §2.4): how long the job this
+        # pass yielded on actually ran. None for a pass that never yielded.
+        self.job_duration: Optional[float] = None
 
     def outcome(self) -> str:
         if self.kill_reason is not None:
@@ -269,6 +307,7 @@ class _Pass:
             "dominant_repeat": cmd,
             "dominant_repeat_n": n,
             "dominant_repeat_share": (round(n / self.tool_calls, 3) if n and self.tool_calls else None),
+            "job_duration_sec": (round(self.job_duration, 1) if self.job_duration is not None else None),
         }
 
 
@@ -419,6 +458,13 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
             if p is not None:
                 p.result = ev
                 p.end = ts
+        elif name == "yield_resume":
+            p = run.cur_pass
+            if p is not None:
+                dur = _float(ev.get("job_duration_sec"))
+                if dur is None:
+                    dur = _float(ev.get("waited_sec"))
+                p.job_duration = dur
         elif name == "pass_killed":
             p = run.cur_pass
             if p is not None:
@@ -608,6 +654,17 @@ def _phases(attempts: List[dict]) -> "OrderedDict[str, dict]":
         kills: Counter = Counter()
         for a in atts:
             kills.update(a["kills_by_reason"])
+        # Per-*pass* wait/work and yield-job evidence (design §2.1/§2.2), the same
+        # futility exclusion as `work` above but at pass granularity — a phase's
+        # *passes* are what §5.5's "high wait share or hard-cap kills" is about,
+        # not its attempts (one attempt can hold several passes).
+        pass_rows = [p for a in atts for p in a["passes_detail"]]
+        non_futile_passes = [p for p in pass_rows if p["kill_class"] != "futility"]
+        wait_shares = [p["wait_calls"] / p["tool_calls"] for p in non_futile_passes if p["tool_calls"]]
+        hard_cap_with_wait = sum(1 for p in pass_rows
+                                  if p["kill_reason"] in BUDGET_REASONS and p["wait_calls"] > 0)
+        job_durations = [p["job_duration_sec"] for p in non_futile_passes
+                         if p.get("job_duration_sec") is not None]
         out[str(ph)] = {
             "title": next((a["title"] for a in atts if a["title"]), ""),
             "runs_seen": runs_seen,
@@ -623,6 +680,16 @@ def _phases(attempts: List[dict]) -> "OrderedDict[str, dict]":
             # `work`, so this is exactly the denominator `advise`/`apply` must check.
             "work_sec_samples": len(work),
             "kills_by_reason": dict(kills),
+            # `yield_poll_interval`'s evidence (§2.1): the length of the jobs this
+            # phase's passes actually yielded on, futility-killed passes excluded.
+            "job_duration_p50": percentile(job_durations, 0.5),
+            "job_duration_samples": len(job_durations),
+            # `inject_yield_hint`'s evidence (§2.2): how much of a pass's tool calls
+            # were spent waiting, plus whether a hard_cap (budget) kill ever landed
+            # on a pass that was busy waiting rather than working.
+            "wait_share_p50": percentile(wait_shares, 0.5),
+            "wait_share_samples": len(wait_shares),
+            "hard_cap_kills_with_wait": hard_cap_with_wait,
         }
     return out
 
@@ -660,7 +727,22 @@ KNOB_HARD_MIN = {"proposer_timeout": 900, "yield_poll_interval": 10}
 KNOB_HARD_MAX_FIXED = {"yield_poll_interval": 300}   # proposer_timeout: 2 × default
 STEP_CAP_FRACTION = 0.5   # "≤ ±50% per step" — every numeric adjustable knob
 
+# `yield_poll_interval`'s target: a poll of T seconds wastes up to T seconds of a
+# finished job's result sitting unnoticed (§2.1). Keeping T at roughly a tenth of
+# the job's own measured length keeps that waste a small fraction of the job
+# instead of a fixed cost that dominates a short one; the [10, 300] hard bound
+# and the ±50%-per-step cap (shared with every numeric knob, above) still apply.
+YIELD_POLL_WASTE_FRACTION = 0.1
+
+# `inject_yield_hint`'s threshold: a phase whose passes spend at least this share
+# of their tool calls on the WAIT_RE idioms (sleep/tail -f/poll loops) is one
+# where the agent is hand-rolling the wait Wiggum can do for free (§2.2). A
+# hard_cap kill landing on a pass that was busy waiting is decisive on its own,
+# regardless of the phase's median — see `suggest_inject_yield_hint`.
+INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD = 0.5
+
 LEARN_APPLIED_SCHEMA = "wiggum.learn.applied/1"
+OBSERVATION_SCHEMA = "wiggum.learn.observation/1"
 
 
 def _now_ts() -> str:
@@ -765,12 +847,92 @@ def suggest_proposer_timeout(phase_stats: dict, default: int, current: Optional[
     }
 
 
+def suggest_yield_poll_interval(phase_stats: dict, default: int, current: Optional[int] = None) -> dict:
+    """§2.1 + §5.5: the yield predicate's poll interval, derived from this phase's
+    observed ``yield_resume`` job durations (futility-killed passes already
+    excluded upstream in `_phases`, same as `suggest_proposer_timeout`). The
+    target is `YIELD_POLL_WASTE_FRACTION` of the job's own measured length —
+    enough that a missed tick wastes a small fraction of the job, not a fixed
+    cost — clamped to the `[10, 300]` hard bound and a ±50%-per-step window
+    around whatever value is currently in effect. Returns a value of None below
+    the 3-sample evidence floor (§5.5 invariant 4)."""
+    samples = _int(phase_stats.get("job_duration_samples")) or 0
+    hard_lo = KNOB_HARD_MIN["yield_poll_interval"]
+    hard_hi = KNOB_HARD_MAX_FIXED["yield_poll_interval"]
+    if samples < 3:
+        return {
+            "knob": "yield_poll_interval", "samples": samples, "value": None,
+            "reason": f"fewer than 3 non-futility-killed job-duration samples (have {samples})",
+            "bounds": [hard_lo, hard_hi], "step_cap": None,
+        }
+    raw = phase_stats.get("job_duration_p50") or 0.0
+    target = float(raw) * YIELD_POLL_WASTE_FRACTION
+    base = current if current is not None else default
+    step_lo, step_hi = base * (1 - STEP_CAP_FRACTION), base * (1 + STEP_CAP_FRACTION)
+    lo = max(hard_lo, step_lo)
+    hi = min(hard_hi, step_hi)
+    if lo > hi:   # a degenerate window (current sits outside the hard bounds already)
+        lo, hi = hard_lo, hard_hi
+    value = min(max(target, lo), hi)
+    value = int(round(value))
+    value = min(max(value, hard_lo), hard_hi)   # rounding must never escape the hard bound
+    return {
+        "knob": "yield_poll_interval", "samples": samples, "value": value, "reason": None,
+        "bounds": [hard_lo, hard_hi], "step_cap": [round(step_lo), round(step_hi)],
+        "job_duration_p50": phase_stats.get("job_duration_p50"),
+    }
+
+
+def suggest_inject_yield_hint(phase_stats: dict, current: Optional[bool] = None) -> dict:
+    """§2.2 + §5.5: whether to prepend the yield contract's reminder to phase N's
+    prompt — a boolean knob, so there is no numeric bound to clamp to; the
+    evidence floor (§5.5 invariant 4, applied here at pass granularity via
+    `wait_share_samples`) is the only gate. ON is suggested when either signal
+    from `_phases`' wait/work classification (§5.3) is present: a high median
+    wait-call share across this phase's passes, or at least one `hard_cap`
+    (budget) kill that landed on a pass that was busy waiting (`wait_calls > 0`)
+    rather than working — the latter alone is decisive regardless of the
+    phase's median, since a single such kill is exactly the incident (§1) this
+    knob exists to prevent a repeat of. `current` is accepted for the same call
+    shape as the other suggest_* engines but does not affect a boolean
+    decision. Returns a value of None when the phase has no evidence at all."""
+    samples = _int(phase_stats.get("wait_share_samples")) or 0
+    hard_cap_with_wait = _int(phase_stats.get("hard_cap_kills_with_wait")) or 0
+    if samples < 3:
+        return {
+            "knob": "inject_yield_hint", "samples": samples, "value": None,
+            "reason": f"fewer than 3 non-futility-killed pass samples (have {samples})",
+            "wait_share_p50": phase_stats.get("wait_share_p50"),
+            "hard_cap_kills_with_wait": hard_cap_with_wait,
+        }
+    wait_share = phase_stats.get("wait_share_p50")
+    high_wait = wait_share is not None and wait_share >= INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD
+    value = bool(hard_cap_with_wait > 0 or high_wait)
+    return {
+        "knob": "inject_yield_hint", "samples": samples, "value": value, "reason": None,
+        "wait_share_p50": wait_share, "hard_cap_kills_with_wait": hard_cap_with_wait,
+        "threshold": INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD,
+    }
+
+
+# One entry per §5.5 allowlisted knob; `advise` and `_cmd_apply` both dispatch
+# through this rather than hand-testing `knob ==` chains, so adding a fourth
+# engine later means adding one entry here (plus, deliberately, editing the
+# locked-allowlist test — see `ADJUSTABLE_KNOBS` above).
+SUGGESTION_ENGINES = {
+    "proposer_timeout": lambda stats, default, current: suggest_proposer_timeout(stats, default, current),
+    "yield_poll_interval": lambda stats, default, current: suggest_yield_poll_interval(stats, default, current),
+    "inject_yield_hint": lambda stats, default, current: suggest_inject_yield_hint(stats, current),
+}
+
+
 def advise(summary: dict, knob: str, phase: Optional[int], default: int,
            applied_file: Optional[str] = None) -> List[dict]:
-    """One advice dict per phase (or just `phase` if given). Only `proposer_timeout`
-    has a suggestion engine — the other two allowlisted knobs are deliberately out
-    of scope for this step (§6 step 5: "one function, one knob, deliberately narrow")."""
-    if knob != "proposer_timeout":
+    """One advice dict per phase (or just `phase` if given), dispatched to
+    `knob`'s entry in `SUGGESTION_ENGINES`. All three §5.5 allowlisted knobs
+    have an engine; a `knob` outside that map (never reachable through the CLI,
+    whose `--knob` choices are the allowlist itself) raises ValueError."""
+    if knob not in SUGGESTION_ENGINES:
         raise ValueError(f"learn: no suggestion engine yet for knob {knob!r}")
     phases = summary.get("phases", {})
     keys = [str(phase)] if phase is not None else sorted(phases, key=lambda k: _int(k) or 0)
@@ -781,8 +943,9 @@ def advise(summary: dict, knob: str, phase: Optional[int], default: int,
             continue
         ph = _int(k)
         current = effective_value(applied_file, knob, ph) if applied_file else None
-        adv = suggest_proposer_timeout(stats, default, current)
-        adv.update({"phase": ph, "current": current if current is not None else default,
+        adv = SUGGESTION_ENGINES[knob](stats, default, current)
+        display_default = bool(default) if knob == "inject_yield_hint" else default
+        adv.update({"phase": ph, "current": current if current is not None else display_default,
                     "runs_seen": stats.get("runs_seen", [])})
         out.append(adv)
     return out
@@ -816,6 +979,80 @@ def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file
         "metric": "work_sec_p90", "samples": adv["samples"], "run_id": run_id,
     })
     return entry
+
+
+def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_file: str,
+                               events_file: Optional[str] = None, run_id: Optional[str] = None) -> dict:
+    """`apply_proposer_timeout`'s counterpart for `yield_poll_interval`: same
+    provenance shape, same append-only `applied_file`/`events_file`, same
+    ValueError-and-write-nothing refusal below the evidence floor."""
+    stats = summary.get("phases", {}).get(str(phase))
+    if stats is None:
+        raise ValueError(f"no telemetry for phase {phase}")
+    current = effective_value(applied_file, "yield_poll_interval", phase)
+    adv = suggest_yield_poll_interval(stats, default, current)
+    if adv["value"] is None:
+        raise ValueError(adv["reason"])
+    previous = current if current is not None else default
+    run_id = run_id or _new_run_id()
+    entry = {
+        "schema": LEARN_APPLIED_SCHEMA, "action": "apply", "run_id": run_id,
+        "knob": "yield_poll_interval", "phase": phase, "value": adv["value"], "previous": previous,
+        "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
+        "metric": "job_duration_p50", "applied_at": _now_iso(),
+    }
+    _append_jsonl(applied_file, entry)
+    _append_jsonl(events_file, {
+        "event": "knob_adjusted", "ts": _now_ts(), "knob": "yield_poll_interval", "phase": phase,
+        "from": previous, "to": adv["value"], "reason": "learned_from_job_duration_p50",
+        "metric": "job_duration_p50", "samples": adv["samples"], "run_id": run_id,
+    })
+    return entry
+
+
+def apply_inject_yield_hint(summary: dict, phase: int, applied_file: str,
+                             events_file: Optional[str] = None, run_id: Optional[str] = None) -> dict:
+    """`apply_proposer_timeout`'s counterpart for the boolean `inject_yield_hint`
+    knob: no numeric `default` to clamp to (an unset knob's "previous" is simply
+    `False` — the hint is off until evidence says otherwise), same provenance
+    shape and refusal-below-the-floor behaviour otherwise."""
+    stats = summary.get("phases", {}).get(str(phase))
+    if stats is None:
+        raise ValueError(f"no telemetry for phase {phase}")
+    current = effective_value(applied_file, "inject_yield_hint", phase)
+    adv = suggest_inject_yield_hint(stats, current)
+    if adv["value"] is None:
+        raise ValueError(adv["reason"])
+    previous = current if current is not None else False
+    run_id = run_id or _new_run_id()
+    entry = {
+        "schema": LEARN_APPLIED_SCHEMA, "action": "apply", "run_id": run_id,
+        "knob": "inject_yield_hint", "phase": phase, "value": adv["value"], "previous": previous,
+        "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
+        "metric": "wait_share_p50", "applied_at": _now_iso(),
+    }
+    _append_jsonl(applied_file, entry)
+    _append_jsonl(events_file, {
+        "event": "knob_adjusted", "ts": _now_ts(), "knob": "inject_yield_hint", "phase": phase,
+        "from": previous, "to": adv["value"], "reason": "learned_from_wait_share",
+        "metric": "wait_share_p50", "samples": adv["samples"], "run_id": run_id,
+    })
+    return entry
+
+
+# Dispatch table mirroring `SUGGESTION_ENGINES`; `inject_yield_hint` has no
+# numeric `default`, so its lambda drops that argument.
+APPLY_ENGINES = {
+    "proposer_timeout": lambda summary, phase, default, applied_file, events_file, run_id:
+        apply_proposer_timeout(summary, phase, default, applied_file,
+                                events_file=events_file, run_id=run_id),
+    "yield_poll_interval": lambda summary, phase, default, applied_file, events_file, run_id:
+        apply_yield_poll_interval(summary, phase, default, applied_file,
+                                   events_file=events_file, run_id=run_id),
+    "inject_yield_hint": lambda summary, phase, default, applied_file, events_file, run_id:
+        apply_inject_yield_hint(summary, phase, applied_file,
+                                 events_file=events_file, run_id=run_id),
+}
 
 
 def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None) -> dict:
@@ -877,7 +1114,12 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     WIGGUM_LEARNING=apply. Unset, "off", "suggest", or any other value all return
     `default` unchanged: this is what makes "WIGGUM_LEARNING unset or off" and the
     default "suggest" mode both zero-behaviour-change (§5.5 invariant 5; the
-    migration table in the design doc)."""
+    migration table in the design doc).
+
+    Every knob resolves to an `int`, so a shell caller never has to branch on
+    type: `inject_yield_hint` (a boolean knob) resolves to `1` (on) or `0` (off),
+    never to Python's `True`/`False` spelling — `default` for it should likewise
+    be passed as `0` or `1` by its caller."""
     env = os.environ if env is None else env
     if env.get("WIGGUM_LEARNING") != "apply":
         return int(default)
@@ -886,14 +1128,22 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     value = effective_value(applied_file, knob, phase)
     if value is None:
         return int(default)
+    if knob == "inject_yield_hint":
+        return 1 if _bool(value) else 0
     if knob not in KNOB_HARD_MIN:
-        # a numeric-hard-bound-less knob (e.g. a future boolean knob) has no apply
-        # engine yet either (see `apply_proposer_timeout`), so this is defensive
-        # dead code today, not a real path — never invent a clamp for it.
+        # a numeric-hard-bound-less knob with no apply engine has no clamp to
+        # invent — never guess one; this stays defensive dead code unless a
+        # future knob is added to the allowlist without also updating this.
         return int(default)
     hard_lo = KNOB_HARD_MIN[knob]
     hard_hi = KNOB_HARD_MAX_FIXED.get(knob, 2 * default)   # proposer_timeout: 2×default
     return int(min(max(int(value), hard_lo), hard_hi))
+
+
+def _unit_suffix(knob: str) -> str:
+    """"s" for the two second-valued knobs, "" for the boolean `inject_yield_hint`
+    — purely cosmetic, used only in the CLI's human-readable print lines."""
+    return "s" if knob in ("proposer_timeout", "yield_poll_interval") else ""
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -919,6 +1169,25 @@ def _cmd_summarize(args: argparse.Namespace) -> int:
     else:
         print(text)
     return 0
+
+
+def observation_for_phase(events: List[dict], phase: int,
+                           verification_dir: Optional[str] = None) -> dict:
+    """§5.4's per-phase **observation** document: exactly this phase's entry from
+    `summarize`'s `phases` map (§5.3's metric set), wrapped with a schema tag and
+    a generation timestamp. Pure other than that timestamp — the same `events`
+    always yields the same `"observation"` content, which is what makes the
+    `observe` CLI command idempotent (safe to call once per `phase_done`, and
+    safe to call again by hand). `"observation"` is `None`, not an error, when
+    `phase` has no telemetry yet in `events` — a hook firing on the very first
+    pass of a brand-new phase is not a failure."""
+    summary = summarize(events, verification_dir=verification_dir)
+    return {
+        "schema": OBSERVATION_SCHEMA,
+        "phase": phase,
+        "generated_at": _now_iso(),
+        "observation": summary.get("phases", {}).get(str(phase)),
+    }
 
 
 def _load_summary(args: argparse.Namespace) -> Optional[dict]:
@@ -955,14 +1224,27 @@ def _cmd_advise(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
     for r in rows:
+        unit = _unit_suffix(r["knob"])
         if r["value"] is None:
             print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s) — {r['reason']}; "
                   f"no suggestion (need {'>=3'})")
-        else:
+        elif r["knob"] == "proposer_timeout":
             print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s), "
                   f"work p50={r.get('work_sec_p50')}s p90={r.get('work_sec_p90')}s, "
-                  f"current={r['current']}s → suggest {r['value']}s "
+                  f"current={r['current']}{unit} → suggest {r['value']}{unit} "
                   f"(bounds={r['bounds']}, step_cap={r['step_cap']}) "
+                  f"[not applied — run `wiggum learn --apply` to take effect]")
+        elif r["knob"] == "yield_poll_interval":
+            print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s), "
+                  f"job_duration p50={r.get('job_duration_p50')}s, "
+                  f"current={r['current']}{unit} → suggest {r['value']}{unit} "
+                  f"(bounds={r['bounds']}, step_cap={r['step_cap']}) "
+                  f"[not applied — run `wiggum learn --apply` to take effect]")
+        else:   # inject_yield_hint — boolean, no numeric bounds to print
+            print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s), "
+                  f"wait_share p50={r.get('wait_share_p50')}, "
+                  f"hard_cap_kills_with_wait={r.get('hard_cap_kills_with_wait')}, "
+                  f"current={r['current']} → suggest {r['value']} "
                   f"[not applied — run `wiggum learn --apply` to take effect]")
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
@@ -976,7 +1258,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         print(f"learn: '{args.knob}' is not in the adjustable-knob allowlist "
               f"({sorted(ADJUSTABLE_KNOBS)}) — refusing", file=sys.stderr)
         return 2
-    if args.knob != "proposer_timeout":
+    if args.knob not in APPLY_ENGINES:
         print(f"learn: no apply engine yet for knob {args.knob!r}", file=sys.stderr)
         return 2
     summary = _load_summary(args)
@@ -987,12 +1269,13 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         print("learn: --applied-file or --feature-dir is required to apply", file=sys.stderr)
         return 2
     try:
-        entry = apply_proposer_timeout(summary, args.phase, args.default, applied_file,
-                                        events_file=events_file, run_id=args.run_id)
+        entry = APPLY_ENGINES[args.knob](summary, args.phase, args.default, applied_file,
+                                          events_file, args.run_id)
     except ValueError as e:
         print(f"learn: refusing to apply — {e}", file=sys.stderr)
         return 3
-    print(f"learn: applied {entry['knob']}[{entry['phase']}] {entry['previous']}s -> {entry['value']}s "
+    unit = _unit_suffix(entry["knob"])
+    print(f"learn: applied {entry['knob']}[{entry['phase']}] {entry['previous']}{unit} -> {entry['value']}{unit} "
           f"(samples={entry['samples']}, run_id={entry['run_id']}) → {applied_file}")
     return 0
 
@@ -1007,7 +1290,8 @@ def _cmd_revert(args: argparse.Namespace) -> int:
     except ValueError as e:
         print(f"learn: {e}", file=sys.stderr)
         return 2
-    print(f"learn: reverted {args.run_id} — {entry['knob']}[{entry['phase']}] back to {entry['value']}s")
+    unit = _unit_suffix(entry["knob"])
+    print(f"learn: reverted {args.run_id} — {entry['knob']}[{entry['phase']}] back to {entry['value']}{unit}")
     return 0
 
 
@@ -1019,7 +1303,8 @@ def _cmd_off(args: argparse.Namespace) -> int:
     reverted = revert_all(applied_file, events_file=events_file)
     if reverted:
         for e in reverted:
-            print(f"learn: reverted {e['reverts_run_id']} — {e['knob']}[{e['phase']}] back to {e['value']}s")
+            unit = _unit_suffix(e["knob"])
+            print(f"learn: reverted {e['reverts_run_id']} — {e['knob']}[{e['phase']}] back to {e['value']}{unit}")
     else:
         print("learn: nothing was applied — already at defaults")
     print("learn: note — WIGGUM_LEARNING=off (or unset) in the run's environment is what actually "
@@ -1030,6 +1315,32 @@ def _cmd_off(args: argparse.Namespace) -> int:
 def _cmd_resolve(args: argparse.Namespace) -> int:
     applied_file, _ = _feature_paths(args.feature_dir, args.applied_file, None)
     print(resolve_knob(args.knob, args.phase, args.default, applied_file))
+    return 0
+
+
+def _cmd_observe(args: argparse.Namespace) -> int:
+    files = find_event_files(args.events)
+    if not files:
+        print("learn: no events.jsonl found under: " + ", ".join(args.events), file=sys.stderr)
+        return 2
+    events: List[dict] = []
+    for f in files:
+        events.extend(read_events(f))
+    doc = observation_for_phase(events, args.phase, verification_dir=args.verification_dir)
+    doc["inputs"] = files
+    text = json.dumps(doc, indent=2 if args.pretty else None, sort_keys=False)
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w", encoding="utf-8") as fh:
+            fh.write(text + "\n")
+        obs = doc["observation"]
+        if obs is None:
+            print(f"learn: no telemetry for phase {args.phase} yet → {args.out}")
+        else:
+            print(f"learn: phase {args.phase} observation — {obs['attempts_total']} attempt(s), "
+                  f"work p50={obs.get('work_sec_p50')}s p90={obs.get('work_sec_p90')}s → {args.out}")
+    else:
+        print(text)
     return 0
 
 
@@ -1094,6 +1405,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     rs.add_argument("--feature-dir")
     rs.add_argument("--applied-file")
     rs.set_defaults(func=_cmd_resolve)
+
+    ob = sub.add_parser("observe", help="write the §5.4 per-phase OBSERVATION document (not a decision — see "
+                                         "`apply`); an orchestrator hook calls this once at phase_done")
+    ob.add_argument("--events", action="append", required=True,
+                     help="events.jsonl, a run dir, or a dir of run dirs (repeatable) — the orchestrator's "
+                          "phase_done hook passes \"$FEATURE_DIR/runs\" for the phase's full cross-run history")
+    ob.add_argument("--phase", type=int, required=True)
+    ob.add_argument("--verification-dir", help="a run's verification/ dir, for gate durations")
+    ob.add_argument("--out", help="write JSON here, e.g. <feature-dir>/learning/phase-<N>.json (default: stdout)")
+    ob.add_argument("--pretty", action="store_true")
+    ob.set_defaults(func=_cmd_observe)
 
     args = ap.parse_args(argv)
     return args.func(args)
