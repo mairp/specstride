@@ -65,14 +65,14 @@ def test_tool_lifecycle_renders_progress_results_failures_and_duration():
 def test_exact_evidence_activity_and_diagnostic_are_visible_at_existing_levels():
     evidence = rendered({
         "event": "evidence_writing", "tool": "IPython",
-        "target": "/work/.wiggum/GATE3-EVIDENCE.md",
+        "target": "/work/.specstride/GATE3-EVIDENCE.md",
         "match": "exact-expected-target",
     }, "milestones")
     diagnostic = rendered({
         "event": "agent_diagnostic", "code": "provider_retry", "severity": "warning",
         "message": "retrying in 250ms",
     })
-    assert "/work/.wiggum/GATE3-EVIDENCE.md" in evidence
+    assert "/work/.specstride/GATE3-EVIDENCE.md" in evidence
     assert "exact-expected-target" in evidence
     assert "provider_retry" in diagnostic and "retrying in 250ms" in diagnostic
     assert rendered({"event": "agent_diagnostic", "code": "x"}, "milestones") == ""

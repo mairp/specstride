@@ -3,8 +3,8 @@
 #
 # A trimmed descendant of /root/utilities/ralph_loop.sh. It runs a FRESH headless
 # pass of a coding-agent CLI per iteration until the phase's evidence file appears,
-# then exits. Durable state lives on disk (gate files in .wiggum/gates/ +
-# .wiggum/PROGRESS.md), not in context.
+# then exits. Durable state lives on disk (gate files in .specstride/gates/ +
+# .specstride/PROGRESS.md), not in context.
 #
 # The one job here that the design leans on: the loop's gate is a plain
 # `test -f <evidence>` and the loop exits the instant that file exists. Because the
@@ -18,11 +18,11 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"          # Python components (the Loki shipper) live here
 # shellcheck source=/dev/null
-. "$SCRIPT_DIR/wiggum-lib.sh"
+. "$SCRIPT_DIR/specstride-lib.sh"
 
 usage() {
   cat <<'EOF'
-proposer.sh — the Wiggum proposer (simplified headless Ralph loop).
+proposer.sh — the Specstride proposer (simplified headless Ralph loop).
 
 USAGE
   proposer.sh --workdir DIR --evidence FILE --prompt-file FILE [options]
@@ -39,8 +39,8 @@ REQUIRED
 OPTIONS
   --backend NAME          Provider backend: dsh[:provider/model] | claude | codex |
                           bebop:<name> | prime:<variant>
-                          (default: $WIGGUM_PROPOSER or "dsh").
-                          Bare bebop uses WIGGUM_BEBOP_BACKEND; bare prime uses
+                          (default: $SPECSTRIDE_PROPOSER or "dsh").
+                          Bare bebop uses SPECSTRIDE_BEBOP_BACKEND; bare prime uses
                           stock prime-agent with its configured default model.
   --model MODEL           Model id. For dsh, use provider/model, a glm-* id
                           (mapped to zai), or qwen3.8-27b[-q5]
@@ -62,36 +62,36 @@ OPTIONS
                           agent modified NOTHING on disk under the workdir
                           (default: 1800; 0 disables). Idleness and futility are
                           not the same thing: a pass can be maximally busy by
-                          cpu measure while producing nothing. .git/.wiggum/
+                          cpu measure while producing nothing. .git/.specstride/
                           node_modules/.venv are ignored as progress.
   --progress-path PATH    Restrict the disk-progress check to PATH (repeatable;
-                          also WIGGUM_PROPOSER_PROGRESS_PATHS, colon-separated).
+                          also SPECSTRIDE_PROPOSER_PROGRESS_PATHS, colon-separated).
                           Default: the whole workdir, minus the dirs above.
   --yield-dir DIR         Where a pass declares a YIELD: it ends cleanly while a
-                          job it depends on is still running, and wiggum waits
+                          job it depends on is still running, and specstride waits
                           for that job with NO model session open, then resumes
                           the phase with the job's result in the prompt. Default
                           <FEATURE_DIR>/yield. See the contract the orchestrator
                           prints into the proposer prompt. Knobs:
-                          WIGGUM_YIELD_POLL (30s), WIGGUM_YIELD_MAX_PER_ATTEMPT
-                          (4), WIGGUM_YIELD_COUNTS_AS_ITER (false),
-                          WIGGUM_YIELD_ALLOW_COMMAND (false — the `command`
+                          SPECSTRIDE_YIELD_POLL (30s), SPECSTRIDE_YIELD_MAX_PER_ATTEMPT
+                          (4), SPECSTRIDE_YIELD_COUNTS_AS_ITER (false),
+                          SPECSTRIDE_YIELD_ALLOW_COMMAND (false — the `command`
                           predicate runs outside any pass and ships disabled).
   --repeat-limit N        Kill the pass when the agent has issued the SAME tool
                           call (identical tool + target) N times in this pass and
                           is still issuing it (default: 12; 0 disables). Catches
                           a fast retry loop, which no cpu- or wall-clock watchdog
                           can see. Needs the agent stream (on by default for
-                          claude/bebop/prime; inert with WIGGUM_AGENT_STREAM=false).
+                          claude/bebop/prime; inert with SPECSTRIDE_AGENT_STREAM=false).
   -j, --stream-json       Also ship tool_use/api_request telemetry (Loki and/or OTEL).
   --loki-url URL          Loki base (with -j).
   --otel-url URL          OTLP/HTTP base (with -j). Ships to OTEL alongside Loki.
   --debug                 Retain each pass's prompt.txt + response.txt in that
-                          pass's own invocation dir (.wiggum/features/<f>/debug/
+                          pass's own invocation dir (.specstride/features/<f>/debug/
                           invocations/...), alongside its metadata/result/events.
-  DSH plugin requests     With backend dsh and WIGGUM_DSH_PLUGIN_ALLOWLIST set,
+  DSH plugin requests     With backend dsh and SPECSTRIDE_DSH_PLUGIN_ALLOWLIST set,
                           the model may request exact allowlisted package@version
-                          plugins; Wiggum installs them between fresh passes.
+                          plugins; Specstride installs them between fresh passes.
   -h, --help              Show this help.
 
 Local agent-stream capture (tool calls, messages, cost -> events.jsonl) is ON by
@@ -100,7 +100,7 @@ Prime Agent uses schema-v3 JSON through agent_stream when local capture or telem
 is enabled; Codex currently uses raw text output. Each invocation records a
 capability mode: `structured` (parsed agent stream), `raw-text` (explicit fallback,
 no structure), or `degraded` (structured expected but the schema was rejected — the
-result carries the stable reason). Set WIGGUM_AGENT_STREAM=false (without -j) to
+result carries the stable reason). Set SPECSTRIDE_AGENT_STREAM=false (without -j) to
 select Prime's explicit `raw-text` fallback and restore raw output.
 -j only controls
 the telemetry add-on (Loki when --loki-url is set, OTEL when --otel-url is set).
@@ -111,17 +111,17 @@ silently dropped.
 EXIT
   0  evidence file appeared      4  max-iter reached without evidence
   6  stopped via stop.flag       1  bad usage
-  7  consecutive agent errors (WIGGUM_PROPOSER_MAX_ERRORS, default 2) — a pass
+  7  consecutive agent errors (SPECSTRIDE_PROPOSER_MAX_ERRORS, default 2) — a pass
      that crashed, timed out, produced no terminal record, or was killed by a
      FUTILITY/HANG watchdog (repeat_stall, progress_stall, idle_timeout)
   8  consecutive passes that changed nothing outside the loop's own bookkeeping
-     (WIGGUM_PROPOSER_MAX_NOPROGRESS, default 3) — the phase is blocked on
+     (SPECSTRIDE_PROPOSER_MAX_NOPROGRESS, default 3) — the phase is blocked on
      something the agent cannot decide for itself
   9  the yield budget is spent: a yield's own deadline_sec expired, the run's
      wall-clock budget expired during one, or the attempt yielded more than
-     WIGGUM_YIELD_MAX_PER_ATTEMPT (default 4) times. The job is left alone
+     SPECSTRIDE_YIELD_MAX_PER_ATTEMPT (default 4) times. The job is left alone
  10  consecutive passes killed at the absolute pass ceiling
-     (WIGGUM_PROPOSER_MAX_CAPS, default 3). A hard_cap kill is a BUDGET signal,
+     (SPECSTRIDE_PROPOSER_MAX_CAPS, default 3). A hard_cap kill is a BUDGET signal,
      not an agent error: the work did not fit a pass. The remedy is to make the
      work fit — declare the long step as a yield, pre-stage it as a verification
      command, or split the phase — not to raise the cap.
@@ -129,11 +129,11 @@ EOF
 }
 
 WORKDIR="" EVIDENCE="" PROMPT_FILE=""
-BACKEND="${WIGGUM_PROPOSER:-dsh}"
+BACKEND="${SPECSTRIDE_PROPOSER:-dsh}"
 MODEL=""
-MAX_ITER="${WIGGUM_MAX_ITER:-30}"
+MAX_ITER="${SPECSTRIDE_MAX_ITER:-30}"
 SLEEP_SECS=2
-TIMEOUT="${WIGGUM_PROPOSER_TIMEOUT:-1800}"
+TIMEOUT="${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}"
 # IDLE_TIMEOUT is the real stuck-detector (see run_with_idle_watchdog below):
 # killed only after this many seconds with ZERO cpu-time growth anywhere in
 # the agent's own process tree, not after a fixed duration regardless of
@@ -144,7 +144,7 @@ TIMEOUT="${WIGGUM_PROPOSER_TIMEOUT:-1800}"
 # to safely exceed ordinary network/prefill stalls (observed worst case here:
 # ~4min for a 144k-token prompt), not to match any project's task duration --
 # that is the categorical difference from guessing a total-duration number.
-IDLE_TIMEOUT="${WIGGUM_PROPOSER_IDLE_TIMEOUT:-900}"
+IDLE_TIMEOUT="${SPECSTRIDE_PROPOSER_IDLE_TIMEOUT:-900}"
 # PROGRESS_TIMEOUT / REPEAT_LIMIT are the futility detectors. IDLE_TIMEOUT above
 # only sees *idleness*; an agent stuck in a fast retry loop (confirmed live
 # 2026-08-31, ainetops-demo phase 8: ten failed builds of the same target, the
@@ -154,8 +154,8 @@ IDLE_TIMEOUT="${WIGGUM_PROPOSER_IDLE_TIMEOUT:-900}"
 # add the missing signals: nothing written to disk at all (PROGRESS_TIMEOUT), and
 # the same tool call repeating with no result (REPEAT_LIMIT). Set either to 0 to
 # disable.
-PROGRESS_TIMEOUT="${WIGGUM_PROPOSER_PROGRESS_TIMEOUT:-1800}"
-REPEAT_LIMIT="${WIGGUM_PROPOSER_REPEAT_LIMIT:-12}"
+PROGRESS_TIMEOUT="${SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT:-1800}"
+REPEAT_LIMIT="${SPECSTRIDE_PROPOSER_REPEAT_LIMIT:-12}"
 # Command lines the process-level repetition counter ignores (extended regex,
 # empty = none). A test-driven pass legitimately re-runs its suite many times
 # between edits (2026-09-08, semantic-router-sovereign phase 3: pytest x5 in 23
@@ -172,20 +172,20 @@ REPEAT_LIMIT="${WIGGUM_PROPOSER_REPEAT_LIMIT:-12}"
 # process-level detector still counted bare argv; it stays as belt and braces
 # now that W28 keys that detector by the spawning tool call, in the anchored
 # form so it exempts the tools and not every command line that mentions them.
-REPEAT_IGNORE="${WIGGUM_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)|(^|/)(tesseract|convert|magick|compare|ffmpeg|pdftotext|identify)( |$)}"
+REPEAT_IGNORE="${SPECSTRIDE_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)|(^|/)(tesseract|convert|magick|compare|ffmpeg|pdftotext|identify)( |$)}"
 PROGRESS_PATHS=()
 STREAM_JSON="false"
-LOKI_URL="${WIGGUM_LOKI_URL:-http://localhost:3100}"
-OTEL_URL="${WIGGUM_OTEL_URL:-http://localhost:4318}"
+LOKI_URL="${SPECSTRIDE_LOKI_URL:-http://localhost:3100}"
+OTEL_URL="${SPECSTRIDE_OTEL_URL:-http://localhost:4318}"
 # Per-sink enables: a sink ships only when its --*-url flag is explicitly passed.
 # (Backward compat: `-j` with no url flag still defaults to Loki — set below.)
 LOKI_ENABLED="false"
 OTEL_ENABLED="false"
 DEBUG="false"
-# Local observability tap: parse the agent's stream-json into fine-grained wiggum
+# Local observability tap: parse the agent's stream-json into fine-grained specstride
 # events (agent_tool/agent_text/agent_result) regardless of telemetry. Opt out
-# with WIGGUM_AGENT_STREAM=false (restores the raw output path).
-AGENT_STREAM="${WIGGUM_AGENT_STREAM:-true}"
+# with SPECSTRIDE_AGENT_STREAM=false (restores the raw output path).
+AGENT_STREAM="${SPECSTRIDE_AGENT_STREAM:-true}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -203,11 +203,11 @@ while [[ $# -gt 0 ]]; do
     --repeat-limit)   REPEAT_LIMIT="${2:?}"; shift 2 ;;
     --yield-dir)      YIELD_DIR="${2:?}"; shift 2 ;;
     -j|--stream-json) STREAM_JSON="true"; shift ;;
-    --feature)        WIGGUM_FEATURE="${2:?}"; shift 2 ;;
-    --role)           WIGGUM_ROLE="${2:?}"; shift 2 ;;
-    --phase)          WIGGUM_PHASE="${2:?}"; shift 2 ;;
-    --attempt)        WIGGUM_ATTEMPT="${2:?}"; shift 2 ;;
-    --invocation-id)  WIGGUM_INVOCATION_ID="${2:?}"; shift 2 ;;
+    --feature)        SPECSTRIDE_FEATURE="${2:?}"; shift 2 ;;
+    --role)           SPECSTRIDE_ROLE="${2:?}"; shift 2 ;;
+    --phase)          SPECSTRIDE_PHASE="${2:?}"; shift 2 ;;
+    --attempt)        SPECSTRIDE_ATTEMPT="${2:?}"; shift 2 ;;
+    --invocation-id)  SPECSTRIDE_INVOCATION_ID="${2:?}"; shift 2 ;;
     --loki-url)       LOKI_URL="${2:?}"; LOKI_ENABLED="true"; shift 2 ;;
     --otel-url)       OTEL_URL="${2:?}"; OTEL_ENABLED="true"; shift 2 ;;
     --debug)          DEBUG="true"; shift ;;
@@ -233,17 +233,18 @@ case "$EVIDENCE" in
   /*) : ;;
   *)  EVIDENCE="$WORKDIR/$EVIDENCE" ;;
 esac
-# Ensure the evidence file's parent exists (it lives in .wiggum/gates/). The
+# Ensure the evidence file's parent exists (it lives in .specstride/gates/). The
 # orchestrator already creates it; this keeps proposer.sh correct if run standalone.
 mkdir -p "$(dirname "$EVIDENCE")"
 
-STATE_DIR="$WORKDIR/.wiggum"
+specstride_resolve_state_dir "$WORKDIR"   # STATE_BASENAME: .specstride, or a legacy dir
+STATE_DIR="$WORKDIR/$STATE_BASENAME"
 mkdir -p "$STATE_DIR"
-: "${WIGGUM_EVENTS:=$STATE_DIR/events.jsonl}"
-DSH_PLUGIN_REQUEST="$STATE_DIR/features/${WIGGUM_FEATURE:-default}/dsh-plugin-request.json"
-DSH_PLUGIN_ARCHIVE="$STATE_DIR/features/${WIGGUM_FEATURE:-default}/plugin-installs"
+: "${SPECSTRIDE_EVENTS:=$STATE_DIR/events.jsonl}"
+DSH_PLUGIN_REQUEST="$STATE_DIR/features/${SPECSTRIDE_FEATURE:-default}/dsh-plugin-request.json"
+DSH_PLUGIN_ARCHIVE="$STATE_DIR/features/${SPECSTRIDE_FEATURE:-default}/plugin-installs"
 DSH_PLUGIN_PROCESSOR="$LIB_DIR/dsh_plugin_requests.py"
-export WIGGUM_EVENTS
+export SPECSTRIDE_EVENTS
 
 # Autonomous headless loops always pass --dangerously-skip-permissions, which Claude
 # Code refuses under root unless IS_SANDBOX=1 — and when refused, every pass silently
@@ -265,28 +266,28 @@ if [[ "$AGENT_STREAM" == "true" ]]; then
   { [[ -f "$TAP" ]] && command -v python3 >/dev/null 2>&1; } || AGENT_STREAM="false"
 fi
 
-BACKEND_LABEL="${WIGGUM_BACKEND_LABEL:-$BACKEND}"
-TASK_NAME="${WIGGUM_TASK:-$(basename "$WORKDIR")}"
-RUN_ID="${WIGGUM_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}"
-FEATURE="${WIGGUM_FEATURE:-default}"
-ROLE="${WIGGUM_ROLE:-proposer}"
-PHASE="${WIGGUM_PHASE:-0}"
-ATTEMPT="${WIGGUM_ATTEMPT:-1}"
+BACKEND_LABEL="${SPECSTRIDE_BACKEND_LABEL:-$BACKEND}"
+TASK_NAME="${SPECSTRIDE_TASK:-$(basename "$WORKDIR")}"
+RUN_ID="${SPECSTRIDE_RUN_ID:-$(date +%Y%m%d-%H%M%S)-$$}"
+FEATURE="${SPECSTRIDE_FEATURE:-default}"
+ROLE="${SPECSTRIDE_ROLE:-proposer}"
+PHASE="${SPECSTRIDE_PHASE:-0}"
+ATTEMPT="${SPECSTRIDE_ATTEMPT:-1}"
 log() { echo "$*" >&2; }   # ensure_long_job's own log lines; reaches run.log via the orchestrator's `2>&1 | emit_out`
-# ensure_long_job (wiggum-lib.sh) needs the feature dir for its long-jobs/
+# ensure_long_job (specstride-lib.sh) needs the feature dir for its long-jobs/
 # subdir. EVIDENCE is always <FEATURE_DIR>/gates/GATE<N>-EVIDENCE.md.
 FEATURE_DIR="$(dirname "$(dirname "$EVIDENCE")")"
-INVOCATION_ID_BASE="${WIGGUM_INVOCATION_ID:-}"
+INVOCATION_ID_BASE="${SPECSTRIDE_INVOCATION_ID:-}"
 # Disk-progress roots for the futility watchdog. Explicit --progress-path wins,
-# then WIGGUM_PROPOSER_PROGRESS_PATHS (colon-separated), else the whole workdir.
+# then SPECSTRIDE_PROPOSER_PROGRESS_PATHS (colon-separated), else the whole workdir.
 # The workdir default is deliberately broad: ANY file the agent touches counts as
 # progress, so ordinary implementation work (which need not touch the gate dir for
-# a long stretch) is never mistaken for a stall. Wiggum's own state dirs are
+# a long stretch) is never mistaken for a stall. Specstride's own state dirs are
 # excluded in _disk_progress_since — they change on their own, from the harness
 # and from a detached long job, and would mask a genuinely stalled agent.
 if [[ ${#PROGRESS_PATHS[@]} -eq 0 ]]; then
-  if [[ -n "${WIGGUM_PROPOSER_PROGRESS_PATHS:-}" ]]; then
-    IFS=':' read -r -a PROGRESS_PATHS <<< "$WIGGUM_PROPOSER_PROGRESS_PATHS"
+  if [[ -n "${SPECSTRIDE_PROPOSER_PROGRESS_PATHS:-}" ]]; then
+    IFS=':' read -r -a PROGRESS_PATHS <<< "$SPECSTRIDE_PROPOSER_PROGRESS_PATHS"
   else
     PROGRESS_PATHS=( "$WORKDIR" )
   fi
@@ -315,14 +316,14 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 dsh_resolve_model_ref() {
   local raw="${1:-}"
-  local provider="${WIGGUM_DSH_PROVIDER:-}"
+  local provider="${SPECSTRIDE_DSH_PROVIDER:-}"
   local model="$raw"
   [[ -n "$model" ]] || return 0
   if [[ "$model" == */* ]]; then
     local embedded_provider="${model%%/*}"
     model="${model#*/}"
     if [[ -n "$provider" && "$provider" != "$embedded_provider" ]]; then
-      echo "proposer.sh: conflicting DSH providers: WIGGUM_DSH_PROVIDER=$provider but model ref uses $embedded_provider" >&2
+      echo "proposer.sh: conflicting DSH providers: SPECSTRIDE_DSH_PROVIDER=$provider but model ref uses $embedded_provider" >&2
       return 1
     fi
     provider="$embedded_provider"
@@ -336,7 +337,7 @@ dsh_resolve_model_ref() {
     esac
   fi
   [[ -n "$provider" ]] || {
-    echo "proposer.sh: DSH model '$raw' needs a provider; use provider/model or set WIGGUM_DSH_PROVIDER" >&2
+    echo "proposer.sh: DSH model '$raw' needs a provider; use provider/model or set SPECSTRIDE_DSH_PROVIDER" >&2
     return 1
   }
   [[ "$provider" =~ ^[A-Za-z0-9._-]+$ && "$model" =~ ^[A-Za-z0-9._:-]+$ ]] || {
@@ -365,7 +366,7 @@ dsh_resolve_model_ref() {
 dsh_make_home_overlay() {
   local provider="$1" model="$2" overlay="$3"
   local real_home="${DSH_HOME:-$HOME/.dsh}"
-  local reasoning="${WIGGUM_DSH_REASONING_EFFORT:-}"
+  local reasoning="${SPECSTRIDE_DSH_REASONING_EFFORT:-}"
   local entry base
   for entry in "$real_home"/* "$real_home"/.[!.]*; do
     [[ -e "$entry" ]] || continue
@@ -398,30 +399,30 @@ run_agent() {
       # DeepSeek Harness one-shot profile. The profile selects the provider/model
       # from $DSH_HOME/settings.yaml unless a DSH model override is supplied.
       # The current headless runner accepts the task as one positional argument.
-      local dsh_bin="${WIGGUM_DSH_BIN:-dsh}"
-      local dsh_profile="${WIGGUM_DSH_PROFILE:-headless}"
+      local dsh_bin="${SPECSTRIDE_DSH_BIN:-dsh}"
+      local dsh_profile="${SPECSTRIDE_DSH_PROFILE:-headless}"
       local backend_model=""
       [[ "$BACKEND" == dsh:* ]] && backend_model="${BACKEND#dsh:}"
       if [[ -n "$backend_model" && -n "$MODEL" ]]; then
         echo "proposer.sh: use either --backend dsh:<provider/model> or --model, not both" >&2
         return 1
       fi
-      local dsh_model_ref="${MODEL:-${WIGGUM_DSH_MODEL:-$backend_model}}"
+      local dsh_model_ref="${MODEL:-${SPECSTRIDE_DSH_MODEL:-$backend_model}}"
       local resolved_model_ref provider model overlay_dir dsh_home_eff rc
-      command -v "$dsh_bin" >/dev/null 2>&1 || { echo "proposer.sh: DeepSeek Harness not found: $dsh_bin (set \$WIGGUM_DSH_BIN)" >&2; return 127; }
+      command -v "$dsh_bin" >/dev/null 2>&1 || { echo "proposer.sh: DeepSeek Harness not found: $dsh_bin (set \$SPECSTRIDE_DSH_BIN)" >&2; return 127; }
       local -a dsh_args=( --profile "$dsh_profile" )
       if [[ -n "$dsh_model_ref" ]]; then
         resolved_model_ref="$(dsh_resolve_model_ref "$dsh_model_ref")" || return 1
         provider="${resolved_model_ref%%/*}"
         model="${resolved_model_ref#*/}"
-        overlay_dir="$(mktemp -d "${TMPDIR:-/tmp}/wiggum-dsh-home.XXXXXX")" || return 1
+        overlay_dir="$(mktemp -d "${TMPDIR:-/tmp}/specstride-dsh-home.XXXXXX")" || return 1
         dsh_make_home_overlay "$provider" "$model" "$overlay_dir" || {
           echo "proposer.sh: could not build DSH_HOME overlay for $resolved_model_ref" >&2
           rm -rf "$overlay_dir"; return 1; }
       fi
       dsh_home_eff="${overlay_dir:-${DSH_HOME:-$HOME/.dsh}}"
       DSH_HOME="$dsh_home_eff" \
-      DSH_PERMISSION_MODE="${WIGGUM_DSH_PERMISSION_MODE:-${DSH_PERMISSION_MODE:-workspace-write}}" \
+      DSH_PERMISSION_MODE="${SPECSTRIDE_DSH_PERMISSION_MODE:-${DSH_PERMISSION_MODE:-workspace-write}}" \
         run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "$dsh_bin" "${dsh_args[@]}" "$prompt"
       rc=$?
       if [[ -n "${overlay_dir:-}" ]]; then
@@ -435,9 +436,9 @@ run_agent() {
       # is given): a phase's standing prompt plus its cumulative verification
       # block can exceed the 128 KiB single-argument limit.
       local prompt_file
-      prompt_file="$(mktemp "${TMPDIR:-/tmp}/wiggum-prompt.XXXXXX")"
+      prompt_file="$(mktemp "${TMPDIR:-/tmp}/specstride-prompt.XXXXXX")"
       printf '%s' "$prompt" > "$prompt_file"
-      WIGGUM_STDIN_FILE="$prompt_file" \
+      SPECSTRIDE_STDIN_FILE="$prompt_file" \
         run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" claude -p "${args[@]}"
       rc=$?
       rm -f "$prompt_file"
@@ -453,8 +454,8 @@ run_agent() {
     prime)
       # Out-of-the-box Prime Agent: use its configured default provider/model.
       # Prompt stdin avoids ARG_MAX; --no-session preserves fresh Ralph passes.
-      local prime_agent_bin="${WIGGUM_PRIME_AGENT_BIN:-prime-agent}"
-      command -v "$prime_agent_bin" >/dev/null 2>&1 || { echo "proposer.sh: Prime Agent not found: $prime_agent_bin (set \$WIGGUM_PRIME_AGENT_BIN)" >&2; return 127; }
+      local prime_agent_bin="${SPECSTRIDE_PRIME_AGENT_BIN:-prime-agent}"
+      command -v "$prime_agent_bin" >/dev/null 2>&1 || { echo "proposer.sh: Prime Agent not found: $prime_agent_bin (set \$SPECSTRIDE_PRIME_AGENT_BIN)" >&2; return 127; }
       local prime_mode="text"
       [[ "$PRIME_STRUCTURED" == "true" ]] && prime_mode="json"
       local -a pargs=( -p --mode "$prime_mode" --no-session --cwd "$WORKDIR" )
@@ -465,8 +466,8 @@ run_agent() {
       # Optional fleet launcher resolves a named variant's model/provider/persona.
       local pv="${BACKEND#prime:}"
       [[ -n "$pv" ]] || { echo "proposer.sh: empty Prime variant; use 'prime' or 'prime:<variant>'" >&2; return 1; }
-      local prime_fleet_bin="${WIGGUM_PRIME_FLEET_BIN:-${WIGGUM_PRIME_BIN:-prime}}"
-      command -v "$prime_fleet_bin" >/dev/null 2>&1 || { echo "proposer.sh: Prime fleet launcher not found: $prime_fleet_bin (set \$WIGGUM_PRIME_FLEET_BIN)" >&2; return 127; }
+      local prime_fleet_bin="${SPECSTRIDE_PRIME_FLEET_BIN:-${SPECSTRIDE_PRIME_BIN:-prime}}"
+      command -v "$prime_fleet_bin" >/dev/null 2>&1 || { echo "proposer.sh: Prime fleet launcher not found: $prime_fleet_bin (set \$SPECSTRIDE_PRIME_FLEET_BIN)" >&2; return 127; }
       [[ -z "$MODEL" ]] || { echo "proposer.sh: --model is unsupported with prime:<variant>; the variant selects its model" >&2; return 1; }
       local prime_mode="text"
       [[ "$PRIME_STRUCTURED" == "true" ]] && prime_mode="json"
@@ -475,9 +476,9 @@ run_agent() {
     bebop|bebop:*)
       # bebop is a shell FUNCTION (bebop.sh); a subprocess doesn't inherit it, so
       # source it and call in-process. Backend name = part after the colon, else
-      # $WIGGUM_BEBOP_BACKEND, else "compass".
+      # $SPECSTRIDE_BEBOP_BACKEND, else "compass".
       local bb="${BACKEND#bebop}"; bb="${bb#:}"
-      bb="${bb:-${WIGGUM_BEBOP_BACKEND:-compass}}"
+      bb="${bb:-${SPECSTRIDE_BEBOP_BACKEND:-compass}}"
       local bebop_sh="${BEBOP_SH:-/root/gpu_rtx_3090/bebop.sh}"
       [[ -f "$bebop_sh" ]] || { echo "proposer.sh: bebop.sh not found: $bebop_sh (set \$BEBOP_SH)" >&2; return 127; }
       # shellcheck disable=SC1090
@@ -526,7 +527,7 @@ timed_out = producer_rc == 124
 producer_signal = producer_rc - 128 if producer_rc > 128 else None
 producer_exit_code = None if (launch_failed or timed_out or producer_signal is not None) else producer_rc
 value = {
-    "contract": "wiggum-producer-status/v1",
+    "contract": "specstride-producer-status/v1",
     "producer_exit_code": producer_exit_code,
     "producer_signal": producer_signal,
     "parser_exit_code": parser_rc,
@@ -578,7 +579,7 @@ PY
 #  and every pass ran to the hard cap, which discards the whole hour instead of
 #  bounding it. Two more signals are therefore checked on the same tick:
 #    * DISK progress — nothing created or modified anywhere under the workdir
-#      (minus .git/.wiggum/node_modules/.venv, which change without the agent)
+#      (minus .git/.specstride/node_modules/.venv, which change without the agent)
 #      for PROGRESS_TIMEOUT seconds. Any real file touch resets it, so ordinary
 #      implementation work is never mistaken for a stall.
 #    * REPETITION — the same tool call (identical tool + target) issued
@@ -612,7 +613,7 @@ _proc_tree_cpu_seconds() {
 }
 
 # Has anything under the disk-progress roots been created or modified since TS?
-# Wiggum's own state dirs are pruned: .wiggum churns from the harness itself
+# Specstride's own state dirs are pruned: .specstride churns from the harness itself
 # (invocation dirs, events.jsonl) and from any detached long job writing its log
 # and proofs, so counting it would mask a completely stalled agent; .git,
 # node_modules and .venv are machine-written noise for the same reason.
@@ -621,7 +622,7 @@ _disk_progress_since() {
   for root in "${PROGRESS_PATHS[@]}"; do
     [[ -e "$root" ]] || continue
     hit="$(find "$root" \
-      \( -name .git -o -name .wiggum -o -name node_modules -o -name .venv \) -prune -o \
+      \( -name .git -o -name "$STATE_DIRNAME" -o -name "$LEGACY_STATE_DIRNAME" -o -name node_modules -o -name .venv \) -prune -o \
       -newermt "@$since" -print -quit 2>/dev/null)"
     [[ -n "$hit" ]] && return 0
   done
@@ -769,7 +770,7 @@ write_pass_checkpoint() {
   file="$CHECKPOINT_DIR/${RUN_ID}-phase${PHASE}-attempt${ATTEMPT}-pass${CURRENT_ITER}-${stamp}.md"
   mkdir -p "$CHECKPOINT_DIR" 2>/dev/null || return 0
   {
-    printf '# Pass terminated by the wiggum watchdog\n\n'
+    printf '# Pass terminated by the specstride watchdog\n\n'
     printf -- '- run: %s\n- phase: %s, attempt: %s, pass: %s\n' "$RUN_ID" "$PHASE" "$ATTEMPT" "$CURRENT_ITER"
     printf -- '- reason: %s\n- elapsed: %ss\n' "$reason" "$elapsed"
     [[ -n "$detail" ]] && printf -- '- detail: %s\n' "$detail"
@@ -812,7 +813,7 @@ PY
   printf '%s|%s|%s\n' "$reason" "$elapsed" "$detail" > "$KILL_SIDECAR" 2>/dev/null || true
   # `class` is the stable classification of `reason` (budget | futility | hang):
   # a consumer must never have to re-derive it from the reason string.
-  wiggum_emit pass_killed iter "$CURRENT_ITER" reason "$reason" \
+  specstride_emit pass_killed iter "$CURRENT_ITER" reason "$reason" \
     class "$(watchdog_kill_class "$reason")" elapsed "$elapsed" \
     detail "$detail" checkpoint "$file"
 }
@@ -821,9 +822,9 @@ run_with_idle_watchdog() {
   local hard_cap="$1" idle_timeout="$2"; shift 2
   # Poll interval. 15s is the operational value; the tests drive it down so a
   # watchdog behaviour can be proven in seconds instead of minutes.
-  local tick="${WIGGUM_WATCHDOG_TICK:-15}"
+  local tick="${SPECSTRIDE_WATCHDOG_TICK:-15}"
   # Only the events this pass appends are evidence about this pass.
-  local events="${WIGGUM_EVENTS:-}" offset=0 ticks=0
+  local events="${SPECSTRIDE_EVENTS:-}" offset=0 ticks=0
   [[ -n "$events" && -f "$events" ]] && offset="$(wc -c < "$events" 2>/dev/null || echo 0)"
   # Process-level repeat detection: how many DISTINCT processes have run each
   # command line in this pass. A single long-running command is one pid however
@@ -840,12 +841,12 @@ run_with_idle_watchdog() {
   _watchdog_events_open "$events"
   # An async command without job control gets /dev/null on stdin unless the
   # command itself carries a redirection, so a caller that piped into this
-  # function never reached the agent. WIGGUM_STDIN_FILE names a file to feed the
+  # function never reached the agent. SPECSTRIDE_STDIN_FILE names a file to feed the
   # command instead: the claude backend uses it for the prompt, which as one argv
   # string hits the kernel's 128 KiB per-argument limit (semantic-router-sovereign
   # phase 17, 2026-09-08: 151 KB prompt, "Argument list too long" every pass).
-  if [[ -n "${WIGGUM_STDIN_FILE:-}" ]]; then
-    "$@" < "$WIGGUM_STDIN_FILE" &
+  if [[ -n "${SPECSTRIDE_STDIN_FILE:-}" ]]; then
+    "$@" < "$SPECSTRIDE_STDIN_FILE" &
   else
     "$@" &
   fi
@@ -1002,23 +1003,23 @@ EOF2
 #  process tree (semantic-router-sovereign phase 15, 2026-09-11: three passes,
 #  4.5 hours, 79-85% of it literal `sleep`). The agent's own response was to
 #  hand-roll `setsid nohup` wrappers so its work would outlive the pass — a
-#  re-implementation of a primitive Wiggum already had but could not express.
+#  re-implementation of a primitive Specstride already had but could not express.
 #
 #  So: a pass may end voluntarily and cleanly while a job it depends on is still
 #  running. It says so by writing ONE JSON artifact atomically (tmp + mv, the
 #  same discipline the evidence gate relies on) and then exiting normally:
 #
-#    {"contract": "wiggum-pass-yield/v1",
+#    {"contract": "specstride-pass-yield/v1",
 #     "reason":   "live suite in flight; evidence needs its report",
 #     "job":      {"mode": "launch", "argv": ["/usr/bin/make", "live"]},
 #     "resume_when": {"kind": "exit_code_file"},
 #     "deadline_sec": 7200,
 #     "on_resume": "read runs/live-*.md, write T404 from it, then the evidence"}
 #
-#  Wiggum then evaluates the predicate with NO MODEL SESSION OPEN — the whole
+#  Specstride then evaluates the predicate with NO MODEL SESSION OPEN — the whole
 #  point: the wait costs one syscall per tick instead of ~250k tokens of context
-#  per pass. The job, in `launch` mode, is created by wiggum_launch_owned_job in
-#  Wiggum's OWN session, so _watchdog_kill cannot reach it even in principle.
+#  per pass. The job, in `launch` mode, is created by specstride_launch_owned_job in
+#  Specstride's OWN session, so _watchdog_kill cannot reach it even in principle.
 #
 #  A yield is not an error and not a stall. It does not touch the error breaker,
 #  it is exempt from the no-progress breaker (a yield is DECLARED waiting, which
@@ -1027,22 +1028,22 @@ EOF2
 # ─────────────────────────────────────────────────────────────────────────────
 # How often the predicate is polled. Cheap by construction (one syscall), so the
 # default is about being a good citizen, not about cost.
-: "${WIGGUM_YIELD_POLL:=30}"
+: "${SPECSTRIDE_YIELD_POLL:=30}"
 # Yields per proposer invocation (= per attempt) before exit 9. A yield is a
 # bounded convenience, not an unbounded licence to keep waiting.
-: "${WIGGUM_YIELD_MAX_PER_ATTEMPT:=4}"
+: "${SPECSTRIDE_YIELD_MAX_PER_ATTEMPT:=4}"
 # The `command` predicate is arbitrary execution OUTSIDE any pass, so it ships
 # disabled; the four file/pid predicates cover every real case. Even enabled it
 # takes fixed argv only — never a shell string.
-: "${WIGGUM_YIELD_ALLOW_COMMAND:=false}"
+: "${SPECSTRIDE_YIELD_ALLOW_COMMAND:=false}"
 # false: yield + resume is ONE logical pass, so the iteration is given back.
-: "${WIGGUM_YIELD_COUNTS_AS_ITER:=false}"
+: "${SPECSTRIDE_YIELD_COUNTS_AS_ITER:=false}"
 # Emit a yield_wait sample every Nth tick, so the live presenter narrates the
 # wait instead of going silent for two hours.
-: "${WIGGUM_YIELD_WAIT_EVERY:=10}"
+: "${SPECSTRIDE_YIELD_WAIT_EVERY:=10}"
 # Bounds on the log slice handed back to the resuming pass.
-: "${WIGGUM_YIELD_LOG_HEAD:=40}"
-: "${WIGGUM_YIELD_LOG_TAIL:=80}"
+: "${SPECSTRIDE_YIELD_LOG_HEAD:=40}"
+: "${SPECSTRIDE_YIELD_LOG_TAIL:=80}"
 
 YIELD_REASON=""; YIELD_MODE=""; YIELD_JOB_CWD=""; YIELD_JOB_LOG=""
 YIELD_DEADLINE=""; YIELD_PREDICATE=""; YIELD_ON_RESUME=""; YIELD_ADOPT_PID=""
@@ -1051,7 +1052,7 @@ YIELD_RESUME_BLOCK=""
 YIELD_ARGV=()
 
 # The schema owner and the predicate evaluator, in one place. Bash cannot parse
-# JSON and must not try; this is the same shim shape wiggum_spec_* uses.
+# JSON and must not try; this is the same shim shape specstride_spec_* uses.
 #   _yield_py validate <artifact> <workdir> <allow-command>
 #     -> 8 lines (reason, mode, cwd, log, deadline_sec, predicate kind,
 #        on_resume, adopt pid), or exit 2 with one line saying what is wrong.
@@ -1063,7 +1064,7 @@ _yield_py() {
 import json, os, re, subprocess, sys, time
 
 cmd, path, workdir, allow_command = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] == "true"
-CONTRACT = "wiggum-pass-yield/v1"
+CONTRACT = "specstride-pass-yield/v1"
 KINDS = ("pid", "exit_code_file", "file_exists", "file_stable", "grep", "command")
 
 
@@ -1111,7 +1112,7 @@ if not isinstance(job, dict):
     die("job must be an object")
 mode = job.get("mode")
 if mode not in ("launch", "adopt"):
-    die("job.mode must be 'launch' (wiggum starts it) or 'adopt' (you already did)")
+    die("job.mode must be 'launch' (specstride starts it) or 'adopt' (you already did)")
 argv = job.get("argv")
 adopt_pid = ""
 if mode == "launch":
@@ -1132,7 +1133,7 @@ log = resolve(job.get("log") or "")
 
 resume_when = document.get("resume_when")
 if not isinstance(resume_when, dict):
-    die("resume_when must be an object naming how wiggum knows the job is done")
+    die("resume_when must be an object naming how specstride knows the job is done")
 kind = resume_when.get("kind")
 if kind not in KINDS:
     die("resume_when.kind must be one of: %s" % ", ".join(KINDS))
@@ -1155,7 +1156,7 @@ if kind == "command":
     # and fixed argv even then.
     if not allow_command:
         die("the 'command' predicate executes a command with no pass running and is DISABLED; "
-            "set WIGGUM_YIELD_ALLOW_COMMAND=true to allow it, or use a file/pid predicate")
+            "set SPECSTRIDE_YIELD_ALLOW_COMMAND=true to allow it, or use a file/pid predicate")
     command_argv = resume_when.get("argv")
     if not isinstance(command_argv, list) or not command_argv or not all(
             isinstance(entry, str) and entry for entry in command_argv):
@@ -1187,14 +1188,14 @@ def alive(pid):
 
 
 if kind == "pid":
-    # Default: the job wiggum launched (or adopted) — naming it again is optional.
+    # Default: the job specstride launched (or adopted) — naming it again is optional.
     target = resume_when.get("pid") or launched_pid or adopt_pid
     if not target:
         die("resume_when.pid names no pid and no job was launched")
     sys.exit(1 if alive(target) else 0)
 
 if kind == "exit_code_file":
-    # Default: the rc file wiggum writes for a job it launched itself.
+    # Default: the rc file specstride writes for a job it launched itself.
     target = resolve(predicate_path) or rc_file
     if not target:
         die("resume_when.path names no file and no job was launched")
@@ -1246,9 +1247,9 @@ PY
 read_yield() {
   [[ -f "$YIELD_ARTIFACT" ]] || return 1
   local fields detail
-  if ! detail="$(_yield_py validate "$YIELD_ARTIFACT" "$WORKDIR" "$WIGGUM_YIELD_ALLOW_COMMAND" 2>/dev/null)"; then
+  if ! detail="$(_yield_py validate "$YIELD_ARTIFACT" "$WORKDIR" "$SPECSTRIDE_YIELD_ALLOW_COMMAND" 2>/dev/null)"; then
     echo "proposer.sh: refusing the pass yield — ${detail:-invalid}" >&2
-    wiggum_emit yield_invalid iter "$CURRENT_ITER" reason "${detail:-invalid}" artifact "$YIELD_ARTIFACT"
+    specstride_emit yield_invalid iter "$CURRENT_ITER" reason "${detail:-invalid}" artifact "$YIELD_ARTIFACT"
     rm -f "$YIELD_ARTIFACT"
     return 1
   fi
@@ -1261,7 +1262,7 @@ read_yield() {
 }
 
 # Take ownership of the job. `launch` is the mode that actually fixes the
-# incident: wiggum creates the process, in wiggum's session, so no pass kill can
+# incident: specstride creates the process, in specstride's session, so no pass kill can
 # reach it. `adopt` is accepted only when the pass really did detach the job —
 # a pid in the PASS's own session would die with the next kill, and a yield on it
 # would wait for something already doomed.
@@ -1282,26 +1283,26 @@ yield_take_job() {
     job_sid="$(ps -o sid= -p "$YIELD_ADOPT_PID" 2>/dev/null | tr -d ' ')"
     if [[ -z "$job_sid" ]]; then
       echo "proposer.sh: refusing the adopt yield — pid $YIELD_ADOPT_PID is not running" >&2
-      wiggum_emit yield_invalid iter "$CURRENT_ITER" reason "adopt pid $YIELD_ADOPT_PID is not running" \
+      specstride_emit yield_invalid iter "$CURRENT_ITER" reason "adopt pid $YIELD_ADOPT_PID is not running" \
         artifact "$YIELD_ARTIFACT"
       return 1
     fi
     if [[ "$job_sid" == "$pass_sid" ]]; then
       echo "proposer.sh: refusing the adopt yield — pid $YIELD_ADOPT_PID is in this pass's own session ($job_sid); it would be killed with the pass. Start it with setsid, or use mode 'launch'." >&2
-      wiggum_emit yield_invalid iter "$CURRENT_ITER" \
+      specstride_emit yield_invalid iter "$CURRENT_ITER" \
         reason "adopt pid $YIELD_ADOPT_PID shares the pass session $job_sid" \
         artifact "$YIELD_ARTIFACT"
       return 1
     fi
     YIELD_JOB_PID="$YIELD_ADOPT_PID"
-    wiggum_emit yield_job_start iter "$CURRENT_ITER" mode adopt pid "$YIELD_JOB_PID" \
+    specstride_emit yield_job_start iter "$CURRENT_ITER" mode adopt pid "$YIELD_JOB_PID" \
       log "$YIELD_JOB_LOG" sid "$job_sid"
     return 0
   fi
-  mapfile -t YIELD_ARGV < <(_yield_py argv "$YIELD_ARTIFACT" "$WORKDIR" "$WIGGUM_YIELD_ALLOW_COMMAND" 2>/dev/null)
+  mapfile -t YIELD_ARGV < <(_yield_py argv "$YIELD_ARTIFACT" "$WORKDIR" "$SPECSTRIDE_YIELD_ALLOW_COMMAND" 2>/dev/null)
   [[ ${#YIELD_ARGV[@]} -gt 0 ]] || return 1
   rm -f "$pidfile" "$YIELD_JOB_RC"
-  # Both markers are written by wiggum's own wrapper, atomically (tmp + mv), so
+  # Both markers are written by specstride's own wrapper, atomically (tmp + mv), so
   # the default `exit_code_file` predicate can never see a half-written rc and the
   # pidfile never names a process that is not the job. `bash -c` here interpolates
   # NOTHING into a command line: $0 is the pidfile, $1 the rc file, "$@" (after
@@ -1312,7 +1313,7 @@ yield_take_job() {
   # setsid(1) a group leader, which makes it fork instead of setsid()-ing in
   # place — so `$!` is a short-lived launcher in the OLD session, not the job.
   # `kill -0` on that pid would report a running job as finished within seconds.
-  wiggum_launch_owned_job "${pidfile}.launcher" "$YIELD_JOB_LOG" "$YIELD_JOB_CWD" -- \
+  specstride_launch_owned_job "${pidfile}.launcher" "$YIELD_JOB_LOG" "$YIELD_JOB_CWD" -- \
     bash -c 'printf "%s\n" "$$" > "$0.tmp" && mv "$0.tmp" "$0"
              rc="$1"; shift; set +e; "$@"; printf "%s\n" "$?" > "$rc.tmp" && mv "$rc.tmp" "$rc"' \
       "$pidfile" "$YIELD_JOB_RC" "${YIELD_ARGV[@]}"
@@ -1321,12 +1322,12 @@ yield_take_job() {
   YIELD_JOB_PID="$(tr -d ' \n' < "$pidfile" 2>/dev/null)"
   if [[ -z "$YIELD_JOB_PID" ]]; then
     echo "proposer.sh: the yield job never reported a pid; refusing the yield. See $YIELD_JOB_LOG" >&2
-    wiggum_emit yield_invalid iter "$CURRENT_ITER" reason "the launched job never reported a pid" \
+    specstride_emit yield_invalid iter "$CURRENT_ITER" reason "the launched job never reported a pid" \
       artifact "$YIELD_ARTIFACT" log "$YIELD_JOB_LOG"
     return 1
   fi
   job_sid="$(ps -o sid= -p "$YIELD_JOB_PID" 2>/dev/null | tr -d ' ')"
-  wiggum_emit yield_job_start iter "$CURRENT_ITER" mode launch pid "$YIELD_JOB_PID" \
+  specstride_emit yield_job_start iter "$CURRENT_ITER" mode launch pid "$YIELD_JOB_PID" \
     argv "${YIELD_ARGV[*]}" log "$YIELD_JOB_LOG" sid "$job_sid"
   return 0
 }
@@ -1334,13 +1335,13 @@ yield_take_job() {
 # Poll the predicate with NO model session open. Prints exactly one word:
 # satisfied | timeout | stop | wall_budget.
 wait_for_yield() {
-  local tick="$WIGGUM_YIELD_POLL" ticks=0 waited=0 now rc
+  local tick="$SPECSTRIDE_YIELD_POLL" ticks=0 waited=0 now rc
   local started="$YIELD_STARTED_AT"
   while :; do
     # stop.flag is checked every tick, not only at pass boundaries: a yield can
-    # be hours long, and `wiggum stop` must not have to wait for it.
+    # be hours long, and `specstride stop` must not have to wait for it.
     if [[ -f "$STATE_DIR/stop.flag" ]]; then echo stop; return 0; fi
-    _yield_py check "$YIELD_ARTIFACT" "$WORKDIR" "$WIGGUM_YIELD_ALLOW_COMMAND" \
+    _yield_py check "$YIELD_ARTIFACT" "$WORKDIR" "$SPECSTRIDE_YIELD_ALLOW_COMMAND" \
       "$YIELD_JOB_PID" "$YIELD_JOB_RC" >/dev/null 2>&1
     rc=$?
     if (( rc == 0 )); then echo satisfied; return 0; fi
@@ -1350,14 +1351,14 @@ wait_for_yield() {
     # The run's own wall-clock budget must be honoured DURING a yield too: the
     # orchestrator only checks it at phase boundaries, and the flock is held the
     # whole time, so an unchecked yield could sail straight past it.
-    if [[ -n "${WIGGUM_MAX_WALL_MIN:-}" && "${WIGGUM_MAX_WALL_MIN:-0}" =~ ^[0-9]+$ ]] \
-       && (( WIGGUM_MAX_WALL_MIN > 0 )) && [[ -n "${WIGGUM_RUN_START_EPOCH:-}" ]]; then
-      (( (now - WIGGUM_RUN_START_EPOCH) / 60 >= WIGGUM_MAX_WALL_MIN )) && { echo wall_budget; return 0; }
+    if [[ -n "${SPECSTRIDE_MAX_WALL_MIN:-}" && "${SPECSTRIDE_MAX_WALL_MIN:-0}" =~ ^[0-9]+$ ]] \
+       && (( SPECSTRIDE_MAX_WALL_MIN > 0 )) && [[ -n "${SPECSTRIDE_RUN_START_EPOCH:-}" ]]; then
+      (( (now - SPECSTRIDE_RUN_START_EPOCH) / 60 >= SPECSTRIDE_MAX_WALL_MIN )) && { echo wall_budget; return 0; }
     fi
     sleep "$tick"
     ticks=$(( ticks + 1 ))
-    if (( WIGGUM_YIELD_WAIT_EVERY > 0 && ticks % WIGGUM_YIELD_WAIT_EVERY == 0 )); then
-      wiggum_emit yield_wait iter "$CURRENT_ITER" elapsed "$(( $(date +%s) - started ))" \
+    if (( SPECSTRIDE_YIELD_WAIT_EVERY > 0 && ticks % SPECSTRIDE_YIELD_WAIT_EVERY == 0 )); then
+      specstride_emit yield_wait iter "$CURRENT_ITER" elapsed "$(( $(date +%s) - started ))" \
         predicate_kind "$YIELD_PREDICATE" yield_index "$YIELD_INDEX"
     fi
   done
@@ -1373,7 +1374,7 @@ yield_resume_block() {
   cat <<EOF2
 ## The job you yielded on has ENDED — resume from its result
 You ended your previous pass with a yield: "$YIELD_REASON"
-Wiggum waited for it with no model session open (${duration}s) and it is now done.
+Specstride waited for it with no model session open (${duration}s) and it is now done.
 Job log: $YIELD_JOB_LOG
 Exit code: ${rc:-unknown}
 Do NOT re-run it, and do NOT start it again — its output is already on disk.
@@ -1384,13 +1385,13 @@ EOF2
   if [[ -f "$YIELD_JOB_LOG" ]]; then
     lines="$(wc -l < "$YIELD_JOB_LOG" 2>/dev/null || echo 0)"
     printf '\n### Its log (%s lines' "$lines"
-    if (( lines > WIGGUM_YIELD_LOG_HEAD + WIGGUM_YIELD_LOG_TAIL )); then
-      elided=$(( lines - WIGGUM_YIELD_LOG_HEAD - WIGGUM_YIELD_LOG_TAIL ))
-      printf ', head %s + tail %s shown)\n```\n' "$WIGGUM_YIELD_LOG_HEAD" "$WIGGUM_YIELD_LOG_TAIL"
-      head -n "$WIGGUM_YIELD_LOG_HEAD" "$YIELD_JOB_LOG"
+    if (( lines > SPECSTRIDE_YIELD_LOG_HEAD + SPECSTRIDE_YIELD_LOG_TAIL )); then
+      elided=$(( lines - SPECSTRIDE_YIELD_LOG_HEAD - SPECSTRIDE_YIELD_LOG_TAIL ))
+      printf ', head %s + tail %s shown)\n```\n' "$SPECSTRIDE_YIELD_LOG_HEAD" "$SPECSTRIDE_YIELD_LOG_TAIL"
+      head -n "$SPECSTRIDE_YIELD_LOG_HEAD" "$YIELD_JOB_LOG"
       printf '\n... [%s lines elided from the middle — the file itself is complete at %s] ...\n\n' \
         "$elided" "$YIELD_JOB_LOG"
-      tail -n "$WIGGUM_YIELD_LOG_TAIL" "$YIELD_JOB_LOG"
+      tail -n "$SPECSTRIDE_YIELD_LOG_TAIL" "$YIELD_JOB_LOG"
     else
       printf ', shown in full)\n```\n'
       cat "$YIELD_JOB_LOG"
@@ -1415,7 +1416,7 @@ run_iteration() {
   # fallback (--mode text), where no tap runs — so an operator still sees WHY
   # fine-grained signals are absent. Legacy claude/bebop behavior is untouched.
   if [[ ( "$BACKEND" == prime || "$BACKEND" == prime:* ) && "$PRIME_STRUCTURED" != "true" ]]; then
-    wiggum_emit agent_observability mode raw-text \
+    specstride_emit agent_observability mode raw-text \
       reason "structured schema unavailable — parsing plain output" \
       role "$ROLE" supported_signals "text,result"
   fi
@@ -1431,8 +1432,8 @@ run_iteration() {
     # proposer model's context ("Prompt is too long"), erroring pass 1 of every
     # attempt and burning the consecutive-error budget. The proposer needs no
     # slash-command skills to do phase work, so turn them off. Escape hatch:
-    # WIGGUM_PROPOSER_SKILLS=1 to re-enable.
-    if [[ "${WIGGUM_PROPOSER_SKILLS:-0}" != "1" ]]; then
+    # SPECSTRIDE_PROPOSER_SKILLS=1 to re-enable.
+    if [[ "${SPECSTRIDE_PROPOSER_SKILLS:-0}" != "1" ]]; then
       shared+=( --disable-slash-commands )
     fi
     if [[ "$AGENT_STREAM" == "true" || "$STREAM_JSON" == "true" ]]; then
@@ -1453,7 +1454,7 @@ PY
     fi
     local stream_backend="$BACKEND_LABEL"
     [[ "$BACKEND" == prime || "$BACKEND" == prime:* ]] && stream_backend="$BACKEND"
-    local invocation_dir="$WORKDIR/.wiggum/features/$FEATURE/debug/invocations/$RUN_ID/$ROLE/phase-$PHASE/attempt-$ATTEMPT/iter-$iter/$invocation_id"
+    local invocation_dir="$STATE_DIR/features/$FEATURE/debug/invocations/$RUN_ID/$ROLE/phase-$PHASE/attempt-$ATTEMPT/iter-$iter/$invocation_id"
     # Publish this pass's invocation dir so the controller loop (which spawned
     # run_iteration in the background) can locate the artifacts to reconcile the
     # single durable result.json after the pass finishes.
@@ -1473,7 +1474,7 @@ import json, os, sys, tempfile
 (path, run_id, feature, backend, phase, attempt, iteration,
  invocation_id, evidence, role) = sys.argv[1:]
 value = {
-    "contract": "wiggum-invocation/v1", "run_id": run_id, "feature": feature,
+    "contract": "specstride-invocation/v1", "run_id": run_id, "feature": feature,
     "role": role, "backend": backend, "phase": int(phase),
     "attempt": int(attempt), "iteration": int(iteration),
     "invocation_id": invocation_id, "observability_mode": "structured",
@@ -1493,7 +1494,7 @@ finally:
     except FileNotFoundError: pass
 PY
     fi
-    local -a tap_args=( --events "$WIGGUM_EVENTS" --run-id "$RUN_ID"
+    local -a tap_args=( --events "$SPECSTRIDE_EVENTS" --run-id "$RUN_ID"
                         --task "$TASK_NAME" --backend "$stream_backend" --iteration "$iter" )
     if [[ "$BACKEND" == prime || "$BACKEND" == prime:* ]]; then
       tap_args+=( --feature "$FEATURE" --role "$ROLE" --phase "$PHASE"
@@ -1511,12 +1512,12 @@ PY
     # into success — for the finalizer to reconcile with the provider terminal.
     local start_ms end_ms
     start_ms="$(date +%s%3N 2>/dev/null || echo 0)"
-    # The adapter is normally the stdlib tap; WIGGUM_AGENT_TAP lets an operator
+    # The adapter is normally the stdlib tap; SPECSTRIDE_AGENT_TAP lets an operator
     # (or a pipeline test) substitute an executable parser so a fatal adapter
     # fault is a first-class, observable pipeline status rather than a hidden one.
     local -a tap_cmd
-    if [[ -n "${WIGGUM_AGENT_TAP:-}" ]]; then
-      tap_cmd=( "$WIGGUM_AGENT_TAP" "${tap_args[@]}" )
+    if [[ -n "${SPECSTRIDE_AGENT_TAP:-}" ]]; then
+      tap_cmd=( "$SPECSTRIDE_AGENT_TAP" "${tap_args[@]}" )
     else
       tap_cmd=( python3 "$TAP" "${tap_args[@]}" )
     fi
@@ -1565,18 +1566,18 @@ PY
 # Fast-exit: evidence already present (resume-to-critic case) — do zero work, and
 # do it BEFORE requiring a prompt, since a resume needs no prompt at all.
 if [[ -f "$EVIDENCE" ]]; then
-  wiggum_emit evidence_present file "$(basename "$EVIDENCE")" iters 0
+  specstride_emit evidence_present file "$(basename "$EVIDENCE")" iters 0
   echo "proposer.sh: evidence already exists ($EVIDENCE); nothing to do." >&2
   exit 0
 fi
 
 PROMPT="$(cat "$PROMPT_FILE")"
 [[ -n "${PROMPT//[[:space:]]/}" ]] || { echo "proposer.sh: prompt is empty" >&2; exit 1; }
-if [[ "$BACKEND" == dsh && -n "${WIGGUM_DSH_PLUGIN_ALLOWLIST:-}" ]]; then
+if [[ "$BACKEND" == dsh && -n "${SPECSTRIDE_DSH_PLUGIN_ALLOWLIST:-}" ]]; then
   PROMPT+=$'\n\n## Optional DSH plugin request protocol\n'
   PROMPT+="If—and only if—the current DSH tool surface cannot complete this phase, you may request a pre-approved DSH profile plugin. Write exactly one JSON object atomically (temporary file then mv) to: $DSH_PLUGIN_REQUEST"$'\n'
-  PROMPT+=$'Schema: {"contract":"wiggum-dsh-plugin-request/v1","plugins":["exact-package@1.2.3"],"reason":"why existing tools are insufficient"}\n'
-  PROMPT+="Allowed exact specs: ${WIGGUM_DSH_PLUGIN_ALLOWLIST}. Requests outside this exact allowlist, ranges/tags/URLs/paths, extra keys, or malformed JSON are rejected. After writing a request, STOP without writing gate evidence. Wiggum installs it between passes; the next fresh DSH pass sees the plugin. Do not run dsh plugin, pnpm, npm, or modify the DSH profile yourself."
+  PROMPT+=$'Schema: {"contract":"specstride-dsh-plugin-request/v1","plugins":["exact-package@1.2.3"],"reason":"why existing tools are insufficient"}\n'
+  PROMPT+="Allowed exact specs: ${SPECSTRIDE_DSH_PLUGIN_ALLOWLIST}. Requests outside this exact allowlist, ranges/tags/URLs/paths, extra keys, or malformed JSON are rejected. After writing a request, STOP without writing gate evidence. Specstride installs it between passes; the next fresh DSH pass sees the plugin. Do not run dsh plugin, pnpm, npm, or modify the DSH profile yourself."
 fi
 
 # Debug raw retention (prompt/response) is now invocation-scoped: run_iteration
@@ -1585,8 +1586,8 @@ fi
 # reconstructs from one directory rather than a shared run-scoped debug file.
 
 # The current pass runs in the background with its PID recorded, so
-# `wiggum stop --now` can kill the in-flight agent tree; a graceful
-# `wiggum stop` (flag only) is honored at every pass boundary with exit 6.
+# `specstride stop --now` can kill the in-flight agent tree; a graceful
+# `specstride stop` (flag only) is honored at every pass boundary with exit 6.
 PIDFILE="$STATE_DIR/proposer.pid"
 trap 'rm -f "$PIDFILE"' EXIT
 
@@ -1609,7 +1610,7 @@ trap 'rm -f "$PIDFILE"' EXIT
 # writes one durable result, folds it into persisted breaker state, and consumes
 # THAT exact invocation's result — never a historical tail-scan of the event log.
 # Non-Prime backends keep the legacy event-log is_error tail-scan below.
-: "${WIGGUM_PROPOSER_MAX_ERRORS:=2}"
+: "${SPECSTRIDE_PROPOSER_MAX_ERRORS:=2}"
 consec_err=0
 # Consecutive-CAP breaker. A watchdog kill is not one thing, and counting every
 # reason as an agent error is an accounting bug with a measurable price.
@@ -1620,11 +1621,11 @@ consec_err=0
 # (semantic-router-sovereign phase 15): three passes killed at the 90-minute cap
 # while running a 93-minute live suite, each landing in the error counter, and
 # the run continued only because an operator had already set
-# WIGGUM_PROPOSER_MAX_ERRORS=30 to work around exactly this — which also
+# SPECSTRIDE_PROPOSER_MAX_ERRORS=30 to work around exactly this — which also
 # disabled the breaker for genuine crashes. Cap kills get their own bounded
 # counter and their own exit code (10), so the halt can name the right remedy:
 # the phase's work does not fit one pass. Raising the cap is NOT that remedy.
-: "${WIGGUM_PROPOSER_MAX_CAPS:=3}"
+: "${SPECSTRIDE_PROPOSER_MAX_CAPS:=3}"
 consec_cap=0
 # The class of each watchdog kill reason; the single source of truth in the shell,
 # mirroring lib/learn.py's KILL_CLASS. An unknown reason is treated as futility
@@ -1644,9 +1645,9 @@ watchdog_kill_class() {
 # spec rule (FR-243), wrote its reasoning, and asked for a decision -- then the loop
 # re-ran it every ~60s for all 20 passes and halted with the generic "max-iter" message.
 # Twenty passes of nothing is not information; three is. Reuses _disk_progress_since,
-# which already prunes .git/.wiggum/node_modules/.venv, so the agent's own bookkeeping
+# which already prunes .git/.specstride/node_modules/.venv, so the agent's own bookkeeping
 # (PROGRESS.md and the loop's state) does NOT count as progress -- only real work does.
-: "${WIGGUM_PROPOSER_MAX_NOPROGRESS:=3}"
+: "${SPECSTRIDE_PROPOSER_MAX_NOPROGRESS:=3}"
 consec_noprogress=0
 FINALIZER="$LIB_DIR/finalize_invocation.py"
 BREAKER_STATE="$STATE_DIR/.breaker-state.$RUN_ID.json"
@@ -1660,7 +1661,7 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   # Visible to this shell's own event emissions (the watchdog sets it again in
   # the pass subshell, which cannot write back to here).
   CURRENT_ITER="$i"
-  wiggum_emit iter_start iter "$i" max_iter "$MAX_ITER"
+  specstride_emit iter_start iter "$i" max_iter "$MAX_ITER"
   echo "----- proposer pass $i/$MAX_ITER  $(date -Is) -----" >&2
   # Stamped before the pass so the no-progress breaker can ask, afterwards, whether
   # this pass changed anything real. One second back: find's -newermt is strictly
@@ -1712,31 +1713,31 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   # dsh with an argv array (never a shell), then starts the next fresh pass so the
   # newly composed profile is active. Invalid/denied/failed requests halt visibly.
   if [[ "$BACKEND" == dsh && -f "$DSH_PLUGIN_REQUEST" ]]; then
-    if [[ -z "${WIGGUM_DSH_PLUGIN_ALLOWLIST:-}" ]]; then
-      echo "proposer.sh: DSH plugin request found but WIGGUM_DSH_PLUGIN_ALLOWLIST is empty" >&2
-      wiggum_emit plugin_install_denied iter "$i" reason allowlist_empty
+    if [[ -z "${SPECSTRIDE_DSH_PLUGIN_ALLOWLIST:-}" ]]; then
+      echo "proposer.sh: DSH plugin request found but SPECSTRIDE_DSH_PLUGIN_ALLOWLIST is empty" >&2
+      specstride_emit plugin_install_denied iter "$i" reason allowlist_empty
       exit 7
     fi
     echo "proposer.sh: validating DSH plugin request after pass $i" >&2
     plugin_result="$(python3 "$DSH_PLUGIN_PROCESSOR" \
       --request "$DSH_PLUGIN_REQUEST" --archive-dir "$DSH_PLUGIN_ARCHIVE" \
-      --allowlist "$WIGGUM_DSH_PLUGIN_ALLOWLIST" \
-      --dsh-bin "${WIGGUM_DSH_BIN:-dsh}" --profile "${WIGGUM_DSH_PROFILE:-headless}" \
-      --timeout "${WIGGUM_DSH_PLUGIN_TIMEOUT:-600}" 2>&1)"
+      --allowlist "$SPECSTRIDE_DSH_PLUGIN_ALLOWLIST" \
+      --dsh-bin "${SPECSTRIDE_DSH_BIN:-dsh}" --profile "${SPECSTRIDE_DSH_PROFILE:-headless}" \
+      --timeout "${SPECSTRIDE_DSH_PLUGIN_TIMEOUT:-600}" 2>&1)"
     plugin_rc=$?
     if [[ "$plugin_rc" -ne 0 ]]; then
       echo "proposer.sh: $plugin_result" >&2
-      wiggum_emit plugin_install_failed iter "$i" reason "$plugin_result"
+      specstride_emit plugin_install_failed iter "$i" reason "$plugin_result"
       exit 7
     fi
     plugin_names="$(python3 -c 'import json,sys; print(",".join(json.loads(sys.argv[1]).get("plugins", [])))' "$plugin_result" 2>/dev/null || true)"
     echo "proposer.sh: installed DSH plugin(s): $plugin_names; restarting with fresh profile" >&2
-    wiggum_emit plugin_installed iter "$i" profile "${WIGGUM_DSH_PROFILE:-headless}" plugins "$plugin_names"
+    specstride_emit plugin_installed iter "$i" profile "${SPECSTRIDE_DSH_PROFILE:-headless}" plugins "$plugin_names"
     if (( i >= MAX_ITER )); then
       echo "proposer.sh: plugin installed on final pass; raise --max-iter to allow a restarted DSH pass" >&2
       exit 4
     fi
-    wiggum_emit iter_done iter "$i" evidence missing plugin_restart true
+    specstride_emit iter_done iter "$i" evidence missing plugin_restart true
     sleep "$SLEEP_SECS"
     continue
   fi
@@ -1763,7 +1764,7 @@ for (( i=1; i<=MAX_ITER; i++ )); do
     # A pass the watchdog had to end did not end *voluntarily*, which is the one
     # thing the protocol asks of it. Account the kill; refuse the yield.
     echo "proposer.sh: ignoring pass $i's yield — the watchdog ended that pass ($pass_kill_reason), so it did not end voluntarily." >&2
-    wiggum_emit yield_invalid iter "$i" reason "the pass was killed by the watchdog ($pass_kill_reason)" \
+    specstride_emit yield_invalid iter "$i" reason "the pass was killed by the watchdog ($pass_kill_reason)" \
       artifact "$YIELD_ARTIFACT"
     rm -f "$YIELD_ARTIFACT"
   fi
@@ -1771,16 +1772,16 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   # yield and its evidence is simply done.
   if [[ ! -f "$EVIDENCE" ]] && read_yield; then
     YIELD_INDEX=$(( YIELD_INDEX + 1 ))
-    if (( WIGGUM_YIELD_MAX_PER_ATTEMPT > 0 && YIELD_INDEX > WIGGUM_YIELD_MAX_PER_ATTEMPT )); then
-      echo "proposer.sh: this attempt has already yielded $WIGGUM_YIELD_MAX_PER_ATTEMPT times — aborting (exit 9). A yield is for waiting on ONE long job, not for making a phase out of waiting; split the phase, or pre-stage the measurement." >&2
-      wiggum_emit run_stop reason proposer_yield_budget iter "$i" \
-        yields "$(( YIELD_INDEX - 1 ))" max "$WIGGUM_YIELD_MAX_PER_ATTEMPT"
+    if (( SPECSTRIDE_YIELD_MAX_PER_ATTEMPT > 0 && YIELD_INDEX > SPECSTRIDE_YIELD_MAX_PER_ATTEMPT )); then
+      echo "proposer.sh: this attempt has already yielded $SPECSTRIDE_YIELD_MAX_PER_ATTEMPT times — aborting (exit 9). A yield is for waiting on ONE long job, not for making a phase out of waiting; split the phase, or pre-stage the measurement." >&2
+      specstride_emit run_stop reason proposer_yield_budget iter "$i" \
+        yields "$(( YIELD_INDEX - 1 ))" max "$SPECSTRIDE_YIELD_MAX_PER_ATTEMPT"
       rm -f "$YIELD_ARTIFACT"
       exit 9
     fi
     if yield_take_job; then
       YIELD_STARTED_AT="$(date +%s)"
-      wiggum_emit pass_yield iter "$i" reason "$YIELD_REASON" predicate_kind "$YIELD_PREDICATE" \
+      specstride_emit pass_yield iter "$i" reason "$YIELD_REASON" predicate_kind "$YIELD_PREDICATE" \
         deadline_sec "$YIELD_DEADLINE" job_mode "$YIELD_MODE" job_log "$YIELD_JOB_LOG" \
         yield_index "$YIELD_INDEX"
       echo "proposer.sh: pass $i yielded — $YIELD_REASON. Waiting on '$YIELD_PREDICATE' with NO model session open (deadline ${YIELD_DEADLINE}s)." >&2
@@ -1793,40 +1794,40 @@ for (( i=1; i<=MAX_ITER; i++ )); do
           # waited_sec is the number that makes budget work possible at all: for
           # the first time "how long the model worked" and "how long the loop was
           # blocked" are separate fields instead of one indistinguishable total.
-          wiggum_emit yield_resume iter "$i" waited_sec "$yield_waited" \
+          specstride_emit yield_resume iter "$i" waited_sec "$yield_waited" \
             job_rc "${yield_rc:-unknown}" job_duration_sec "$yield_waited" \
             yield_index "$YIELD_INDEX" predicate_kind "$YIELD_PREDICATE"
           YIELD_RESUME_BLOCK="$(yield_resume_block "$yield_rc" "$yield_waited")"
           rm -f "$YIELD_ARTIFACT"
           echo "proposer.sh: yield satisfied after ${yield_waited}s (job rc ${yield_rc:-unknown}) — resuming." >&2
-          wiggum_emit iter_done iter "$i" evidence missing yielded true waited_sec "$yield_waited"
+          specstride_emit iter_done iter "$i" evidence missing yielded true waited_sec "$yield_waited"
           # A yield is NOT an error and NOT a stall. The error breaker is left
           # exactly as it was (not incremented, and deliberately not reset
           # either), the no-progress breaker is skipped entirely — a yield is
           # DECLARED waiting, which is precisely the distinction none of the
           # three futility detectors could make — and by default the iteration is
           # handed back, because yield + resume is ONE logical pass.
-          [[ "$WIGGUM_YIELD_COUNTS_AS_ITER" == "true" ]] || i=$(( i - 1 ))
+          [[ "$SPECSTRIDE_YIELD_COUNTS_AS_ITER" == "true" ]] || i=$(( i - 1 ))
           continue
           ;;
         stop)
-          echo "proposer.sh: stop.flag detected during a yield — stopping (exit 6). The job is wiggum-owned and is LEFT RUNNING (pid ${YIELD_JOB_PID:-?}); its log is $YIELD_JOB_LOG." >&2
-          wiggum_emit run_stop reason stop_flag iter "$i" yield true \
+          echo "proposer.sh: stop.flag detected during a yield — stopping (exit 6). The job is specstride-owned and is LEFT RUNNING (pid ${YIELD_JOB_PID:-?}); its log is $YIELD_JOB_LOG." >&2
+          specstride_emit run_stop reason stop_flag iter "$i" yield true \
             job_pid "$YIELD_JOB_PID" job_log "$YIELD_JOB_LOG"
           exit 6
           ;;
         timeout)
           echo "proposer.sh: the yield's own deadline (${YIELD_DEADLINE}s) expired after ${yield_waited}s — halting (exit 9). The job is left alone; its log is $YIELD_JOB_LOG." >&2
-          wiggum_emit yield_timeout iter "$i" reason deadline waited_sec "$yield_waited" \
+          specstride_emit yield_timeout iter "$i" reason deadline waited_sec "$yield_waited" \
             deadline_sec "$YIELD_DEADLINE" predicate_kind "$YIELD_PREDICATE" job_log "$YIELD_JOB_LOG"
-          wiggum_emit run_stop reason proposer_yield_timeout iter "$i"
+          specstride_emit run_stop reason proposer_yield_timeout iter "$i"
           exit 9
           ;;
         wall_budget)
           echo "proposer.sh: the run's wall-clock budget expired during a yield after ${yield_waited}s — halting (exit 9). The job is left alone; its log is $YIELD_JOB_LOG." >&2
-          wiggum_emit yield_timeout iter "$i" reason wall_budget waited_sec "$yield_waited" \
+          specstride_emit yield_timeout iter "$i" reason wall_budget waited_sec "$yield_waited" \
             deadline_sec "$YIELD_DEADLINE" predicate_kind "$YIELD_PREDICATE" job_log "$YIELD_JOB_LOG"
-          wiggum_emit run_stop reason proposer_yield_timeout iter "$i"
+          specstride_emit run_stop reason proposer_yield_timeout iter "$i"
           exit 9
           ;;
       esac
@@ -1841,7 +1842,7 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   # Evidence wins outright — a pass that produced the gate file is a success
   # regardless of how the agent's result was labelled.
   if [[ -f "$EVIDENCE" ]]; then
-    wiggum_emit evidence_written file "$(basename "$EVIDENCE")" iters "$i"
+    specstride_emit evidence_written file "$(basename "$EVIDENCE")" iters "$i"
     echo "proposer.sh: evidence appeared after pass $i ($EVIDENCE)." >&2
     exit 0
   fi
@@ -1871,9 +1872,9 @@ for (( i=1; i<=MAX_ITER; i++ )); do
       # exactly one breaker: a budget kill to the cap counter, anything else to
       # the error counter — never both, never neither.
       mapfile -t fin_lines < <(
-        python3 "$FINALIZER" "$last_invocation_dir" "$WIGGUM_EVENTS" \
-          "$BREAKER_STATE" "$WIGGUM_PROPOSER_MAX_ERRORS" \
-          "$pass_kill_reason" "$WIGGUM_PROPOSER_MAX_CAPS" 2>/dev/null)
+        python3 "$FINALIZER" "$last_invocation_dir" "$SPECSTRIDE_EVENTS" \
+          "$BREAKER_STATE" "$SPECSTRIDE_PROPOSER_MAX_ERRORS" \
+          "$pass_kill_reason" "$SPECSTRIDE_PROPOSER_MAX_CAPS" 2>/dev/null)
       fin_decision="${fin_lines[0]:-}"
       fin_reason="${fin_lines[1]:-}"
       fin_iserror="${fin_lines[2]:-}"
@@ -1887,28 +1888,28 @@ for (( i=1; i<=MAX_ITER; i++ )); do
         # the legacy ladder makes below, so both backends halt on the same facts
         # with the same exit code. is_error is true here (the pass WAS killed),
         # which is exactly why the class, not the flag, decides the counter.
-        echo "proposer.sh: pass $i hit the pass ceiling (${pass_kill_reason}, ${pass_kill_elapsed}s) — consecutive cap kills: $consec_cap/$WIGGUM_PROPOSER_MAX_CAPS" >&2
-        wiggum_emit iter_cap iter "$i" reason "$pass_kill_reason" \
-          elapsed "$pass_kill_elapsed" consec "$consec_cap" max "$WIGGUM_PROPOSER_MAX_CAPS"
+        echo "proposer.sh: pass $i hit the pass ceiling (${pass_kill_reason}, ${pass_kill_elapsed}s) — consecutive cap kills: $consec_cap/$SPECSTRIDE_PROPOSER_MAX_CAPS" >&2
+        specstride_emit iter_cap iter "$i" reason "$pass_kill_reason" \
+          elapsed "$pass_kill_elapsed" consec "$consec_cap" max "$SPECSTRIDE_PROPOSER_MAX_CAPS"
         # A kill severs the provider stream, so the pass reports no usage at all:
         # say "unmeasured" out loud so a reader can tell it from "cheap" (§4.2).
-        wiggum_emit pass_cost_unknown iter "$i" reason "$pass_kill_reason" elapsed "$pass_kill_elapsed"
+        specstride_emit pass_cost_unknown iter "$i" reason "$pass_kill_reason" elapsed "$pass_kill_elapsed"
       elif [[ "$fin_iserror" == "true" ]]; then
-        echo "proposer.sh: pass $i errored (reason '$fin_reason') — consecutive errors: $consec_err/$WIGGUM_PROPOSER_MAX_ERRORS" >&2
+        echo "proposer.sh: pass $i errored (reason '$fin_reason') — consecutive errors: $consec_err/$SPECSTRIDE_PROPOSER_MAX_ERRORS" >&2
         # `reason`/`kill_class` are the STABLE machine-readable fields, matching
         # the legacy ladder's iter_error, so one consumer reads both paths.
-        wiggum_emit iter_error iter "$i" subtype "$fin_reason" consec "$consec_err" \
+        specstride_emit iter_error iter "$i" subtype "$fin_reason" consec "$consec_err" \
           reason "${pass_kill_reason:-agent_error}" kill_class "${fin_kill_class:-agent}"
       fi
       if [[ "$fin_decision" == "cap_halt" ]]; then
         echo "proposer.sh: $consec_cap consecutive passes hit the pass ceiling — aborting (exit 10). This phase's work does not fit one pass; do NOT just raise the cap. Declare the long step as a yield, or pre-stage it as a verification command, or split the phase." >&2
-        wiggum_emit run_stop reason proposer_cap_exhausted iter "$i" \
+        specstride_emit run_stop reason proposer_cap_exhausted iter "$i" \
           kill_reason "$pass_kill_reason" consec "$consec_cap"
         exit 10
       fi
       if [[ "$fin_decision" == "halt" ]]; then
-        echo "proposer.sh: $consec_err consecutive agent errors — aborting (exit 7). Raise --timeout or WIGGUM_PROPOSER_MAX_ERRORS, or fix the phase harness (e.g. an over-long prompt or a run that never reaches a verdict)." >&2
-        wiggum_emit run_stop reason proposer_consecutive_errors iter "$i" subtype "$fin_reason" \
+        echo "proposer.sh: $consec_err consecutive agent errors — aborting (exit 7). Raise --timeout or SPECSTRIDE_PROPOSER_MAX_ERRORS, or fix the phase harness (e.g. an over-long prompt or a run that never reaches a verdict)." >&2
+        specstride_emit run_stop reason proposer_consecutive_errors iter "$i" subtype "$fin_reason" \
           kill_reason "${pass_kill_reason:-agent_error}" kill_class "${fin_kill_class:-agent}"
         exit 7
       fi
@@ -1917,7 +1918,7 @@ for (( i=1; i<=MAX_ITER; i++ )); do
       echo "proposer.sh: stop.flag detected — stopping after pass $i" >&2
       exit 6
     fi
-    wiggum_emit iter_done iter "$i" evidence missing
+    specstride_emit iter_done iter "$i" evidence missing
     (( i < MAX_ITER )) && sleep "$SLEEP_SECS"
     continue
   fi
@@ -1927,7 +1928,7 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   # full pass. Emits one of: "error" (is_error true), "ok" (is_error false), or ""
   # (no events file / no agent_result — treated as non-error, unchanged behaviour).
   # The subtype is carried alongside only for the human-readable log line.
-  read -r last_flag last_subtype < <(python3 - "$WIGGUM_EVENTS" <<'PY' 2>/dev/null
+  read -r last_flag last_subtype < <(python3 - "$SPECSTRIDE_EVENTS" <<'PY' 2>/dev/null
 import sys, json
 flag, sub = "", ""
 try:
@@ -1956,33 +1957,33 @@ PY
   fi
   if [[ "$pass_kill_class" == "budget" ]]; then
     consec_cap=$(( consec_cap + 1 ))
-    echo "proposer.sh: pass $i hit the pass ceiling (${pass_kill_reason}, ${pass_kill_elapsed}s) — consecutive cap kills: $consec_cap/$WIGGUM_PROPOSER_MAX_CAPS" >&2
-    wiggum_emit iter_cap iter "$i" reason "$pass_kill_reason" \
-      elapsed "$pass_kill_elapsed" consec "$consec_cap" max "$WIGGUM_PROPOSER_MAX_CAPS"
+    echo "proposer.sh: pass $i hit the pass ceiling (${pass_kill_reason}, ${pass_kill_elapsed}s) — consecutive cap kills: $consec_cap/$SPECSTRIDE_PROPOSER_MAX_CAPS" >&2
+    specstride_emit iter_cap iter "$i" reason "$pass_kill_reason" \
+      elapsed "$pass_kill_elapsed" consec "$consec_cap" max "$SPECSTRIDE_PROPOSER_MAX_CAPS"
     # A watchdog kill severs the provider stream, so the pass reports NO usage and
     # NO cost at all: the three most expensive passes of the phase-15 incident are
     # invisible to cost telemetry while the one cheap pass reports $19.48, which
     # makes any naive cost metric exactly backwards. Say "unmeasured" out loud so a
     # reader can tell it from "cheap" (design §4.2).
-    wiggum_emit pass_cost_unknown iter "$i" reason "$pass_kill_reason" elapsed "$pass_kill_elapsed"
-    if (( WIGGUM_PROPOSER_MAX_CAPS > 0 && consec_cap >= WIGGUM_PROPOSER_MAX_CAPS )); then
+    specstride_emit pass_cost_unknown iter "$i" reason "$pass_kill_reason" elapsed "$pass_kill_elapsed"
+    if (( SPECSTRIDE_PROPOSER_MAX_CAPS > 0 && consec_cap >= SPECSTRIDE_PROPOSER_MAX_CAPS )); then
       echo "proposer.sh: $consec_cap consecutive passes hit the pass ceiling — aborting (exit 10). This phase's work does not fit one pass; do NOT just raise the cap. Declare the long step as a yield, or pre-stage it as a verification command, or split the phase." >&2
-      wiggum_emit run_stop reason proposer_cap_exhausted iter "$i" \
+      specstride_emit run_stop reason proposer_cap_exhausted iter "$i" \
         kill_reason "$pass_kill_reason" consec "$consec_cap"
       exit 10
     fi
   elif [[ "$last_flag" == "error" ]]; then
     consec_cap=0
     consec_err=$(( consec_err + 1 ))
-    echo "proposer.sh: pass $i errored (subtype '$last_subtype', is_error) — consecutive errors: $consec_err/$WIGGUM_PROPOSER_MAX_ERRORS" >&2
+    echo "proposer.sh: pass $i errored (subtype '$last_subtype', is_error) — consecutive errors: $consec_err/$SPECSTRIDE_PROPOSER_MAX_ERRORS" >&2
     # `reason`/`kill_class` are the STABLE machine-readable fields: a consumer
     # classifies a kill from them instead of re-parsing the `watchdog_` prefix
     # off `subtype` (which is also the agent's own subtype when no kill occurred).
-    wiggum_emit iter_error iter "$i" subtype "$last_subtype" consec "$consec_err" \
+    specstride_emit iter_error iter "$i" subtype "$last_subtype" consec "$consec_err" \
       reason "${pass_kill_reason:-agent_error}" kill_class "${pass_kill_class:-agent}"
-    if (( consec_err >= WIGGUM_PROPOSER_MAX_ERRORS )); then
-      echo "proposer.sh: $consec_err consecutive agent errors — aborting (exit 7). Raise --timeout or WIGGUM_PROPOSER_MAX_ERRORS, or fix the phase harness (e.g. an over-long prompt or a run that never reaches a verdict)." >&2
-      wiggum_emit run_stop reason proposer_consecutive_errors iter "$i" subtype "$last_subtype" \
+    if (( consec_err >= SPECSTRIDE_PROPOSER_MAX_ERRORS )); then
+      echo "proposer.sh: $consec_err consecutive agent errors — aborting (exit 7). Raise --timeout or SPECSTRIDE_PROPOSER_MAX_ERRORS, or fix the phase harness (e.g. an over-long prompt or a run that never reaches a verdict)." >&2
+      specstride_emit run_stop reason proposer_consecutive_errors iter "$i" subtype "$last_subtype" \
         kill_reason "${pass_kill_reason:-agent_error}" kill_class "${pass_kill_class:-agent}"
       exit 7
     fi
@@ -1992,13 +1993,13 @@ PY
   fi
 
   # Did this pass change anything outside the loop's own bookkeeping?
-  if (( WIGGUM_PROPOSER_MAX_NOPROGRESS > 0 )) && ! _disk_progress_since "$pass_started_at"; then
+  if (( SPECSTRIDE_PROPOSER_MAX_NOPROGRESS > 0 )) && ! _disk_progress_since "$pass_started_at"; then
     consec_noprogress=$(( consec_noprogress + 1 ))
-    echo "proposer.sh: pass $i changed nothing outside .wiggum — consecutive no-progress passes: $consec_noprogress/$WIGGUM_PROPOSER_MAX_NOPROGRESS" >&2
-    wiggum_emit iter_no_progress iter "$i" consec "$consec_noprogress"
-    if (( consec_noprogress >= WIGGUM_PROPOSER_MAX_NOPROGRESS )); then
+    echo "proposer.sh: pass $i changed nothing outside .specstride — consecutive no-progress passes: $consec_noprogress/$SPECSTRIDE_PROPOSER_MAX_NOPROGRESS" >&2
+    specstride_emit iter_no_progress iter "$i" consec "$consec_noprogress"
+    if (( consec_noprogress >= SPECSTRIDE_PROPOSER_MAX_NOPROGRESS )); then
       echo "proposer.sh: $consec_noprogress consecutive passes wrote nothing — the phase is blocked on something the agent cannot decide for itself (exit 8). Read the newest agent note and the phase's run note; record the decision it asks for, then resume." >&2
-      wiggum_emit run_stop reason proposer_no_progress iter "$i" consec "$consec_noprogress"
+      specstride_emit run_stop reason proposer_no_progress iter "$i" consec "$consec_noprogress"
       exit 8
     fi
   else
@@ -2009,7 +2010,7 @@ PY
     echo "proposer.sh: stop.flag detected — stopping after pass $i" >&2
     exit 6
   fi
-  wiggum_emit iter_done iter "$i" evidence missing
+  specstride_emit iter_done iter "$i" evidence missing
   (( i < MAX_ITER )) && sleep "$SLEEP_SECS"
 done
 

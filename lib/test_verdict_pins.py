@@ -64,7 +64,7 @@ class TestBackingHash(unittest.TestCase):
 class TestPinLifecycle(unittest.TestCase):
     def setUp(self):
         self.d = tempfile.mkdtemp()
-        self.state = os.path.join(self.d, ".wiggum", "features", "f")
+        self.state = os.path.join(self.d, ".specstride", "features", "f")
         self.src = os.path.join(self.d, "src.ts")
         with open(self.src, "w") as fh:
             fh.write("original")

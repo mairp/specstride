@@ -11,8 +11,8 @@ import tempfile
 import time
 
 
-CONTEXT_CONTRACT = "wiggum-invocation/v1"
-RESULT_CONTRACT = "wiggum-invocation-result/v1"
+CONTEXT_CONTRACT = "specstride-invocation/v1"
+RESULT_CONTRACT = "specstride-invocation-result/v1"
 # accelerator = proposer.sh run with a narrowed prompt (see orchestrator.sh); it
 # shares the proposer's iteration semantics (>= 1), only the label differs.
 ROLES = {"proposer", "accelerator", "critic"}
