@@ -208,10 +208,10 @@ def test_event_mode_json_stdin():
 
 
 # ── CLI layer (argparse) ─────────────────────────────────────────────────────
-# Regression guard: the wiggum_emit call site shells out with `event ... --json-stdin`.
+# Regression guard: the specstride_emit call site shells out with `event ... --json-stdin`.
 # The direct-call tests above bypass argparse, so a missing/renamed --json-stdin flag
 # would slip through them while silently breaking every lifecycle event in production
-# (argparse exits 2, swallowed by `|| true` in wiggum-lib.sh). Drive main() end-to-end.
+# (argparse exits 2, swallowed by `|| true` in specstride-lib.sh). Drive main() end-to-end.
 def _run_cli(argv, stdin_text):
     old_argv, old_in = sys.argv, sys.stdin
     sys.argv = ["ralph_loki_ship.py"] + argv

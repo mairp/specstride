@@ -1,6 +1,6 @@
 # Architecture
 
-Wiggum is three roles communicating **only through files** under `.wiggum/gates/`. No role
+Specstride is three roles communicating **only through files** under `.specstride/gates/`. No role
 calls another directly; the on-disk gate files *are* the contract.
 
 ## The loop
@@ -9,13 +9,13 @@ calls another directly; the on-disk gate files *are* the contract.
 orchestrator.sh   (derives the current phase N from disk; reads the spec)
   │
   ├─(1) PROPOSER — run a headless coding-agent loop for phase N until it writes
-  │       .wiggum/gates/GATE<N>-EVIDENCE.md (atomically), then the loop exits.
+  │       .specstride/gates/GATE<N>-EVIDENCE.md (atomically), then the loop exits.
   │
   ├─(2) CRITIC — lib/critic.py reads phase N's acceptance criteria + the evidence,
   │       does a read-only grounding pass over the files the evidence cites, and
   │       asks an LLM for a strict verdict:
-  │           APPROVED → writes an empty .wiggum/gates/GATE<N>-APPROVED marker
-  │           REJECTED → writes .wiggum/gates/GATE<N>-FEEDBACK.md (the specific gaps)
+  │           APPROVED → writes an empty .specstride/gates/GATE<N>-APPROVED marker
+  │           REJECTED → writes .specstride/gates/GATE<N>-FEEDBACK.md (the specific gaps)
   │
   ├─(3a) APPROVED → git-checkpoint the workdir, N := N+1, back to (1).
   └─(3b) REJECTED → archive the rejected evidence, re-run the proposer for the
@@ -32,8 +32,8 @@ Literal role names are used everywhere — code, files, flags, env vars. Three s
 | **Orchestrator** | [`orchestrator.sh`](../orchestrator.sh) | Derives the current phase from `GATE*` markers, drives proposer↔critic, checkpoints on approval, archives on reject, tracks each phase's unmet-criteria signature, enforces budgets/locks. |
 | **Proposer** | [`proposer.sh`](../proposer.sh) | Runs a headless coding-agent CLI in a fresh-context loop until phase N's `GATE<N>-EVIDENCE.md` exists. |
 | **Critic** | [`lib/critic.py`](../lib/critic.py) | Reads criteria + evidence, grounds cited files (read-only, byte budget scaled to the backend's context window), asks the LLM for a nonce-bound verdict. |
-| **Diagnostician** | `lib/critic.py --diagnose` | Fires once per NEW unmet-criteria signature: same critic backend, the FULL untruncated cited files, no grounding budget. Writes `GATE<N>-HINT.md` (`CASE: GROUNDING` or `CASE: REAL-GAP` + the fix). Advisory only. `WIGGUM_DIAGNOSTICIAN=false` disables. |
-| **Accelerator** | `proposer.sh --role accelerator` | The attempt right after a new hint: the proposer with a prompt narrowed to the unmet criteria, the feedback, the hint and the evidence to splice. Once per hint, never twice in a row, counts toward `MAX_REJECTS`; writes `GATE<N>-ACCELERATION.md` for the next wide pass. `WIGGUM_ACCELERATOR=false` disables. |
+| **Diagnostician** | `lib/critic.py --diagnose` | Fires once per NEW unmet-criteria signature: same critic backend, the FULL untruncated cited files, no grounding budget. Writes `GATE<N>-HINT.md` (`CASE: GROUNDING` or `CASE: REAL-GAP` + the fix). Advisory only. `SPECSTRIDE_DIAGNOSTICIAN=false` disables. |
+| **Accelerator** | `proposer.sh --role accelerator` | The attempt right after a new hint: the proposer with a prompt narrowed to the unmet criteria, the feedback, the hint and the evidence to splice. Once per hint, never twice in a row, counts toward `MAX_REJECTS`; writes `GATE<N>-ACCELERATION.md` for the next wide pass. `SPECSTRIDE_ACCELERATOR=false` disables. |
 
 ## Sequence
 
@@ -46,7 +46,7 @@ sequenceDiagram
     participant A as proposer.sh --role accelerator<br/>(accelerator · same tools, narrowed prompt)
     participant C as lib/critic.py<br/>(critic · LLM gate)
     participant D as lib/critic.py --diagnose<br/>(diagnostician · same backend, no budget)
-    participant FS as .wiggum/gates/<br/>(on-disk contract)
+    participant FS as .specstride/gates/<br/>(on-disk contract)
 
     Human->>O: run -w WORKDIR -s SPECS.md
     O->>FS: derive phase N from GATE* markers
@@ -111,7 +111,7 @@ sequenceDiagram
 ## No file-watcher
 
 Detection is deterministic, not event-driven. The proposer loop's gate is a plain
-`test -f .wiggum/gates/GATE<N>-EVIDENCE.md`. Because that loop has **already exited** when
+`test -f .specstride/gates/GATE<N>-EVIDENCE.md`. Because that loop has **already exited** when
 control returns to the orchestrator, the orchestrator hands the critic the exact path — no
 race, no half-written file, nothing to poll. Evidence is written atomically (temp file +
 rename) so the critic never observes a partial write.
@@ -130,7 +130,7 @@ All Python lives under [`lib/`](../lib); the Bash entry points stay at the top l
 | Component | Role |
 |---|---|
 | `lib/critic.py` | The critic — grounding pass + LLM verdict + nonce parsing |
-| `lib/wiggum_spec.py` | The single spec-parsing source of truth (bash and critic both delegate) — see [Spec Formats](Spec-Formats) |
+| `lib/specstride_spec.py` | The single spec-parsing source of truth (bash and critic both delegate) — see [Spec Formats](Spec-Formats) |
 | `lib/verification_plan.py` | Pre-loop `VerificationPlan v1` derivation + test scaffolding |
 | `lib/agent_stream.py` | The proposer's stream-json tap that emits `agent_*` events |
 | `lib/present.py` | The live presenter (inline timeline + status card) |

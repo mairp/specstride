@@ -16,7 +16,7 @@ def _completed():
 
 
 def test_bare_prime_critic_uses_stock_prime_agent():
-    env = {"WIGGUM_PRIME_AGENT_BIN": "/bin/prime-agent"}
+    env = {"SPECSTRIDE_PRIME_AGENT_BIN": "/bin/prime-agent"}
     with mock.patch.dict(os.environ, env, clear=False), \
          mock.patch("subprocess.run", return_value=_completed()) as run:
         reply = critic.call_prime_shell("large prompt", None, 42, "/tmp/work tree")
@@ -30,7 +30,7 @@ def test_bare_prime_critic_uses_stock_prime_agent():
 
 
 def test_prime_variant_critic_uses_optional_fleet_launcher():
-    env = {"WIGGUM_PRIME_FLEET_BIN": "/bin/prime"}
+    env = {"SPECSTRIDE_PRIME_FLEET_BIN": "/bin/prime"}
     with mock.patch.dict(os.environ, env, clear=False), \
          mock.patch("subprocess.run", return_value=_completed()) as run:
         critic.call_prime_shell("prompt", "judge", 9)
@@ -70,10 +70,10 @@ def test_dsh_provider_variant_accepts_qwen38_alias():
 def test_dsh_critic_uses_tool_free_patch_and_target_cwd():
     completed = mock.Mock(returncode=0, stdout="VERDICT token: APPROVED\n", stderr="")
     env = {
-        "WIGGUM_DSH_BIN": "/bin/dsh",
-        "WIGGUM_DSH_PROFILE": "headless",
-        "WIGGUM_DSH_MODEL": "",
-        "WIGGUM_DSH_PROVIDER": "",
+        "SPECSTRIDE_DSH_BIN": "/bin/dsh",
+        "SPECSTRIDE_DSH_PROFILE": "headless",
+        "SPECSTRIDE_DSH_MODEL": "",
+        "SPECSTRIDE_DSH_PROVIDER": "",
     }
     captured_patch = ""
 
@@ -119,10 +119,10 @@ def test_dsh_critic_selects_model_in_settings_layer_not_patch(tmp_path):
         "      baseURL: https://example.invalid\n"
     )
     env = {
-        "WIGGUM_DSH_BIN": "/bin/dsh",
-        "WIGGUM_DSH_PROFILE": "headless",
-        "WIGGUM_DSH_CRITIC_MODEL": "glm-5.3",
-        "WIGGUM_DSH_CRITIC_REASONING_EFFORT": "max",
+        "SPECSTRIDE_DSH_BIN": "/bin/dsh",
+        "SPECSTRIDE_DSH_PROFILE": "headless",
+        "SPECSTRIDE_DSH_CRITIC_MODEL": "glm-5.3",
+        "SPECSTRIDE_DSH_CRITIC_REASONING_EFFORT": "max",
         "DSH_HOME": str(real_home),
     }
     captured = {}
@@ -159,9 +159,9 @@ def test_dsh_critic_qwen38_alias_resolves_to_local_high_in_settings(tmp_path):
     real_home.mkdir()
     (real_home / "settings.yaml").write_text("agent-default-model:\n  provider: zai\n  model: glm-5.3-flash\n")
     env = {
-        "WIGGUM_DSH_BIN": "/bin/dsh",
-        "WIGGUM_DSH_PROFILE": "headless",
-        "WIGGUM_DSH_CRITIC_MODEL": "qwen3.8-27b",
+        "SPECSTRIDE_DSH_BIN": "/bin/dsh",
+        "SPECSTRIDE_DSH_PROFILE": "headless",
+        "SPECSTRIDE_DSH_CRITIC_MODEL": "qwen3.8-27b",
         "DSH_HOME": str(real_home),
     }
     captured = {}
@@ -196,7 +196,7 @@ def test_dsh_critic_splits_oversized_prompt_without_changing_task():
 
 
 def _run_fake_proposer(tmp_path, backend, executable_env, *, agent_stream="true"):
-    evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "gates" / "GATE1-EVIDENCE.md"
     events = tmp_path / "events.jsonl"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
@@ -225,9 +225,9 @@ def _run_fake_proposer(tmp_path, backend, executable_env, *, agent_stream="true"
         "CAPTURE_STDIN": str(tmp_path / "stdin"),
         "CAPTURE_ARGV": str(tmp_path / "argv"),
         "TEST_EVIDENCE": str(evidence),
-        "WIGGUM_AGENT_STREAM": agent_stream,
-        "WIGGUM_EVENTS": str(events),
-        "WIGGUM_RUN_ID": "run-prime-test",
+        "SPECSTRIDE_AGENT_STREAM": agent_stream,
+        "SPECSTRIDE_EVENTS": str(events),
+        "SPECSTRIDE_RUN_ID": "run-prime-test",
     })
     result = subprocess.run([
         "bash", str(Path(__file__).parents[1] / "proposer.sh"),
@@ -240,14 +240,14 @@ def _run_fake_proposer(tmp_path, backend, executable_env, *, agent_stream="true"
     records = []
     if events.exists():
         records = [json.loads(line) for line in events.read_text().splitlines()]
-    metadata = list((tmp_path / ".wiggum" / "features" / "feature-test" / "debug" /
+    metadata = list((tmp_path / ".specstride" / "features" / "feature-test" / "debug" /
                      "invocations").rglob("metadata.json"))
     return ((tmp_path / "argv").read_text().splitlines(),
             (tmp_path / "stdin").read_text(), records, evidence, metadata)
 
 
 def test_dsh_proposer_uses_headless_profile_and_target_cwd(tmp_path):
-    evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "gates" / "GATE1-EVIDENCE.md"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
     fake = tmp_path / "fake-dsh"
@@ -261,11 +261,11 @@ def test_dsh_proposer_uses_headless_profile_and_target_cwd(tmp_path):
     fake.chmod(0o755)
     env = os.environ.copy()
     env.update({
-        "WIGGUM_DSH_BIN": str(fake),
-        "WIGGUM_DSH_PROFILE": "headless",
-        "WIGGUM_DSH_MODEL": "",
-        "WIGGUM_DSH_PROVIDER": "",
-        "WIGGUM_AGENT_STREAM": "false",
+        "SPECSTRIDE_DSH_BIN": str(fake),
+        "SPECSTRIDE_DSH_PROFILE": "headless",
+        "SPECSTRIDE_DSH_MODEL": "",
+        "SPECSTRIDE_DSH_PROVIDER": "",
+        "SPECSTRIDE_AGENT_STREAM": "false",
         "CAPTURE_CWD": str(tmp_path / "cwd"),
         "CAPTURE_ARGV": str(tmp_path / "argv"),
         "TEST_EVIDENCE": str(evidence),
@@ -284,7 +284,7 @@ def test_dsh_proposer_uses_headless_profile_and_target_cwd(tmp_path):
 
 def test_dsh_proposer_selects_model_in_settings_layer_not_patch(tmp_path):
     """`--backend dsh:<provider/model>` must reach dsh via the settings layer."""
-    evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "gates" / "GATE1-EVIDENCE.md"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
     real_home = tmp_path / "dsh-home"
@@ -313,12 +313,12 @@ def test_dsh_proposer_selects_model_in_settings_layer_not_patch(tmp_path):
     fake.chmod(0o755)
     env = os.environ.copy()
     env.update({
-        "WIGGUM_DSH_BIN": str(fake),
-        "WIGGUM_DSH_PROFILE": "headless",
-        "WIGGUM_DSH_MODEL": "",
-        "WIGGUM_DSH_PROVIDER": "",
-        "WIGGUM_DSH_REASONING_EFFORT": "max",
-        "WIGGUM_AGENT_STREAM": "false",
+        "SPECSTRIDE_DSH_BIN": str(fake),
+        "SPECSTRIDE_DSH_PROFILE": "headless",
+        "SPECSTRIDE_DSH_MODEL": "",
+        "SPECSTRIDE_DSH_PROVIDER": "",
+        "SPECSTRIDE_DSH_REASONING_EFFORT": "max",
+        "SPECSTRIDE_AGENT_STREAM": "false",
         "DSH_HOME": str(real_home),
         "CAPTURE_CWD": str(tmp_path / "cwd"),
         "CAPTURE_ARGV": str(tmp_path / "argv"),
@@ -348,7 +348,7 @@ def test_dsh_proposer_selects_model_in_settings_layer_not_patch(tmp_path):
     assert (tmp_path / "linked").exists()
 
 def test_dsh_proposer_qwen38_alias_resolves_to_local_high_in_settings(tmp_path):
-    evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "gates" / "GATE1-EVIDENCE.md"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
     real_home = tmp_path / "dsh-home"
@@ -365,11 +365,11 @@ def test_dsh_proposer_qwen38_alias_resolves_to_local_high_in_settings(tmp_path):
     fake.chmod(0o755)
     env = os.environ.copy()
     env.update({
-        "WIGGUM_DSH_BIN": str(fake),
-        "WIGGUM_DSH_PROFILE": "headless",
-        "WIGGUM_DSH_MODEL": "",
-        "WIGGUM_DSH_PROVIDER": "",
-        "WIGGUM_AGENT_STREAM": "false",
+        "SPECSTRIDE_DSH_BIN": str(fake),
+        "SPECSTRIDE_DSH_PROFILE": "headless",
+        "SPECSTRIDE_DSH_MODEL": "",
+        "SPECSTRIDE_DSH_PROVIDER": "",
+        "SPECSTRIDE_AGENT_STREAM": "false",
         "DSH_HOME": str(real_home),
         "CAPTURE_ARGV": str(tmp_path / "argv"),
         "CAPTURE_SETTINGS": str(tmp_path / "settings.yaml"),
@@ -403,7 +403,7 @@ def _assert_structured_context(records, backend):
 
 def test_bare_prime_proposer_uses_json_adapter_and_correlated_context(tmp_path):
     argv, stdin, records, evidence, metadata = _run_fake_proposer(
-        tmp_path, "prime", "WIGGUM_PRIME_AGENT_BIN")
+        tmp_path, "prime", "SPECSTRIDE_PRIME_AGENT_BIN")
     assert argv[:4] == ["-p", "--mode", "json", "--no-session"]
     assert argv[argv.index("--cwd") + 1] == str(tmp_path)
     assert "sol" not in argv
@@ -421,7 +421,7 @@ def test_bare_prime_proposer_uses_json_adapter_and_correlated_context(tmp_path):
 
 def test_variant_prime_proposer_uses_json_adapter_and_correlated_context(tmp_path):
     argv, stdin, records, evidence, metadata = _run_fake_proposer(
-        tmp_path, "prime:coder", "WIGGUM_PRIME_FLEET_BIN")
+        tmp_path, "prime:coder", "SPECSTRIDE_PRIME_FLEET_BIN")
     assert argv[:5] == ["coder", "-p", "--mode", "json", "--no-session"]
     assert argv[argv.index("--cwd") + 1] == str(tmp_path)
     assert stdin == "standing prompt"
@@ -437,7 +437,7 @@ def test_variant_prime_proposer_uses_json_adapter_and_correlated_context(tmp_pat
 
 def test_prime_proposer_explicit_text_fallback_preserves_stdin(tmp_path):
     argv, stdin, records, _, metadata = _run_fake_proposer(
-        tmp_path, "prime", "WIGGUM_PRIME_AGENT_BIN", agent_stream="false")
+        tmp_path, "prime", "SPECSTRIDE_PRIME_AGENT_BIN", agent_stream="false")
     assert argv[:4] == ["-p", "--mode", "text", "--no-session"]
     assert stdin == "standing prompt"
     assert not any("invocation_id" in record for record in records)
@@ -488,7 +488,7 @@ def _json_completed(lines):
 
 
 def test_prime_critic_stock_uses_json_mode_and_keeps_all_restrictions():
-    env = {"WIGGUM_PRIME_AGENT_BIN": "/bin/prime-agent"}
+    env = {"SPECSTRIDE_PRIME_AGENT_BIN": "/bin/prime-agent"}
     with mock.patch.dict(os.environ, env, clear=False), \
          mock.patch("subprocess.run", return_value=_json_completed(_APPROVED_STREAM)) as run:
         result = critic.call_prime_critic("large prompt", None, 42, "/tmp/work tree")
@@ -502,7 +502,7 @@ def test_prime_critic_stock_uses_json_mode_and_keeps_all_restrictions():
 
 
 def test_prime_critic_fleet_variant_uses_json_mode_launcher():
-    env = {"WIGGUM_PRIME_FLEET_BIN": "/bin/prime"}
+    env = {"SPECSTRIDE_PRIME_FLEET_BIN": "/bin/prime"}
     with mock.patch.dict(os.environ, env, clear=False), \
          mock.patch("subprocess.run", return_value=_json_completed(_APPROVED_STREAM)) as run:
         result = critic.call_prime_critic("prompt", "judge", 9, "/tmp/wt")
@@ -549,7 +549,7 @@ def test_prime_critic_detects_provider_error_despite_zero_exit():
 
 
 def test_prime_critic_text_fallback_preserves_response_and_argv():
-    env = {"WIGGUM_PRIME_AGENT_BIN": "/bin/prime-agent", "WIGGUM_AGENT_STREAM": "false"}
+    env = {"SPECSTRIDE_PRIME_AGENT_BIN": "/bin/prime-agent", "SPECSTRIDE_AGENT_STREAM": "false"}
     completed = mock.Mock(returncode=0, stdout="VERDICT %s: APPROVED\n" % NONCE, stderr="")
     with mock.patch.dict(os.environ, env, clear=False), \
          mock.patch("subprocess.run", return_value=completed) as run:

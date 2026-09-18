@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""wiggum_spec.py — the SINGLE source of truth for spec parsing (stdlib only).
+"""specstride_spec.py — the SINGLE source of truth for spec parsing (stdlib only).
 
-Wiggum drives a Ralph loop over an ordered list of *phases*, each with acceptance
+Specstride drives a Ralph loop over an ordered list of *phases*, each with acceptance
 criteria a critic gates on. Historically that grammar was hardcoded twice — awk in
-wiggum-lib.sh and a regex mirror in lib/critic.py — kept in sync by hand. This
+specstride-lib.sh and a regex mirror in lib/critic.py — kept in sync by hand. This
 module unifies both behind one small **document-type adapter registry** so a new
 spec format is one adapter, not a second parser to keep in sync.
 
@@ -35,11 +35,11 @@ Three adapters ship:
                          specs are surfaced as read-only context.
 
 The adapter is chosen by :func:`detect_format`: an explicit override
-(``--format`` / ``WIGGUM_SPEC_FORMAT``) wins, else a filename+content sniff, else
+(``--format`` / ``SPECSTRIDE_SPEC_FORMAT``) wins, else a filename+content sniff, else
 ``native``.
 
-Both bash (via the thin ``wiggum_spec_*`` shims in wiggum-lib.sh) and Python (via
-``import wiggum_spec`` in critic.py) call THIS module. The CLI subcommands print
+Both bash (via the thin ``specstride_spec_*`` shims in specstride-lib.sh) and Python (via
+``import specstride_spec`` in critic.py) call THIS module. The CLI subcommands print
 output byte-compatible with the awk they replace, so their call sites are drop-in.
 
 Deliberately stdlib-only: Spec Kit documents are plain markdown, so no runtime
@@ -52,6 +52,10 @@ import argparse
 import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Normalized phase model — every adapter maps a document onto this shape, so
@@ -68,7 +72,7 @@ class Phase:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  native adapter — ports wiggum-lib.sh's awk exactly.
+#  native adapter — ports specstride-lib.sh's awk exactly.
 #
 #  awk matched /^##[[:space:]]+Phase[[:space:]]+[0-9]+/ CASE-SENSITIVELY and took
 #  the phase number as the leading integer of the text after "Phase ". Titles
@@ -169,7 +173,7 @@ def _raw_after_phase(text, n):
 #      ## P0 — Safety and correctness
 #      ## P1 — Contract alignment
 #      ## P1 — Security controls
-#  In that form P0/P1 are priorities, not unique gate identifiers. Wiggum assigns
+#  In that form P0/P1 are priorities, not unique gate identifiers. Specstride assigns
 #  contiguous phase ids in document order, starting at the first priority number,
 #  while retaining the priority label in each visible title.
 #  A phase's acceptance criteria are its checkbox task lines anywhere in the
@@ -238,7 +242,7 @@ def _speckit_section_criteria(lines):
 
 
 def _parse_speckit_priority(text):
-    """Normalize task-bearing ``## P<N>`` groups into ordered Wiggum phases.
+    """Normalize task-bearing ``## P<N>`` groups into ordered Specstride phases.
 
     Repeated priorities are valid because priority is scheduling metadata rather
     than a unique gate id. Trailing non-task H2 sections (for example dependency
@@ -392,7 +396,7 @@ def detect_format(path, text, override=None):
     sniff → native. A Spec Kit tasks.md is recognized by its filename, or by having
     `## Phase N:` / task-bearing `## P<N>` headings with `- [ ]` task lines and
     NO `### Acceptance criteria`."""
-    ov = override or os.environ.get("WIGGUM_SPEC_FORMAT", "")
+    ov = override or os.environ.get("SPECSTRIDE_SPEC_FORMAT", "")
     ov = ov.strip().lower()
     if ov in ADAPTERS:
         return ov
@@ -489,12 +493,12 @@ def _sanitize_slug(name):
 
 
 def feature_slug(specs_path):
-    """The feature namespace for durable state (`.wiggum/features/<slug>/`).
+    """The feature namespace for durable state (`.specstride/features/<slug>/`).
 
     A Spec Kit feature uses its feature-directory basename; an OpenSpec change
     uses its change-directory basename. Everything else — a native SPECS.md, or a
     spec sitting at the project root — resolves to `default`, which is also the
-    back-compat identity of every existing `.wiggum/gates/` on disk."""
+    back-compat identity of every existing `.specstride/gates/` on disk."""
     openspec = openspec_change_paths(specs_path)
     if openspec:
         return _sanitize_slug(os.path.basename(openspec["change_dir"])) or "default"
@@ -621,7 +625,7 @@ def speckit_context(specs_path):
 #  the proposer prompt (orchestrator.sh) and the critic (critic.py), so both inject
 #  the same Spec Kit background under the same budget with the same fence-safe cuts.
 # ─────────────────────────────────────────────────────────────────────────────
-CONTEXT_BUDGET_DEFAULT = 24000    # total chars across ALL context docs (WIGGUM_CONTEXT_BUDGET)
+CONTEXT_BUDGET_DEFAULT = 24000    # total chars across ALL context docs (SPECSTRIDE_CONTEXT_BUDGET)
 CONTEXT_DOC_FLOOR      = 1200     # min chars a doc gets before it is dropped, so a
                                   # large plan.md cannot starve contracts/ of space
 
@@ -672,7 +676,7 @@ def _allocate_budget(sizes, total, floor):
 
 def render_context(specs_path, budget=None, fmt=None):
     """Render a supported document set as a single prompt context block, honoring
-    a TOTAL char budget (WIGGUM_CONTEXT_BUDGET) allocated in descending gating order
+    a TOTAL char budget (SPECSTRIDE_CONTEXT_BUDGET) allocated in descending gating order
     with per-doc floors and fence-safe, line-clean truncation. Returns "" when the
     adapter has no document context or no surrounding context docs exist."""
     if fmt is None:
@@ -691,7 +695,7 @@ def render_context(specs_path, budget=None, fmt=None):
         return ""
     if budget is None:
         try:
-            budget = int(os.environ.get("WIGGUM_CONTEXT_BUDGET", CONTEXT_BUDGET_DEFAULT))
+            budget = int(os.environ.get("SPECSTRIDE_CONTEXT_BUDGET", CONTEXT_BUDGET_DEFAULT))
         except ValueError:
             budget = CONTEXT_BUDGET_DEFAULT
 
@@ -733,14 +737,14 @@ def _stem(path):
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  CLI — one subcommand per legacy awk function, output byte-compatible so the
-#  wiggum-lib.sh shims are drop-in. Plus `detect` and `context`.
+#  specstride-lib.sh shims are drop-in. Plus `detect` and `context`.
 # ─────────────────────────────────────────────────────────────────────────────
 def _read(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
             return fh.read()
     except OSError as e:
-        sys.stderr.write("wiggum_spec: %s\n" % e)
+        sys.stderr.write("specstride_spec: %s\n" % e)
         sys.exit(3)
 
 
@@ -753,8 +757,8 @@ def _raw_slice(text, n, fmt):
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="wiggum_spec.py",
-                                 description="Wiggum spec parser (single source of truth)")
+    ap = argparse.ArgumentParser(prog="specstride_spec.py",
+                                 description="Specstride spec parser (single source of truth)")
     ap.add_argument("subcommand",
                     choices=["numbers", "title", "slice", "validate",
                              "first-unapproved", "detect", "context",
@@ -764,7 +768,7 @@ def main(argv=None):
     ap.add_argument("--workdir", default=".")
     ap.add_argument("--gates-dir", default=None,
                     help="explicit gates dir for first-unapproved (else "
-                         "<workdir>/.wiggum/gates)")
+                         "<workdir>/.specstride/gates)")
     ap.add_argument("--format", default=None,
                     help="native|speckit-tasks|openspec-change "
                          "(else auto-detect)")
@@ -781,7 +785,7 @@ def main(argv=None):
     try:
         fmt = detect_format(args.specs, text, args.format)
     except ValueError as e:
-        sys.stderr.write("wiggum_spec: %s\n" % e)
+        sys.stderr.write("specstride_spec: %s\n" % e)
         sys.exit(3)
 
     if args.subcommand == "detect":
@@ -820,14 +824,14 @@ def main(argv=None):
 
     if args.subcommand == "title":
         if args.n is None:
-            sys.stderr.write("wiggum_spec: title needs a phase number\n")
+            sys.stderr.write("specstride_spec: title needs a phase number\n")
             sys.exit(3)
         print(phase_title(text, int(args.n), fmt))
         return 0
 
     if args.subcommand == "slice":
         if args.n is None:
-            sys.stderr.write("wiggum_spec: slice needs a phase number\n")
+            sys.stderr.write("specstride_spec: slice needs a phase number\n")
             sys.exit(3)
         sys.stdout.write(_raw_slice(text, int(args.n), fmt))
         sys.stdout.write("\n")
@@ -835,9 +839,9 @@ def main(argv=None):
 
     if args.subcommand == "first-unapproved":
         # Gates dir is explicit when given (feature-scoped state lives under
-        # .wiggum/features/<slug>/gates); else the legacy <workdir>/.wiggum/gates.
+        # .specstride/features/<slug>/gates); else the legacy <workdir>/.specstride/gates.
         gates = (args.gates_dir if args.gates_dir
-                 else os.path.join(os.path.abspath(args.workdir), ".wiggum", "gates"))
+                 else os.path.join(specstride_env.state_dir(os.path.abspath(args.workdir)), "gates"))
         for p in get_phases(text, fmt):
             if not os.path.isfile(os.path.join(gates, "GATE%d-APPROVED" % p.n)):
                 print(p.n)

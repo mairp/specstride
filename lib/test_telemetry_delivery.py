@@ -5,8 +5,8 @@ Test-first for US3 tasks T042 (fan out sanitized normalized events local-first t
 independently configured sinks and emit recursion-safe local ``telemetry_delivery``
 records) and T044 (distinguish configured / reachable / request-accepted /
 query-verified receiver states). Both land in a shared ``telemetry_delivery`` module
-so the bash surfaces (orchestrator.sh, wiggum) and agent_stream.py delegate to one
-source of truth for the delivery contract, mirroring how wiggum_spec.py owns spec
+so the bash surfaces (orchestrator.sh, specstride) and agent_stream.py delegate to one
+source of truth for the delivery contract, mirroring how specstride_spec.py owns spec
 grammar for bash + critic.
 
 Contracts pinned here:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a coding agent's JSONL stream into safe Wiggum events (stdlib only)."""
+"""Turn a coding agent's JSONL stream into safe Specstride events (stdlib only)."""
 
 import argparse
 from dataclasses import dataclass, field
@@ -14,6 +14,8 @@ from invocation_result import EventEnvelope, InvocationContext, atomic_write_jso
 from observability_policy import ObservabilityPolicy
 from prime_stream import PrimeAdapter
 from telemetry_delivery import LocalFirstFanout
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
 
 
 TARGET_MAX = 120
@@ -339,13 +341,13 @@ def _telemetry(args):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="wiggum agent stream parser")
-    parser.add_argument("--events", default=os.environ.get("WIGGUM_EVENTS", ""))
-    parser.add_argument("--run-id", default=os.environ.get("WIGGUM_RUN_ID", ""))
-    parser.add_argument("--task", default=os.environ.get("WIGGUM_TASK", ""))
-    parser.add_argument("--feature", default=os.environ.get("WIGGUM_FEATURE", ""))
+    parser = argparse.ArgumentParser(description="specstride agent stream parser")
+    parser.add_argument("--events", default=os.environ.get("SPECSTRIDE_EVENTS", ""))
+    parser.add_argument("--run-id", default=os.environ.get("SPECSTRIDE_RUN_ID", ""))
+    parser.add_argument("--task", default=os.environ.get("SPECSTRIDE_TASK", ""))
+    parser.add_argument("--feature", default=os.environ.get("SPECSTRIDE_FEATURE", ""))
     parser.add_argument("--role", choices=("proposer", "accelerator", "critic"), default=None)
-    parser.add_argument("--backend", default=os.environ.get("WIGGUM_BACKEND_LABEL", ""))
+    parser.add_argument("--backend", default=os.environ.get("SPECSTRIDE_BACKEND_LABEL", ""))
     parser.add_argument("--phase", type=int)
     parser.add_argument("--attempt", type=int)
     parser.add_argument("--iteration", "--iter", dest="iteration", type=int)
@@ -513,7 +515,7 @@ def main():
             # producer status it observed; the tap never decides success on its own.
             try:
                 atomic_write_json(args.terminal_sidecar, {
-                    "contract": "wiggum-provider-terminal/v1",
+                    "contract": "specstride-provider-terminal/v1",
                     "provider_terminal": last_terminal["value"],
                     "malformed_stream": malformed["flag"],
                 })

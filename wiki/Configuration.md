@@ -4,7 +4,7 @@ Everything is set in `.env` (copy from `.env.example`; the real `.env` is gitign
 
 **Precedence: built-in defaults < `.env` < CLI flags.** As of `cc5ffa0`, an exported caller env
 var also overrides `.env` (the orchestrator lets the caller's environment win over sourced
-values), so `WIGGUM_PROPOSER_TIMEOUT=… wiggum run …` is honored.
+values), so `SPECSTRIDE_PROPOSER_TIMEOUT=… specstride run …` is honored.
 
 ## Backends (pick one per role)
 
@@ -24,8 +24,8 @@ Choose `dsh | claude | codex | bebop | prime[:variant]` for the proposer and cri
   No custom variants are required. `prime:<variant>` invokes the optional
   `prime <variant>` fleet launcher instead.
 
-Portable example: `wiggum run --proposer prime --critic prime`. Fleet example:
-`wiggum run --proposer prime:sol --critic prime:judge`.
+Portable example: `specstride run --proposer prime --critic prime`. Fleet example:
+`specstride run --proposer prime:sol --critic prime:judge`.
 
 ### Model-requested DSH plugins
 
@@ -34,24 +34,24 @@ an operator-owned exact allowlist. Enable it with comma-separated, version-pinne
 registry specs:
 
 ```bash
-WIGGUM_DSH_PLUGIN_ALLOWLIST='@acme/dsh-browser@1.4.2,@acme/dsh-db@2.0.1' \
-  wiggum run --proposer dsh ...
+SPECSTRIDE_DSH_PLUGIN_ALLOWLIST='@acme/dsh-browser@1.4.2,@acme/dsh-db@2.0.1' \
+  specstride run --proposer dsh ...
 ```
 
 When existing tools are insufficient, the model writes the fixed contract
-`wiggum-dsh-plugin-request/v1` to the active feature's
-`.wiggum/features/<feature>/dsh-plugin-request.json` and stops. Between passes,
-Wiggum validates the JSON and literal package specs, then executes:
+`specstride-dsh-plugin-request/v1` to the active feature's
+`.specstride/features/<feature>/dsh-plugin-request.json` and stops. Between passes,
+Specstride validates the JSON and literal package specs, then executes:
 
 ```bash
 dsh plugin --profile headless add --save-exact <approved-specs...>
 ```
 
-Wiggum never evaluates request content through a shell. Package ranges, tags,
+Specstride never evaluates request content through a shell. Package ranges, tags,
 URLs, git references, paths, unlisted specs, duplicate entries, extra JSON keys,
 symlinks, and oversized requests are rejected and halt the proposer visibly.
 Successful requests and receipts are archived below
-`.wiggum/features/<feature>/plugin-installs/`; a `plugin_installed` event records
+`.specstride/features/<feature>/plugin-installs/`; a `plugin_installed` event records
 the profile and packages. Installation changes the persistent DSH profile, so the
 plugin is available to the next fresh proposer pass and later DSH sessions. Review
 plugin provenance and lifecycle scripts before adding a spec to the allowlist.
@@ -60,10 +60,10 @@ The tool-free DSH critic never receives this request protocol.
 ### Prime observability parity
 
 Prime Agent gets the **same structured `agent_*` stream tap** as `claude`: its
-headless output is parsed into `.wiggum/events.jsonl` events (`agent_init` /
+headless output is parsed into `.specstride/events.jsonl` events (`agent_init` /
 `agent_tool` / `agent_text` / `agent_result`, plus `evidence_writing`), so the
 timeline, watch card, and telemetry sinks show Prime tool calls and run totals
-just like a Claude proposer. This is gated by the same `WIGGUM_AGENT_STREAM` knob
+just like a Claude proposer. This is gated by the same `SPECSTRIDE_AGENT_STREAM` knob
 and honors the same redaction/payload/retention policy (below).
 
 **Schema compatibility.** The tap dispatches on the provider's stream schema, not
@@ -80,32 +80,32 @@ See `.env.example` for the full set. The load-bearing ones:
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `WIGGUM_PROPOSER` / `WIGGUM_CRITIC` | `dsh` / `claude` | backend per role |
-| `WIGGUM_DSH_BIN` / `WIGGUM_DSH_PROFILE` | `dsh` / `headless` | DeepSeek Harness executable and profile |
-| `WIGGUM_DSH_MODEL` / `WIGGUM_DSH_CRITIC_MODEL` | empty | optional DSH model override, e.g. `zai/glm-5.3`; bare `glm-*` maps to `zai`, `qwen3.8-27b` maps to LiteLLM `local-high/qwen3.8-27b-q5` |
-| `WIGGUM_DSH_PROVIDER` / `WIGGUM_DSH_CRITIC_PROVIDER` | empty | provider for bare DSH model ids when they are not `glm-*` |
-| `WIGGUM_DSH_REASONING_EFFORT` / `WIGGUM_DSH_CRITIC_REASONING_EFFORT` | empty | optional DSH reasoning override such as `high` or `max` |
-| `WIGGUM_DSH_PLUGIN_ALLOWLIST` | empty | comma-separated exact `package@semver` specs the DSH proposer may request and install |
-| `WIGGUM_DSH_PLUGIN_TIMEOUT` | `600` | timeout in seconds for one approved profile installation |
-| `WIGGUM_PRIME_AGENT_BIN` | `prime-agent` | standard Prime Agent executable used by bare `prime` |
-| `WIGGUM_PRIME_FLEET_BIN` | `prime` | optional fleet launcher used by `prime:<variant>` |
-| `WIGGUM_PRIME_BIN` | — | legacy alias for the fleet launcher override |
-| `WIGGUM_MAX_REJECTS` | `3` | reject attempts per phase before halt (exit 2) |
-| `WIGGUM_MAX_ITER` | — | max headless proposer iterations per pass |
-| `WIGGUM_PROPOSER_TIMEOUT` | `1800` | per-pass timeout (seconds) |
-| `WIGGUM_CRITIC_TIMEOUT` | `300` | per-critic-call timeout (seconds) |
-| `WIGGUM_MAX_WALL_MIN` | `0` | whole-run wall-clock budget (0 = unlimited) |
-| `WIGGUM_CRITIC_GROUNDING` | on | critic's read-only grounding pass |
-| `WIGGUM_GIT_COMMITS` | auto | per-phase git checkpoint behavior |
-| `WIGGUM_CONTEXT_BUDGET` | ~24000 | chars of design-doc context injected (Spec Kit / OpenSpec) |
-| `WIGGUM_LIVE_DETAIL` | `tools` | live-view verbosity: `milestones \| tools \| full` |
-| `WIGGUM_AGENT_STREAM` | `true` | structured stream tap (`agent_*` events) for `claude`/`codex`/`prime`; `false` = legacy raw path |
-| `WIGGUM_SPEC_FORMAT` | auto | force `native \| speckit-tasks \| openspec-change` |
-| `WIGGUM_FEATURE` | dir basename / `default` | feature namespace |
+| `SPECSTRIDE_PROPOSER` / `SPECSTRIDE_CRITIC` | `dsh` / `claude` | backend per role |
+| `SPECSTRIDE_DSH_BIN` / `SPECSTRIDE_DSH_PROFILE` | `dsh` / `headless` | DeepSeek Harness executable and profile |
+| `SPECSTRIDE_DSH_MODEL` / `SPECSTRIDE_DSH_CRITIC_MODEL` | empty | optional DSH model override, e.g. `zai/glm-5.3`; bare `glm-*` maps to `zai`, `qwen3.8-27b` maps to LiteLLM `local-high/qwen3.8-27b-q5` |
+| `SPECSTRIDE_DSH_PROVIDER` / `SPECSTRIDE_DSH_CRITIC_PROVIDER` | empty | provider for bare DSH model ids when they are not `glm-*` |
+| `SPECSTRIDE_DSH_REASONING_EFFORT` / `SPECSTRIDE_DSH_CRITIC_REASONING_EFFORT` | empty | optional DSH reasoning override such as `high` or `max` |
+| `SPECSTRIDE_DSH_PLUGIN_ALLOWLIST` | empty | comma-separated exact `package@semver` specs the DSH proposer may request and install |
+| `SPECSTRIDE_DSH_PLUGIN_TIMEOUT` | `600` | timeout in seconds for one approved profile installation |
+| `SPECSTRIDE_PRIME_AGENT_BIN` | `prime-agent` | standard Prime Agent executable used by bare `prime` |
+| `SPECSTRIDE_PRIME_FLEET_BIN` | `prime` | optional fleet launcher used by `prime:<variant>` |
+| `SPECSTRIDE_PRIME_BIN` | — | legacy alias for the fleet launcher override |
+| `SPECSTRIDE_MAX_REJECTS` | `3` | reject attempts per phase before halt (exit 2) |
+| `SPECSTRIDE_MAX_ITER` | — | max headless proposer iterations per pass |
+| `SPECSTRIDE_PROPOSER_TIMEOUT` | `1800` | per-pass timeout (seconds) |
+| `SPECSTRIDE_CRITIC_TIMEOUT` | `300` | per-critic-call timeout (seconds) |
+| `SPECSTRIDE_MAX_WALL_MIN` | `0` | whole-run wall-clock budget (0 = unlimited) |
+| `SPECSTRIDE_CRITIC_GROUNDING` | on | critic's read-only grounding pass |
+| `SPECSTRIDE_GIT_COMMITS` | auto | per-phase git checkpoint behavior |
+| `SPECSTRIDE_CONTEXT_BUDGET` | ~24000 | chars of design-doc context injected (Spec Kit / OpenSpec) |
+| `SPECSTRIDE_LIVE_DETAIL` | `tools` | live-view verbosity: `milestones \| tools \| full` |
+| `SPECSTRIDE_AGENT_STREAM` | `true` | structured stream tap (`agent_*` events) for `claude`/`codex`/`prime`; `false` = legacy raw path |
+| `SPECSTRIDE_SPEC_FORMAT` | auto | force `native \| speckit-tasks \| openspec-change` |
+| `SPECSTRIDE_FEATURE` | dir basename / `default` | feature namespace |
 
 ## Privacy controls
 
-Every captured record — live output, local `.wiggum/events.jsonl`, invocation debug
+Every captured record — live output, local `.specstride/events.jsonl`, invocation debug
 artifacts, and any remote sink — passes through `lib/observability_policy.py` **before**
 it is displayed or written. These are conservative, audited defaults baked into the code
 (not env knobs); adjust them in-code if project policy requires it. `.env.example` lists
@@ -122,12 +122,12 @@ them so operators know exactly what is retained.
   enabled it expires after **7 days**; redacted metadata + the terminal result are kept
   **30 days**. The policy enforces `metadata_retention_days >= raw_retention_days`, so a
   summary always outlives the raw content it describes. The policy version
-  (`wiggum-retention/v1`) travels with retained artifacts so a later sweep stays
+  (`specstride-retention/v1`) travels with retained artifacts so a later sweep stays
   interpretable. See [On-Disk-Contract](On-Disk-Contract#retention).
 
 ## Raw-text fallback
 
-Setting `WIGGUM_AGENT_STREAM=false` (or `--no-live`'s legacy path) turns **off** structured
+Setting `SPECSTRIDE_AGENT_STREAM=false` (or `--no-live`'s legacy path) turns **off** structured
 capture for both Prime and `claude` and restores the legacy raw tee'd output path: no
 per-tool `agent_*` events, and the redaction/payload policy above no longer applies, so raw
 provider text lands in `run.log`. Use it only when you accept that. A `--telemetry` run in

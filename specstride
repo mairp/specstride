@@ -1,28 +1,28 @@
 #!/usr/bin/env bash
-# wiggum — the single front door for a Wiggum run: start it, then inspect it.
+# specstride — the single front door for a Specstride run: start it, then inspect it.
 #
-#   wiggum run       [-w DIR] [-s SPEC] […]  START a run (→ orchestrator.sh).
-#                                        `wiggum -w DIR …` (leading flag) also starts.
+#   specstride run       [-w DIR] [-s SPEC] […]  START a run (→ orchestrator.sh).
+#                                        `specstride -w DIR …` (leading flag) also starts.
 #                                        Pass --help after `run` for all launch flags.
-#   wiggum status    [-w DIR] [--feature S] [--all]  one-screen state (run state,
+#   specstride status    [-w DIR] [--feature S] [--all]  one-screen state (run state,
 #                                        phases, files). Also shows the active capture
 #                                        mode (structured/raw-text/degraded + reason)
 #                                        and telemetry receiver state (configured/
 #                                        reachable/request-accepted/query-verified).
 #                                        --all lists every feature.
-#   wiggum watch     [-w DIR]            live status card (mini-TUI; Ctrl-C detaches)
-#   wiggum tail      [-w DIR] [--feature S]  tail -f the orchestrator run.log
-#   wiggum events    [-w DIR] [--feature S] [-f] [--json]  the raw event stream:
+#   specstride watch     [-w DIR]            live status card (mini-TUI; Ctrl-C detaches)
+#   specstride tail      [-w DIR] [--feature S]  tail -f the orchestrator run.log
+#   specstride events    [-w DIR] [--feature S] [-f] [--json]  the raw event stream:
 #                                        every milestone + agent tool call/message
-#   wiggum verdicts  [-w DIR] [--feature S] [N]  dump critic reply(ies)
-#   wiggum feedback   <N> [-w DIR] [--feature S]  show GATE<N>-FEEDBACK.md
-#   wiggum phases    [-w DIR] [-s SPEC] [--feature S]  list phases + per-phase state
-#   wiggum stop      [-w DIR] [--now]    request a clean stop (MUTATES: writes
+#   specstride verdicts  [-w DIR] [--feature S] [N]  dump critic reply(ies)
+#   specstride feedback   <N> [-w DIR] [--feature S]  show GATE<N>-FEEDBACK.md
+#   specstride phases    [-w DIR] [-s SPEC] [--feature S]  list phases + per-phase state
+#   specstride stop      [-w DIR] [--now]    request a clean stop (MUTATES: writes
 #                                        stop.flag; --now also kills the in-flight
 #                                        agent pass). Rerun/resume picks up after.
-#   wiggum resume    [-w DIR] [--feature S] [overrides…]  relaunch the orchestrator
+#   specstride resume    [-w DIR] [--feature S] [overrides…]  relaunch the orchestrator
 #                                        from the saved config of the last run.
-#   wiggum learn     [-w DIR] [--feature S] [--show|--apply|--revert <run-id>|--off]
+#   specstride learn     [-w DIR] [--feature S] [--show|--apply|--revert <run-id>|--off]
 #                                        the self-tuning loop (roadmap/research/
 #                                        self-improvement-loops/02-wiggum-loop-design.md
 #                                        §5): --show (default) prints suggested knob
@@ -31,7 +31,7 @@
 #                                        a knob_adjusted event); --revert <run-id>
 #                                        undoes one; --off reverts everything. A
 #                                        decision only takes effect at run time under
-#                                        WIGGUM_LEARNING=apply.
+#                                        SPECSTRIDE_LEARNING=apply.
 # Launch defaults to required verification with feature-scoped TEST_PLAN.md and
 # generated scaffolds; `--verification plan|off` changes that behavior. Explicit
 # `--test-plan`/`--generate-tests` paths override defaults, and resume preserves
@@ -39,14 +39,14 @@
 #
 # All other subcommands are read-only. -w points at the project workdir (default:
 # $PWD); -s at its spec file (default: <workdir>/SPECS.md). --feature SLUG selects a
-# feature namespace under .wiggum/features/ (default: the last run's feature). See
+# feature namespace under .specstride/features/ (default: the last run's feature). See
 # orchestrator.sh --help for launch flags.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"          # Python components live here
 # shellcheck source=/dev/null
-. "$SCRIPT_DIR/wiggum-lib.sh"
+. "$SCRIPT_DIR/specstride-lib.sh"
 
 usage() {
   sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
@@ -56,9 +56,9 @@ usage() {
 # Starting a run and inspecting it are the SAME command. This script is the one
 # source of truth for that routing (a shell rc should only point at it, never
 # re-implement the dispatch):
-#   • `wiggum run …` / `wiggum start …`      → start a run (orchestrator.sh)
-#   • `wiggum -w DIR -s SPEC …`  (leading flag) → start a run (orchestrator.sh)
-#   • `wiggum <verb> …` (status/watch/…) and `-h`/`--help` → inspect, below.
+#   • `specstride run …` / `specstride start …`      → start a run (orchestrator.sh)
+#   • `specstride -w DIR -s SPEC …`  (leading flag) → start a run (orchestrator.sh)
+#   • `specstride <verb> …` (status/watch/…) and `-h`/`--help` → inspect, below.
 SUB="${1:-}"
 case "$SUB" in
   run|start)          shift; exec bash "$SCRIPT_DIR/orchestrator.sh" "$@" ;;
@@ -94,19 +94,20 @@ done
 POS="${EXTRA[0]:-}"
 
 # Resolve a relative -s against the launch dir (before we lose it), same rule as
-# orchestrator.sh, so `wiggum status -s ./ROADMAP.md` works from anywhere.
+# orchestrator.sh, so `specstride status -s ./ROADMAP.md` works from anywhere.
 if [[ -n "$SPECS" ]]; then
   case "$SPECS" in /*) : ;; *) SPECS="$LAUNCH_DIR/$SPECS" ;; esac
 fi
 WORKDIR="$(cd "$WORKDIR" 2>/dev/null && pwd || echo "$WORKDIR")"
-STATE_DIR="$WORKDIR/.wiggum"
+specstride_resolve_state_dir "$WORKDIR"   # STATE_BASENAME: .specstride, or a legacy dir
+STATE_DIR="$WORKDIR/$STATE_BASENAME"
 SPECS="${SPECS:-$WORKDIR/SPECS.md}"
 
 # ── resolve the active feature namespace (Phase 3) ───────────────────────────
-# Durable state is per-feature under .wiggum/features/<slug>/. Selection order:
+# Durable state is per-feature under .specstride/features/<slug>/. Selection order:
 #   1. --feature SLUG               (explicit; sanitized).
 #   2. FEATURE= in root last-run.conf  (the feature the last run used — the default
-#      so bare `wiggum status`/`resume` mean "the feature I last ran").
+#      so bare `specstride status`/`resume` mean "the feature I last ran").
 #   3. "default"                    (native/back-compat).
 sanitize_slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//;s/-*$//'; }
 SLUG=""
@@ -129,9 +130,9 @@ if [[ -z "${SPECS_EXPLICIT:-}" && ! -f "$SPECS" && -f "$FEATURE_DIR/last-run.con
 fi
 
 need_state() {
-  [[ -d "$STATE_DIR" ]] || { echo "no .wiggum/ state dir in $WORKDIR" >&2; exit 1; }
+  [[ -d "$STATE_DIR" ]] || { echo "no $STATE_DIRNAME/ state dir in $WORKDIR" >&2; exit 1; }
   [[ "$ALL" == "true" || -d "$FEATURE_DIR" ]] || {
-    echo "no feature '$SLUG' in $WORKDIR (.wiggum/features/$SLUG missing)." >&2
+    echo "no feature '$SLUG' in $WORKDIR ($STATE_BASENAME/features/$SLUG missing)." >&2
     if [[ -d "$STATE_DIR/features" ]]; then
       echo "known features:" >&2
       for d in "$STATE_DIR/features"/*/; do [[ -d "$d" ]] && echo "  - $(basename "$d")" >&2; done
@@ -157,7 +158,7 @@ kill_tree() {
   kill -TERM "$1" 2>/dev/null || true
 }
 
-# Resolve the events.jsonl / run.log for the ACTIVE feature. The .wiggum/ root
+# Resolve the events.jsonl / run.log for the ACTIVE feature. The .specstride/ root
 # symlinks track the LAST run (any feature); when a specific --feature is asked for,
 # read that feature's own newest run instead so status/tail/events are feature-true.
 feature_events() {
@@ -175,10 +176,10 @@ feature_runlog() {
   fi
 }
 
-# `wiggum status --all`: one row per feature with approved/total phase counts.
+# `specstride status --all`: one row per feature with approved/total phase counts.
 status_all() {
   need_state
-  echo "wiggum status --all — $WORKDIR"
+  echo "specstride status --all — $WORKDIR"
   if [[ ! -d "$STATE_DIR/features" ]]; then echo "  (no features yet)"; return; fi
   printf "  %-32s %-10s %s\n" "FEATURE" "PHASES" "STATE"
   printf "  %-32s %-10s %s\n" "--------------------------------" "----------" "-----"
@@ -193,7 +194,7 @@ status_all() {
     if [[ -f "$d/last-run.conf" ]]; then
       local fspecs
       fspecs="$(grep -m1 '^SPECS=' "$d/last-run.conf" 2>/dev/null | cut -d= -f2- | tr -d "'\"")"
-      [[ -f "$fspecs" ]] && total="$(WIGGUM_SPEC_FORMAT='' wiggum_spec_validate "$fspecs" 2>/dev/null || echo '?')"
+      [[ -f "$fspecs" ]] && total="$(SPECSTRIDE_SPEC_FORMAT='' specstride_spec_validate "$fspecs" 2>/dev/null || echo '?')"
     fi
     # state headline from that feature's newest events.jsonl
     ev="$(ls -1t "$d"/runs/*/events.jsonl 2>/dev/null | head -1)"
@@ -222,7 +223,7 @@ case "$SUB" in
   status)
     if [[ "$ALL" == "true" ]]; then status_all; exit 0; fi
     need_state
-    echo "wiggum status — $WORKDIR  (feature: $SLUG)"
+    echo "specstride status — $WORKDIR  (feature: $SLUG)"
     # run-state headline: RUNNING / STOPPED / HALTED / DONE
     STATUS_EV="$(feature_events)"
     if lock_held; then
@@ -249,7 +250,7 @@ elif last["event"] == "run_end":
 else:
     r, ph = last.get("reason", "?"), last.get("phase", "?")
     if r == "stop_flag":
-        print("  state: STOPPED at phase %s — resume with: wiggum resume" % ph)
+        print("  state: STOPPED at phase %s — resume with: specstride resume" % ph)
     elif r == "max_rejects":
         print("  state: HALTED at phase %s — needs human (max-rejects exceeded)" % ph)
     elif r in ("proposer_yield_budget", "proposer_yield_timeout"):
@@ -257,7 +258,7 @@ else:
         # out, not the agent. The job was left alone, so say where to look.
         print("  state: HALTED at phase %s — a declared yield's wait ran out "
               "(deadline, wall budget, or too many yields in one attempt). The job was "
-              "left running, not killed: read its log under .wiggum/features/*/yield-jobs/" % ph)
+              "left running, not killed: read its log under .specstride/features/*/yield-jobs/" % ph)
     elif r == "proposer_cap_exhausted":
         # Distinct from proposer_consecutive_errors on purpose: nothing failed,
         # the work did not fit the pass. Naming the wrong remedy here is how a
@@ -277,13 +278,13 @@ PYEOF
       printf "  %-6s %-28s %-8s %-8s %-8s\n" "-----" "----------------------------" "--------" "--------" "--------"
       while read -r n; do
         [[ -z "$n" ]] && continue
-        title="$(wiggum_spec_phase_title "$SPECS" "$n")"
+        title="$(specstride_spec_phase_title "$SPECS" "$n")"
         ev="✗"; [[ -f "$GATES_DIR/GATE${n}-EVIDENCE.md" ]] && ev="✓"
         ap="✗"; [[ -f "$GATES_DIR/GATE${n}-APPROVED" ]] && ap="✓"
         fb="✗"; [[ -f "$GATES_DIR/GATE${n}-FEEDBACK.md" ]] && fb="✓"
         printf "  %-6s %-28.28s %-8s %-8s %-8s\n" "$n" "$title" "$ev" "$ap" "$fb"
-      done < <(wiggum_spec_phase_numbers "$SPECS")
-      cur="$(wiggum_spec_first_unapproved "$SPECS" "$WORKDIR" "$GATES_DIR")"
+      done < <(specstride_spec_phase_numbers "$SPECS")
+      cur="$(specstride_spec_first_unapproved "$SPECS" "$WORKDIR" "$GATES_DIR")"
       echo
       echo "  current phase: ${cur:-<all approved>}"
     else
@@ -304,8 +305,8 @@ PYEOF
       if [[ "$_tel" == "true" || "$_otel" == "true" ]]; then
         echo
         echo "  telemetry:"
-        [[ "$_tel" == "true" ]]  && echo "    $(wiggum_telemetry_status_line loki "${_lokiurl:-http://localhost:3100}" "$STATUS_EV")"
-        [[ "$_otel" == "true" ]] && echo "    $(wiggum_telemetry_status_line otel "${_otelurl:-http://localhost:4318}" "$STATUS_EV")"
+        [[ "$_tel" == "true" ]]  && echo "    $(specstride_telemetry_status_line loki "${_lokiurl:-http://localhost:3100}" "$STATUS_EV")"
+        [[ "$_otel" == "true" ]] && echo "    $(specstride_telemetry_status_line otel "${_otelurl:-http://localhost:4318}" "$STATUS_EV")"
       fi
     fi
     # Per-invocation observability state (T062 / SC-012): the active capability
@@ -397,7 +398,7 @@ for o in keep[-5:]:
     ;;
 
   feedback)
-    [[ -n "$POS" ]] || { echo "usage: wiggum feedback <N> [-w DIR]" >&2; exit 1; }
+    [[ -n "$POS" ]] || { echo "usage: specstride feedback <N> [-w DIR]" >&2; exit 1; }
     FB="$GATES_DIR/GATE${POS}-FEEDBACK.md"
     [[ -f "$FB" ]] || { echo "no feedback for phase $POS ($FB)" >&2; exit 1; }
     cat "$FB"
@@ -410,26 +411,26 @@ for o in keep[-5:]:
 
   phases)
     [[ -f "$SPECS" ]] || { echo "no SPECS.md in $WORKDIR" >&2; exit 1; }
-    if ! cnt="$(wiggum_spec_validate "$SPECS" 2>/tmp/wiggum-spec-err)"; then
-      echo "SPEC INVALID:"; cat /tmp/wiggum-spec-err; rm -f /tmp/wiggum-spec-err; exit 3
+    if ! cnt="$(specstride_spec_validate "$SPECS" 2>/tmp/specstride-spec-err)"; then
+      echo "SPEC INVALID:"; cat /tmp/specstride-spec-err; rm -f /tmp/specstride-spec-err; exit 3
     fi
-    rm -f /tmp/wiggum-spec-err
+    rm -f /tmp/specstride-spec-err
     echo "$SPECS — $cnt phase(s):"
     while read -r n; do
       [[ -z "$n" ]] && continue
-      title="$(wiggum_spec_phase_title "$SPECS" "$n")"
+      title="$(specstride_spec_phase_title "$SPECS" "$n")"
       state="pending"
       [[ -f "$GATES_DIR/GATE${n}-EVIDENCE.md" ]] && state="evidence-written"
       [[ -f "$GATES_DIR/GATE${n}-FEEDBACK.md" ]] && state="rejected(has-feedback)"
       [[ -f "$GATES_DIR/GATE${n}-APPROVED" ]] && state="APPROVED"
       printf "  Phase %-3s %-40.40s [%s]\n" "$n" "$title" "$state"
-    done < <(wiggum_spec_phase_numbers "$SPECS")
+    done < <(specstride_spec_phase_numbers "$SPECS")
     ;;
 
   stop)
     need_state
     if ! lock_held; then
-      echo "wiggum stop: no run appears to be active on $WORKDIR (lock is free)." >&2
+      echo "specstride stop: no run appears to be active on $WORKDIR (lock is free)." >&2
       echo "             writing stop.flag anyway (a starting run will honor it)." >&2
     fi
     touch "$STATE_DIR/stop.flag"
@@ -447,26 +448,26 @@ for o in keep[-5:]:
       else
         echo "no in-flight pass recorded ($PIDF missing) — flag-only stop"
       fi
-      echo "the run will exit 6 (clean stop) momentarily; resume with: wiggum resume -w $WORKDIR"
+      echo "the run will exit 6 (clean stop) momentarily; resume with: specstride resume -w $WORKDIR"
     else
       echo "the run finishes its current pass, then exits 6 (clean stop)."
-      echo "resume later with: wiggum resume -w $WORKDIR   (or stop harder: wiggum stop --now)"
+      echo "resume later with: specstride resume -w $WORKDIR   (or stop harder: specstride stop --now)"
     fi
     ;;
 
   resume)
     need_state
-    # Bare `wiggum resume` → the root last-run.conf (the feature the last run used).
-    # `wiggum resume --feature X` → X's own saved config, preserving its SPEC_FORMAT.
+    # Bare `specstride resume` → the root last-run.conf (the feature the last run used).
+    # `specstride resume --feature X` → X's own saved config, preserving its SPEC_FORMAT.
     if [[ -n "$FEATURE" ]]; then
       CONF="$FEATURE_DIR/last-run.conf"
-      [[ -f "$CONF" ]] || { echo "wiggum resume: no last-run config for feature '$SLUG' ($CONF)." >&2; exit 1; }
+      [[ -f "$CONF" ]] || { echo "specstride resume: no last-run config for feature '$SLUG' ($CONF)." >&2; exit 1; }
     else
       CONF="$STATE_DIR/last-run.conf"
-      [[ -f "$CONF" ]] || { echo "wiggum resume: no $CONF — launch the run once via orchestrator.sh first." >&2; exit 1; }
+      [[ -f "$CONF" ]] || { echo "specstride resume: no $CONF — launch the run once via orchestrator.sh first." >&2; exit 1; }
     fi
     if lock_held; then
-      echo "wiggum resume: a run is already ACTIVE on $WORKDIR (lock held) — nothing to resume." >&2
+      echo "specstride resume: a run is already ACTIVE on $WORKDIR (lock held) — nothing to resume." >&2
       exit 1
     fi
     # shellcheck source=/dev/null
@@ -499,7 +500,7 @@ for o in keep[-5:]:
     # phase's evidence depends on.
     [[ -n "${LONG_JOB_PHASE:-}" && -n "${LONG_JOB_CMD:-}" ]] && \
       args+=( --long-job-phase "$LONG_JOB_PHASE" --long-job-cmd "$LONG_JOB_CMD" )
-    # anything extra passed to `wiggum resume` overrides the saved config
+    # anything extra passed to `specstride resume` overrides the saved config
     # (orchestrator parses flags last-wins).
     args+=( "${EXTRA[@]}" )
     echo "resuming: $ORCHESTRATOR ${args[*]}"
@@ -507,11 +508,11 @@ for o in keep[-5:]:
     ;;
 
   learn)
-    # `wiggum learn` is a thin dispatcher onto lib/learn.py (design
+    # `specstride learn` is a thin dispatcher onto lib/learn.py (design
     # roadmap/research/self-improvement-loops/02-wiggum-loop-design.md §5/§6 step 5).
     # It is read/decision-only here: it never touches a run in progress, and the
     # ONLY thing that makes a decision it writes take effect at run time is the
-    # WIGGUM_LEARNING=apply environment variable a later `wiggum run`/`resume`
+    # SPECSTRIDE_LEARNING=apply environment variable a later `specstride run`/`resume`
     # is launched with (lib/learn.py's own `resolve` is the integration point).
     need_state
     MODE="${EXTRA[0]:---show}"
@@ -519,13 +520,13 @@ for o in keep[-5:]:
     EV="$(feature_events)"
     args=( --feature-dir "$FEATURE_DIR" )
     # `advise`/`apply` need --default; fall back to orchestrator.sh's own default
-    # resolution (`WIGGUM_PROPOSER_TIMEOUT`, else 1800 — orchestrator.sh:195) so a
-    # bare `wiggum learn --show`/`--apply` needs no extra typing. `revert`/`off`
+    # resolution (`SPECSTRIDE_PROPOSER_TIMEOUT`, else 1800 — orchestrator.sh:195) so a
+    # bare `specstride learn --show`/`--apply` needs no extra typing. `revert`/`off`
     # take no --default, so this is only injected for the two modes that use it.
     add_default() {
       local a
       for a in "${PASSTHRU[@]:-}"; do [[ "$a" == "--default" ]] && return; done
-      PASSTHRU+=( --default "${WIGGUM_PROPOSER_TIMEOUT:-1800}" )
+      PASSTHRU+=( --default "${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}" )
     }
     case "$MODE" in
       --show)
@@ -539,14 +540,14 @@ for o in keep[-5:]:
         exec python3 "$LIB_DIR/learn.py" apply "${args[@]}" "${PASSTHRU[@]}"
         ;;
       --revert)
-        [[ ${#PASSTHRU[@]} -ge 1 ]] || { echo "usage: wiggum learn --revert <run-id>" >&2; exit 1; }
+        [[ ${#PASSTHRU[@]} -ge 1 ]] || { echo "usage: specstride learn --revert <run-id>" >&2; exit 1; }
         exec python3 "$LIB_DIR/learn.py" revert "${PASSTHRU[0]}" --feature-dir "$FEATURE_DIR" "${PASSTHRU[@]:1}"
         ;;
       --off)
         exec python3 "$LIB_DIR/learn.py" off --feature-dir "$FEATURE_DIR" "${PASSTHRU[@]}"
         ;;
       *)
-        echo "wiggum learn: unknown option '$MODE' (expected --show|--apply|--revert <run-id>|--off)" >&2
+        echo "specstride learn: unknown option '$MODE' (expected --show|--apply|--revert <run-id>|--off)" >&2
         exit 1
         ;;
     esac
@@ -556,7 +557,7 @@ for o in keep[-5:]:
     usage
     ;;
   *)
-    echo "wiggum: unknown subcommand '$SUB'" >&2
+    echo "specstride: unknown subcommand '$SUB'" >&2
     usage >&2
     exit 1
     ;;

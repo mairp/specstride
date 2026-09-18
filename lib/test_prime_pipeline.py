@@ -87,13 +87,13 @@ esac
 # nonzero, standing in for a fatal adapter/parser fault. The controller must
 # observe this adapter status independently of the producer (invocation-v1
 # contract: "The controller observes producer and adapter separately") and
-# finalize it as ``parser_failed``. Selected via $WIGGUM_AGENT_TAP.
+# finalize it as ``parser_failed``. Selected via $SPECSTRIDE_AGENT_TAP.
 FAKE_TAP = "#!/bin/bash\ncat >/dev/null\nexit 3\n"
 
 
 def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=None,
          env_extra=None):
-    evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "gates" / "GATE1-EVIDENCE.md"
     events = tmp_path / "events.jsonl"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
@@ -107,14 +107,14 @@ def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=Non
 
     env = os.environ.copy()
     env.update({
-        "WIGGUM_PRIME_AGENT_BIN": bin_path if bin_path is not None else str(fake),
+        "SPECSTRIDE_PRIME_AGENT_BIN": bin_path if bin_path is not None else str(fake),
         "FAKE_MODE": mode,
         "LAUNCH_COUNT": str(launch_count),
         "CAPTURE_ARGV": str(tmp_path / "argv"),
-        "WIGGUM_AGENT_STREAM": "true",
-        "WIGGUM_EVENTS": str(events),
-        "WIGGUM_RUN_ID": "run-pipeline",
-        "WIGGUM_PROPOSER_MAX_ERRORS": str(max_errors),
+        "SPECSTRIDE_AGENT_STREAM": "true",
+        "SPECSTRIDE_EVENTS": str(events),
+        "SPECSTRIDE_RUN_ID": "run-pipeline",
+        "SPECSTRIDE_PROPOSER_MAX_ERRORS": str(max_errors),
         # Where the `capped` launcher writes its per-second proof of work: inside
         # the workdir (so it counts as disk progress) and never in the repo.
         "TICK_DIR": str(ticks),
@@ -124,7 +124,7 @@ def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=Non
         tap = tmp_path / "fake-tap"
         tap.write_text(FAKE_TAP)
         tap.chmod(0o755)
-        env["WIGGUM_AGENT_TAP"] = str(tap)
+        env["SPECSTRIDE_AGENT_TAP"] = str(tap)
 
     argv = [
         "bash", str(PROPOSER),
@@ -140,7 +140,7 @@ def _run(tmp_path, mode, *, max_iter=1, max_errors=2, timeout=None, bin_path=Non
     records = []
     if events.exists():
         records = [json.loads(line) for line in events.read_text().splitlines() if line.strip()]
-    invocations = tmp_path / ".wiggum" / "features" / "feature-pipeline" / "debug" / "invocations"
+    invocations = tmp_path / ".specstride" / "features" / "feature-pipeline" / "debug" / "invocations"
     results = sorted(invocations.rglob("result.json")) if invocations.exists() else []
     launches = launch_count.read_text().count("x") if launch_count.exists() else 0
     return proc, records, results, launches
@@ -189,7 +189,7 @@ def test_failure_class_writes_one_durable_result(tmp_path, mode):
     # Exactly one durable result artifact for the invocation.
     assert len(results) == 1, f"{mode}: expected one result.json, got {results}\n{proc.stderr}"
     result = json.loads(results[0].read_text())
-    assert result["contract"] == "wiggum-invocation-result/v1"
+    assert result["contract"] == "specstride-invocation-result/v1"
     assert result["reason_code"] == reason_code
     assert result["status"] == status
     assert result["is_error"] is True
@@ -207,7 +207,7 @@ def test_failure_class_writes_one_durable_result(tmp_path, mode):
 @pytest.mark.parametrize("mode", sorted(FAILURE_MATRIX))
 def test_failure_class_emits_visible_reason_through_the_loop(tmp_path, mode):
     # T033: the durable reason must not only land in result.json — the controller
-    # must surface it visibly through wiggum-lib.sh as one iter_error event carrying
+    # must surface it visibly through specstride-lib.sh as one iter_error event carrying
     # the reason code. A regression previously read only the first of the finalizer's
     # four output lines, leaving is_error/reason empty so no iter_error ever fired.
     reason_code, _status = FAILURE_MATRIX[mode]
@@ -224,7 +224,7 @@ def test_failure_class_emits_visible_reason_through_the_loop(tmp_path, mode):
         # so it is charged to the cap breaker and made visible as `iter_cap`.
         # This assertion used to read `iter_error` — it encoded the conflation
         # the Prime path inherited from the legacy ladder, which is precisely
-        # what put WIGGUM_PROPOSER_MAX_ERRORS=30 into a real .env.
+        # what put SPECSTRIDE_PROPOSER_MAX_ERRORS=30 into a real .env.
         caps = _iter_caps(records)
         assert len(caps) == 1, f"{mode}: expected one iter_cap, got {caps}"
         assert caps[0]["reason"] == "hard_cap"
@@ -295,10 +295,10 @@ def test_each_pass_emits_exactly_one_terminal_result(tmp_path):
 #  cases) a launcher that writes a file every second so it is productive right
 #  up to the ceiling.
 _KILL_ENV = {
-    "WIGGUM_WATCHDOG_TICK": "1",
-    "WIGGUM_PROPOSER_IDLE_TIMEOUT": "900",
-    "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "0",
-    "WIGGUM_PROPOSER_REPEAT_LIMIT": "0",
+    "SPECSTRIDE_WATCHDOG_TICK": "1",
+    "SPECSTRIDE_PROPOSER_IDLE_TIMEOUT": "900",
+    "SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "0",
+    "SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "0",
 }
 
 
@@ -310,7 +310,7 @@ def test_repeated_prime_hang_kills_still_halt_on_the_error_breaker(tmp_path):
     """A kill that is NOT a budget kill (here idle_timeout: the process tree is
     dead) says the agent failed, so it stays on the consecutive-error breaker and
     exits 7 — the half of the split that must not move."""
-    env = dict(_KILL_ENV, WIGGUM_PROPOSER_IDLE_TIMEOUT="4")
+    env = dict(_KILL_ENV, SPECSTRIDE_PROPOSER_IDLE_TIMEOUT="4")
     proc, records, results, launches = _run(
         tmp_path, "stalled", max_iter=6, max_errors=2, env_extra=env)
 
@@ -334,7 +334,7 @@ def test_repeated_prime_cap_kills_halt_with_the_cap_code(tmp_path):
     the halt can name the right remedy instead of 'raise the cap'."""
     proc, records, results, launches = _run(
         tmp_path, "capped", max_iter=6, max_errors=2, timeout=3,
-        env_extra=dict(_KILL_ENV, WIGGUM_PROPOSER_MAX_CAPS="2"))
+        env_extra=dict(_KILL_ENV, SPECSTRIDE_PROPOSER_MAX_CAPS="2"))
 
     assert proc.returncode == 10, proc.stderr
     kills = _kills(records)
@@ -360,7 +360,7 @@ def test_a_prime_cap_kill_is_durable_and_not_an_agent_error(tmp_path):
     as it reads one from the legacy path."""
     proc, records, results, launches = _run(
         tmp_path, "capped", max_iter=3, max_errors=2, timeout=3,
-        env_extra=dict(_KILL_ENV, WIGGUM_PROPOSER_MAX_CAPS="9"))
+        env_extra=dict(_KILL_ENV, SPECSTRIDE_PROPOSER_MAX_CAPS="9"))
 
     # max-iter, not the error breaker: the loop ran all three passes.
     assert proc.returncode == 4, proc.stderr
@@ -385,7 +385,7 @@ def test_a_prime_cap_kill_is_durable_and_not_an_agent_error(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  T066 [US6] — the explicit Prime raw-text fallback (WIGGUM_AGENT_STREAM=false).
+#  T066 [US6] — the explicit Prime raw-text fallback (SPECSTRIDE_AGENT_STREAM=false).
 #
 #  When neither the local tap nor stream-json is enabled, the `prime` backend
 #  launches `--mode text`, runs NO tap, and produces plain output. This path is a
@@ -420,9 +420,9 @@ exit "${EXIT_CODE:-0}"
 def _run_raw(tmp_path, *, exit_code=0, write_evidence=True, max_iter=1, max_errors=2):
     """Drive proposer.sh through the explicit `prime` raw-text fallback.
 
-    WIGGUM_AGENT_STREAM=false with the `prime` backend selects `--mode text`, no
+    SPECSTRIDE_AGENT_STREAM=false with the `prime` backend selects `--mode text`, no
     tap, and plain execution — the deliberately-degraded observability mode."""
-    evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "gates" / "GATE1-EVIDENCE.md"
     events = tmp_path / "events.jsonl"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
@@ -434,16 +434,16 @@ def _run_raw(tmp_path, *, exit_code=0, write_evidence=True, max_iter=1, max_erro
 
     env = os.environ.copy()
     env.update({
-        "WIGGUM_PRIME_AGENT_BIN": str(fake),
-        "WIGGUM_AGENT_STREAM": "false",  # explicit raw fallback
+        "SPECSTRIDE_PRIME_AGENT_BIN": str(fake),
+        "SPECSTRIDE_AGENT_STREAM": "false",  # explicit raw fallback
         "EXIT_CODE": str(exit_code),
         "WRITE_EVIDENCE": "1" if write_evidence else "0",
         "TEST_EVIDENCE": str(evidence),
         "LAUNCH_COUNT": str(launch_count),
         "CAPTURE_ARGV": str(tmp_path / "argv"),
-        "WIGGUM_EVENTS": str(events),
-        "WIGGUM_RUN_ID": "run-raw",
-        "WIGGUM_PROPOSER_MAX_ERRORS": str(max_errors),
+        "SPECSTRIDE_EVENTS": str(events),
+        "SPECSTRIDE_RUN_ID": "run-raw",
+        "SPECSTRIDE_PROPOSER_MAX_ERRORS": str(max_errors),
     })
     argv = [
         "bash", str(PROPOSER),
@@ -456,7 +456,7 @@ def _run_raw(tmp_path, *, exit_code=0, write_evidence=True, max_iter=1, max_erro
     records = []
     if events.exists():
         records = [json.loads(line) for line in events.read_text().splitlines() if line.strip()]
-    invocations = tmp_path / ".wiggum" / "features" / "feature-raw" / "debug" / "invocations"
+    invocations = tmp_path / ".specstride" / "features" / "feature-raw" / "debug" / "invocations"
     artifacts = sorted(p.name for p in invocations.rglob("*.json")) if invocations.exists() else []
     argv_lines = (tmp_path / "argv").read_text().splitlines() if (tmp_path / "argv").exists() else []
     launches = launch_count.read_text().count("x") if launch_count.exists() else 0

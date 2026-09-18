@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""banner.py — the Wiggum startup splash: a Ralph Wiggum ASCII portrait (density
+"""banner.py — the Specstride startup splash: a Ralph Wiggum ASCII portrait (density
 art, Mr-Burns style) + the title, colored from the Springfield palette matching the
 terminal background (Night for dark, Day for light).
 
@@ -9,12 +9,16 @@ Usage:
   banner.py --bg dark|light   # force theme
 
 Background detection order (mirrors orchestrator.sh _detect_bg):
-  WIGGUM_BANNER_BG env  ->  COLORFGBG env  ->  OSC 11 query of the terminal  ->  dark
+  SPECSTRIDE_BANNER_BG env  ->  COLORFGBG env  ->  OSC 11 query of the terminal  ->  dark
 """
 import os
 import re
 import sys
 import select
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
 
 # ── Ralph Wiggum portrait (density ASCII generated from the show still) ──────────
 RALPH = r"""
@@ -43,7 +47,7 @@ RALPH = r"""
         -zNNNNNNNNNNz+;;*NNNNNNNNNNNNN+-:;===+z++*;~;;.
 """.strip("\n").split("\n")
 
-TITLE   = "The Autonomous Ralph Wiggum Loop"
+TITLE   = "Specstride · The Autonomous Ralph Loop"
 CAPTION = "ME FAIL SPEC?  THAT IS UNPOSSIBLE."   # Ralph-voice nod to the Burns caption
 
 # ── Springfield palette (truecolor) ─────────────────────────────────────────────
@@ -59,7 +63,7 @@ def _rgb(r, g, b):
 
 
 def detect_bg():
-    v = os.environ.get("WIGGUM_BANNER_BG", "").lower()
+    v = os.environ.get("SPECSTRIDE_BANNER_BG", "").lower()
     if v in ("dark", "light"):
         return v
     fgbg = os.environ.get("COLORFGBG", "")

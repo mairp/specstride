@@ -1,4 +1,4 @@
-# Wiggum bundled Prometheus — scrapes the OTEL Collector's Prometheus exporter so
+# Specstride bundled Prometheus — scrapes the OTEL Collector's Prometheus exporter so
 # ralph.* metrics (cost, tokens, duration histogram, tool_use/gate/errors counters)
 # become queryable series. Only relevant when running with --otel.
 global:

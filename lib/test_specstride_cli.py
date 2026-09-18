@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CLI parity for observability state (US5 / SC-012).
 
-Drives the real `wiggum` bash front door over a sanitized fixture workdir and
+Drives the real `specstride` bash front door over a sanitized fixture workdir and
 asserts that the operator-facing surfaces — `status`, `events`, `watch` — expose
 the per-invocation capability mode and degradation reason, and that all five
 SC-012 facts (active observability mode, current phase, latest tool activity,
@@ -21,7 +21,7 @@ import pytest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-WIGGUM = os.path.join(ROOT, "wiggum")
+SPECSTRIDE = os.path.join(ROOT, "specstride")
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
@@ -59,32 +59,32 @@ EVENTS = [
 
 @pytest.fixture
 def workdir(tmp_path):
-    """A minimal .wiggum/ state tree for feature 'tf' with the US5 event stream."""
+    """A minimal .specstride/ state tree for feature 'tf' with the US5 event stream."""
     wd = tmp_path / "proj"
-    feat = wd / ".wiggum" / "features" / "tf"
+    feat = wd / ".specstride" / "features" / "tf"
     feat.mkdir(parents=True)
-    (wd / ".wiggum" / "last-run.conf").write_text("FEATURE=tf\n")
+    (wd / ".specstride" / "last-run.conf").write_text("FEATURE=tf\n")
     # Configured sinks — otel points at the discard port so the live probe can
     # never spuriously report it reachable; loki's acceptance is proven by the
     # retained delivery record, not by a probe.
     feat.joinpath("last-run.conf").write_text(
         "TELEMETRY=true\nLOKI_URL=http://127.0.0.1:3100\n"
         "OTEL=true\nOTEL_URL=http://127.0.0.1:9\n")
-    ev = wd / ".wiggum" / "events.jsonl"
+    ev = wd / ".specstride" / "events.jsonl"
     ev.write_text("".join(json.dumps(e) + "\n" for e in EVENTS))
     return wd
 
 
 def run(sub, wd, *args, timeout=20):
-    """Run `wiggum <sub> -w <wd> ...`, return combined ANSI-stripped output."""
-    cmd = ["bash", WIGGUM, sub, "-w", str(wd), *args]
+    """Run `specstride <sub> -w <wd> ...`, return combined ANSI-stripped output."""
+    cmd = ["bash", SPECSTRIDE, sub, "-w", str(wd), *args]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     return ANSI.sub("", p.stdout + p.stderr)
 
 
 def watch(wd, seconds=2):
-    """Run `wiggum watch` for a bounded window (card mode never exits on its own)."""
-    cmd = ["timeout", str(seconds), "bash", WIGGUM, "watch", "-w", str(wd)]
+    """Run `specstride watch` for a bounded window (card mode never exits on its own)."""
+    cmd = ["timeout", str(seconds), "bash", SPECSTRIDE, "watch", "-w", str(wd)]
     p = subprocess.run(cmd, capture_output=True, text=True, timeout=seconds + 10)
     return ANSI.sub("", p.stdout + p.stderr)
 
@@ -150,7 +150,7 @@ def test_sc012_five_facts_present_in_retained_records(workdir):
     """The retained events.jsonl carries the same five facts as labeled fields,
     so a reconstruction has display/record parity."""
     lines = [json.loads(l) for l in
-             (workdir / ".wiggum" / "events.jsonl").read_text().splitlines() if l.strip()]
+             (workdir / ".specstride" / "events.jsonl").read_text().splitlines() if l.strip()]
     kinds = {e["event"] for e in lines}
     assert "agent_observability" in kinds            # mode
     assert any(e["event"] == "agent_observability" and "mode" in e for e in lines)
@@ -166,10 +166,10 @@ def test_resume_carries_the_phase_long_job(tmp_path):
 
     The long job is part of a phase's contract, not a launch-time nicety: it is
     the thing the gate's evidence is derived from. It was persisted nowhere, so
-    `wiggum resume` silently relaunched without it.
+    `specstride resume` silently relaunched without it.
     """
     wd = tmp_path / "proj"
-    feat = wd / ".wiggum" / "features" / "tf"
+    feat = wd / ".specstride" / "features" / "tf"
     feat.mkdir(parents=True)
     specs = wd / "spec.md"
     specs.write_text("## Phase 1\n")
@@ -182,7 +182,7 @@ def test_resume_carries_the_phase_long_job(tmp_path):
         "LONG_JOB_PHASE=8\nLONG_JOB_CMD=./tests/integration/cycles_runner.sh\n"
         f"ORCHESTRATOR={fake_orch}\n"
     )
-    (wd / ".wiggum" / "last-run.conf").write_text(conf)
+    (wd / ".specstride" / "last-run.conf").write_text(conf)
     feat.joinpath("last-run.conf").write_text(conf)
 
     out = run("resume", wd)
@@ -195,7 +195,7 @@ def test_resume_carries_the_phase_long_job(tmp_path):
 def test_resume_omits_long_job_when_the_run_had_none(tmp_path):
     """Older configs carry no long job; resume must not invent empty flags."""
     wd = tmp_path / "proj"
-    feat = wd / ".wiggum" / "features" / "tf"
+    feat = wd / ".specstride" / "features" / "tf"
     feat.mkdir(parents=True)
     specs = wd / "spec.md"
     specs.write_text("## Phase 1\n")
@@ -207,7 +207,7 @@ def test_resume_omits_long_job_when_the_run_had_none(tmp_path):
         "PROPOSER_BACKEND=dsh\nCRITIC_BACKEND=dsh\nMAX_REJECTS=3\nMAX_ITER=5\n"
         f"ORCHESTRATOR={fake_orch}\n"
     )
-    (wd / ".wiggum" / "last-run.conf").write_text(conf)
+    (wd / ".specstride" / "last-run.conf").write_text(conf)
     feat.joinpath("last-run.conf").write_text(conf)
 
     out = run("resume", wd)

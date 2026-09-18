@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """_test_http.py — a tiny in-process HTTP capture server for telemetry tests.
 
-The wiggum test suite is stdlib-only and had no HTTP-stubbing precedent (the only
+The specstride test suite is stdlib-only and had no HTTP-stubbing precedent (the only
 prior test, test_critic.py, is pure filesystem). Both the Loki shipper and the OTEL
 shipper POST JSON with urllib, so their tests need to observe what actually goes on
 the wire without a real Loki / OTLP collector.

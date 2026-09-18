@@ -1,7 +1,7 @@
 # Telemetry
 
 Off by default; the loop is fully legible with zero containers (see the live presenter in
-[Getting Started](Getting-Started)). When you want a dashboard too, Wiggum has **two independent
+[Getting Started](Getting-Started)). When you want a dashboard too, Specstride has **two independent
 telemetry backends** — enable either or **both at once** (dual-ship).
 
 | Backend | Flag | URL flag (its own — never crossed) | Default | Ships to |
@@ -18,8 +18,8 @@ push port (or vice versa) will not work.
 `--telemetry` ships the event stream straight to Loki's push API:
 
 ```bash
-(cd "$WIGGUM_HOME/telemetry" && docker compose up -d)   # Grafana :3010, Loki :3110 (both free here)
-wiggum --telemetry --loki-url http://localhost:3110 -w ./myproject
+(cd "$SPECSTRIDE_HOME/telemetry" && docker compose up -d)   # Grafana :3010, Loki :3110 (both free here)
+specstride --telemetry --loki-url http://localhost:3110 -w ./myproject
 # open http://localhost:3010 → the "Ralph Loops" dashboard
 ```
 
@@ -35,11 +35,11 @@ cost/tokens/duration into first-class **Prometheus** metrics (`ralph_cost_usd_to
 OTEL SDK, no pip:
 
 ```bash
-(cd "$WIGGUM_HOME/telemetry" && docker compose up -d)   # + otel-collector :4318, Prometheus :9091
-wiggum --otel --otel-url http://localhost:4318 -w ./myproject
+(cd "$SPECSTRIDE_HOME/telemetry" && docker compose up -d)   # + otel-collector :4318, Prometheus :9091
+specstride --otel --otel-url http://localhost:4318 -w ./myproject
 ```
 
-The OTEL sink is driven **only** by `--otel` / `--otel-url` (env `WIGGUM_OTEL_URL`) — never by
+The OTEL sink is driven **only** by `--otel` / `--otel-url` (env `SPECSTRIDE_OTEL_URL`) — never by
 `--loki-url`. `--otel-url` points at the **Collector** on `:4318`, not at Loki: the Collector is
 what fans OTLP out to Loki (logs) and Prometheus (metrics). Shipper:
 [`lib/ralph_otel_ship.py`](../lib/ralph_otel_ship.py).
@@ -50,8 +50,8 @@ what fans OTLP out to Loki (logs) and Prometheus (metrics). Shipper:
 (Loki push *and* OTLP in parallel) — handy while migrating.
 
 ```bash
-wiggum --otel --otel-url http://localhost:4318 -w ./myproject          # OTEL only
-wiggum --telemetry --loki-url http://localhost:3110 \
+specstride --otel --otel-url http://localhost:4318 -w ./myproject          # OTEL only
+specstride --telemetry --loki-url http://localhost:3110 \
        --otel      --otel-url http://localhost:4318 -w ./myproject      # both (dual-ship)
 ```
 
@@ -120,7 +120,7 @@ check is always the presence of the `event="agent_result"` record for `$RUN_ID`.
 
 ## Host-specific note
 
-Wiggum's *bundled* stack (`telemetry/`) defaults to Grafana `:3010` / Loki `:3110`, but a host's
+Specstride's *bundled* stack (`telemetry/`) defaults to Grafana `:3010` / Loki `:3110`, but a host's
 *live* observability stack is often Grafana `:3000` / Loki `:3100` — point `--loki-url` at the
 live port when shipping there. The "Ralph Loops (Claude Code)" dashboard defaults to a `now-6h`
 window; widen it to 24h if you don't see a recent run.
