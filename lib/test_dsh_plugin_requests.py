@@ -10,7 +10,7 @@ from dsh_plugin_requests import RequestError, load_request, parse_allowlist, pro
 
 def request(path, plugins, **extra):
     value = {
-        "contract": "wiggum-dsh-plugin-request/v1",
+        "contract": "specstride-dsh-plugin-request/v1",
         "plugins": plugins,
         "reason": "Need the specialized capability",
     }

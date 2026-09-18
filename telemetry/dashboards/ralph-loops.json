@@ -4,7 +4,7 @@
   "tags": [
     "ai",
     "ralph",
-    "wiggum"
+    "specstride"
   ],
   "schemaVersion": 39,
   "version": 2,
@@ -28,7 +28,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Autonomous Wiggum **Ralph loops**, provider-neutral. Each iteration is a fresh headless proposer/critic invocation; this dashboard tracks cost, tokens, tool use, iteration duration and gate outcomes per run regardless of backend (Claude, Prime standard, Prime fleet, …). Queries match both the Claude stream vocabulary (`api_request`/`tool_use`) and the normalized Prime vocabulary (`agent_result`/`agent_tool`) so no backend has to masquerade as another. Use the **task**, **backend** and **role** variables to focus, and the **run**/**invocation** variables to query by Prime run/invocation identifier. Data is the persistent Loki event stream (`job=\"ralph\"`) over the time range."
+        "content": "Autonomous Specstride **Ralph loops**, provider-neutral. Each iteration is a fresh headless proposer/critic invocation; this dashboard tracks cost, tokens, tool use, iteration duration and gate outcomes per run regardless of backend (Claude, Prime standard, Prime fleet, …). Queries match both the Claude stream vocabulary (`api_request`/`tool_use`) and the normalized Prime vocabulary (`agent_result`/`agent_tool`) so no backend has to masquerade as another. Use the **task**, **backend** and **role** variables to focus, and the **run**/**invocation** variables to query by Prime run/invocation identifier. Data is the persistent Loki event stream (`job=\"ralph\"`) over the time range."
       }
     },
     {

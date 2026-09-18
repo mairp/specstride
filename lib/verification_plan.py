@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Deterministic pre-loop verification planning and fixed-argv gates for Wiggum.
+"""Deterministic pre-loop verification planning and fixed-argv gates for Specstride.
 
 This module is deliberately stdlib-only. It consumes normalized phases from
-``wiggum_spec`` (the grammar owner), discovers safe project commands, writes a
+``specstride_spec`` (the grammar owner), discovers safe project commands, writes a
 hash-bound canonical JSON plan plus a human ``TEST_PLAN.md`` projection, renders
 per-phase context, and executes only explicit argv arrays with ``shell=False``.
 """
@@ -19,7 +19,7 @@ import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import wiggum_spec  # noqa: E402
+import specstride_spec  # noqa: E402
 
 MUTATION = re.compile(
     r"\b(start|create|write|delete|remove|publish|dispatch|persist|send|"
@@ -34,7 +34,7 @@ BUILD_ARTIFACT = re.compile(
     r"typecheck|type-check|declaration file|\.d\.ts)\b",
     re.I,
 )
-GENERATED_MARKER = "<!-- wiggum-verification-plan content-hash:"
+GENERATED_MARKER = "<!-- specstride-verification-plan content-hash:"
 # Emitted by discover_project when the filesystem yields no test command, and
 # resolved by create_plan when --verification-commands supplies real ones — the
 # two must agree on the exact text, so it lives here rather than being matched
@@ -68,7 +68,7 @@ DEFAULT_STAGING = {
     "detached": False,
     "cumulative": True,
 }
-PRESTAGE_KIND = "wiggum-prestage-evidence"
+PRESTAGE_KIND = "specstride-prestage-evidence"
 PRESTAGE_PREFIX = "prestage-phase-"
 
 
@@ -665,7 +665,7 @@ def _criterion_text(criterion):
 
 # The staleness rule hashes the PROJECTION the plan consumed, not the raw file.
 # ``tasks-v2`` is that projection's version, recorded in ``source.projection`` so a
-# plan written by an older Wiggum (no such field) is still checked by the old
+# plan written by an older Specstride (no such field) is still checked by the old
 # raw-text rule — see ``spec_projection`` and ``validate_plan``.
 SPEC_PROJECTION = "tasks-v2"
 
@@ -705,7 +705,7 @@ def spec_projection(text, fmt, phases=None):
     reordered phase still move this hash and still fail the gate closed.
     """
     if phases is None:
-        phases = wiggum_spec.get_phases(text, fmt)
+        phases = specstride_spec.get_phases(text, fmt)
     return canonical_json(_spec_projection_document(fmt, phases))
 
 
@@ -723,11 +723,11 @@ def create_plan(workdir, specs_path, fmt=None, required=False, environ=None,
         raise VerificationError("specification not found: %s" % specs_path)
     with open(specs_path, encoding="utf-8", errors="replace") as handle:
         text = handle.read()
-    resolved_format = wiggum_spec.detect_format(specs_path, text, fmt)
-    ok, _count, errors = wiggum_spec.validate(text, resolved_format)
+    resolved_format = specstride_spec.detect_format(specs_path, text, fmt)
+    ok, _count, errors = specstride_spec.validate(text, resolved_format)
     if not ok:
         raise VerificationError("invalid specification: %s" % "; ".join(errors))
-    phases = wiggum_spec.get_phases(text, resolved_format)
+    phases = specstride_spec.get_phases(text, resolved_format)
     discovery = discover_project(workdir, environ)
     declared = (
         load_declared_commands(commands_path, environ) if commands_path else None
@@ -1089,7 +1089,7 @@ def validate_plan(plan, expected_specs=None):
             try:
                 # The adapter is part of the projection, so a document now read by
                 # a different adapter hashes differently and refuses, as it should.
-                fmt = wiggum_spec.detect_format(expected_specs, text, None)
+                fmt = specstride_spec.detect_format(expected_specs, text, None)
                 actual_hash = spec_projection_hash(text, fmt)
             except Exception as error:  # unparseable now = not the plan's spec
                 raise VerificationError(
@@ -1362,7 +1362,7 @@ def _generated_artifact(path, framework, plan, content, marker=None):
         with open(path, encoding="utf-8", errors="replace") as handle:
             reused = handle.read() == content
     # Pass the generation marker so a file that is ITSELF a prior scaffold (its first
-    # line carries `<comment> wiggum-verification-plan:`) can be regenerated when the
+    # line carries `<comment> specstride-verification-plan:`) can be regenerated when the
     # plan changes — e.g. a resume after the plan's contentHash moved. Without this, any
     # plan change strands the run: the preflight re-scaffolds, the hash-bearing marker
     # line differs, and _atomic_write refuses to overwrite even its own earlier output.
@@ -1389,7 +1389,7 @@ def scaffold_plan(plan, output_directory):
             os.path.join(output_directory, "verification.generated.test.ts"),
         )
         lines = [
-            "// wiggum-verification-plan: %s" % plan["contentHash"],
+            "// specstride-verification-plan: %s" % plan["contentHash"],
             "// Generated scaffolds remain TODO until a project-specific oracle is supplied.",
             'import { describe, it } from "vitest";',
             "",
@@ -1406,7 +1406,7 @@ def scaffold_plan(plan, output_directory):
         lines.extend(["});", ""])
         artifacts.append(
             _generated_artifact(path, "vitest", plan, "\n".join(lines),
-                                marker="// wiggum-verification-plan:")
+                                marker="// specstride-verification-plan:")
         )
     elif "jest" in frameworks:
         path = authorize_output(
@@ -1414,7 +1414,7 @@ def scaffold_plan(plan, output_directory):
             os.path.join(output_directory, "verification.generated.test.js"),
         )
         lines = [
-            "// wiggum-verification-plan: %s" % plan["contentHash"],
+            "// specstride-verification-plan: %s" % plan["contentHash"],
             "// Generated scaffolds remain TODO until a project-specific oracle is supplied.",
             "describe(%s, () => {"
             % json.dumps("Verification plan %s" % plan["id"]),
@@ -1429,7 +1429,7 @@ def scaffold_plan(plan, output_directory):
         lines.extend(["});", ""])
         artifacts.append(
             _generated_artifact(path, "jest", plan, "\n".join(lines),
-                                marker="// wiggum-verification-plan:")
+                                marker="// specstride-verification-plan:")
         )
 
     if "pytest" in frameworks:
@@ -1438,7 +1438,7 @@ def scaffold_plan(plan, output_directory):
             os.path.join(output_directory, "test_verification_generated.py"),
         )
         lines = [
-            "# wiggum-verification-plan: %s" % plan["contentHash"],
+            "# specstride-verification-plan: %s" % plan["contentHash"],
             "# Generated scaffolds are skipped until a project-specific oracle is supplied.",
             "import pytest",
             "",
@@ -1458,7 +1458,7 @@ def scaffold_plan(plan, output_directory):
             )
         artifacts.append(
             _generated_artifact(path, "pytest", plan, "\n".join(lines),
-                                marker="# wiggum-verification-plan:")
+                                marker="# specstride-verification-plan:")
         )
 
     manifest_path = authorize_output(
@@ -1697,10 +1697,10 @@ def _tail_file(path, limit=64000):
 
 
 def _launch_detached(command, prestage_dir, phase, attempt):
-    """Start a pre-stage command as a job Wiggum owns, and return its record.
+    """Start a pre-stage command as a job Specstride owns, and return its record.
 
     The job is its own session (`start_new_session`) with stdin closed, exactly as
-    `wiggum-lib.sh:309-313` launches a long job, so killing the pass — or this
+    `specstride-lib.sh:309-313` launches a long job, so killing the pass — or this
     process — cannot reach it. The deadline gets the same treatment the design
     gives a yield: it is polled, never enforced with a signal; an expired deadline
     is REPORTED with the job left running and its log named.
@@ -1800,7 +1800,7 @@ def _refresh_detached_record(record):
         record["stdout"] = _tail_file(record.get("logPath"))
         record["stderr"] = (
             "detached pre-stage exceeded its %ss deadline; the job was LEFT RUNNING "
-            "(pid %s, log %s). Wiggum never kills a job it launched on a deadline."
+            "(pid %s, log %s). Specstride never kills a job it launched on a deadline."
             % (record.get("deadlineSec"), record.get("pid"), record.get("logPath"))
         )
         return True
@@ -1999,7 +1999,7 @@ def _format_duration(milliseconds):
 def prestage_report(plan, phase, prestage_dir, attempt=None):
     """The prompt block: what already ran, what it produced, and not to re-run it.
 
-    Modelled on `long_job_status_line`'s DONE branch (`wiggum-lib.sh:347-365`),
+    Modelled on `long_job_status_line`'s DONE branch (`specstride-lib.sh:347-365`),
     which already says the operative thing: do not re-run it, read its output, and
     write the gate evidence from what is on disk.
     """
@@ -2019,7 +2019,7 @@ def prestage_report(plan, phase, prestage_dir, attempt=None):
     lines = [
         "## Pre-staged verification for this phase (attempt %s)"
         % document.get("attempt"),
-        "Wiggum ran these declared commands ONCE, before this pass started. Do NOT "
+        "Specstride ran these declared commands ONCE, before this pass started. Do NOT "
         "re-run them and do NOT re-do the work they already did: read their output "
         "and cite the files they produced directly.",
         "Pre-stage evidence: `%s`" % path,
@@ -2205,7 +2205,7 @@ def _attempt_from_path(path):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Wiggum verification planning and fixed-argv gates"
+        description="Specstride verification planning and fixed-argv gates"
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

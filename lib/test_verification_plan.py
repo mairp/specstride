@@ -113,7 +113,7 @@ def speckit_project(tmp_path, name="repo", text=SPECKIT_TASKS):
 def planned(tmp_path, name="repo", text=SPECKIT_TASKS):
     workdir, specs = speckit_project(tmp_path, name, text)
     plan = verification_plan.create_plan(workdir, specs)
-    canonical = os.path.join(workdir, ".wiggum", "verification", "plan.json")
+    canonical = os.path.join(workdir, ".specstride", "verification", "plan.json")
     verification_plan.persist_plan(
         plan, os.path.join(workdir, "testautomation", "TEST_PLAN.md"), canonical
     )
@@ -188,7 +188,7 @@ def test_persist_requires_absolute_confined_outputs(tmp_path):
     workdir, specs = project(tmp_path)
     plan = verification_plan.create_plan(workdir, specs)
     markdown = str(tmp_path / "testautomation" / "TEST_PLAN.md")
-    canonical = str(tmp_path / ".wiggum" / "verification" / "plan.json")
+    canonical = str(tmp_path / ".specstride" / "verification" / "plan.json")
     verification_plan.persist_plan(plan, markdown, canonical)
     assert os.path.isfile(markdown)
     assert verification_plan.load_plan(canonical, specs)["contentHash"] == plan[
@@ -211,7 +211,7 @@ def test_stale_source_hash_fails_closed(tmp_path):
     """
     workdir, specs = project(tmp_path)
     plan = verification_plan.create_plan(workdir, specs)
-    canonical = str(tmp_path / ".wiggum" / "verification" / "plan.json")
+    canonical = str(tmp_path / ".specstride" / "verification" / "plan.json")
     verification_plan.persist_plan(
         plan, str(tmp_path / "testautomation" / "TEST_PLAN.md"), canonical
     )
@@ -396,7 +396,7 @@ def test_ticking_task_checkboxes_does_not_stale_the_plan(tmp_path):
     """Spec Kit ticks `- [ ]` to `- [x]` as tasks land; that is the same spec."""
     workdir, specs = project(tmp_path)
     plan = verification_plan.create_plan(workdir, specs)
-    canonical = str(tmp_path / ".wiggum" / "verification" / "plan.json")
+    canonical = str(tmp_path / ".specstride" / "verification" / "plan.json")
     verification_plan.persist_plan(
         plan, str(tmp_path / "testautomation" / "TEST_PLAN.md"), canonical
     )
@@ -447,7 +447,7 @@ def test_scaffold_regenerates_prior_scaffold_when_plan_changes(tmp_path):
     # still carries the generation marker, so it is regeneratable, not user work.
     with open(ts["path"], encoding="utf-8") as fh:
         body = fh.read()
-    body = body.replace("wiggum-verification-plan: ", "wiggum-verification-plan: stale")
+    body = body.replace("specstride-verification-plan: ", "specstride-verification-plan: stale")
     with open(ts["path"], "w", encoding="utf-8") as fh:
         fh.write(body)
     with open(manifest["path"], encoding="utf-8") as fh:
@@ -738,8 +738,8 @@ def test_declared_commands_run_at_the_gate_with_their_env(tmp_path):
             declared_entry(
                 tmp_path,
                 id="p1-env",
-                args=["-c", "import os,sys; sys.exit(0 if os.environ.get('WIGGUM_T') == 'fixture' else 9)"],
-                env={"WIGGUM_T": "fixture"},
+                args=["-c", "import os,sys; sys.exit(0 if os.environ.get('SPECSTRIDE_T') == 'fixture' else 9)"],
+                env={"SPECSTRIDE_T": "fixture"},
             )
         ],
     )
@@ -749,7 +749,7 @@ def test_declared_commands_run_at_the_gate_with_their_env(tmp_path):
     assert len(declared) == 1
     assert declared[0]["declaredId"] == "p1-env"
     assert declared[0]["exitCode"] == 0, declared[0]["stderr"]
-    assert declared[0]["env"] == {"WIGGUM_T": "fixture"}
+    assert declared[0]["env"] == {"SPECSTRIDE_T": "fixture"}
     # The overlay must not replace the environment it runs in.
     assert os.path.isabs(declared[0]["executable"])
 
@@ -921,14 +921,14 @@ def _git(workdir, *args):
 def staged_project(tmp_path, entries_for):
     """A git-backed, declared-only project with its run artifacts git-ignored.
 
-    `.wiggum/` is ignored on purpose: the plan, the pre-stage evidence and the
+    `.specstride/` is ignored on purpose: the plan, the pre-stage evidence and the
     gate evidence all live there, and an un-ignored run directory would leave the
     tree permanently dirty — which (correctly) refuses every reuse.
     """
     workdir = tmp_path / "repo"
     workdir.mkdir(exist_ok=True)
     (workdir / "SPECS.md").write_text(SPEC)
-    (workdir / ".gitignore").write_text(".wiggum/\n")
+    (workdir / ".gitignore").write_text(".specstride/\n")
     document = workdir / "verification-commands.json"
     document.write_text(json.dumps(
         {"schema_version": "1.0.0", "commands": entries_for(str(workdir))}
@@ -940,7 +940,7 @@ def staged_project(tmp_path, entries_for):
     plan = verification_plan.create_plan(
         str(workdir), str(workdir / "SPECS.md"), commands_path=str(document)
     )
-    run_dir = workdir / ".wiggum" / "verification"
+    run_dir = workdir / ".specstride" / "verification"
     run_dir.mkdir(parents=True, exist_ok=True)
     _markdown, plan_path = verification_plan.persist_plan(
         plan, str(run_dir / "TEST_PLAN.md"), str(run_dir / "verification-plan.json")
@@ -1270,7 +1270,7 @@ def test_malformed_staging_fields_are_refused(tmp_path):
 
 
 def test_a_detached_prestage_is_launched_and_adopted_when_it_finishes(tmp_path):
-    """A detached pre-stage is a job Wiggum owns: it is launched, not waited on,
+    """A detached pre-stage is a job Specstride owns: it is launched, not waited on,
     and its result is adopted the next time the document is read."""
     witness = tmp_path / "witness.txt"
     workdir, plan, plan_path, prestage_dir = staged_project(

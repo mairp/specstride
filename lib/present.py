@@ -1,31 +1,35 @@
 #!/usr/bin/env python3
 """present.py — the live presenter (stdlib only): makes a backgrounded run legible.
 
-Reads the loop's ONE event stream (.wiggum/events.jsonl) and renders it from that
+Reads the loop's ONE event stream (.specstride/events.jsonl) and renders it from that
 single source:
 
   timeline (DEFAULT)  Append-only scrolling narration, coding-agent style: one line
                       per milestone AND per agent action (tool calls, messages,
                       pass results). On a TTY with --follow it keeps a heartbeat
                       spinner alive between events so the loop always visibly moves.
-  card (`wiggum watch`)  A fixed status block that redraws in place (mini-TUI):
+  card (`specstride watch`)  A fixed status block that redraws in place (mini-TUI):
                       phase trail, current activity, run totals, rolling feed.
-  plain (`wiggum events`)  One `HH:MM:SS event key=value…` line per event — the raw
+  plain (`specstride events`)  One `HH:MM:SS event key=value…` line per event — the raw
                       "RPC view" of everything happening behind the scenes.
   --quiet             Raw JSONL passthrough (debugging / piping).
 
-Detail knob (timeline): --detail / $WIGGUM_LIVE_DETAIL = milestones | tools | full
+Detail knob (timeline): --detail / $SPECSTRIDE_LIVE_DETAIL = milestones | tools | full
   milestones  only the coarse loop milestones (legacy view)
   tools       + agent tool calls, pass results (DEFAULT)
   full        + assistant text snippets
 
-Follow mode tracks the .wiggum/events.jsonl SYMLINK: when a new run retargets it,
-the follower reopens the new file and prints a divider — a `wiggum watch` left
+Follow mode tracks the .specstride/events.jsonl SYMLINK: when a new run retargets it,
+the follower reopens the new file and prints a divider — a `specstride watch` left
 running survives stop + resume.
 
 Pure consumer — never affects loop control flow.
 """
 import sys, os, json, time, argparse, shutil, threading, queue
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
 
 RESET = "\033[0m"; BOLD = "\033[1m"; DIM = "\033[2m"; ITALIC = "\033[3m"
 GREEN = "\033[32m"; RED = "\033[31m"; YELLOW = "\033[33m"; CYAN = "\033[36m"
@@ -447,7 +451,7 @@ def narrate(ev, detail="tools", debug=False):
         reason = ev.get("reason", "?")
         if reason == "stop_flag":
             return f"{stamp}  {BOLD}{BYELLOW}■ stopped cleanly{RESET} {YELLOW}at phase {p}{RESET} {DIM}—{RESET} " \
-                   f"resume with: {BOLD}{BWHITE}wiggum resume{RESET}"
+                   f"resume with: {BOLD}{BWHITE}specstride resume{RESET}"
         return f"{stamp}  {BOLD}{BYELLOW}■ halt{RESET} {DIM}—{RESET} {YELLOW}{reason}{RESET} {DIM}(phase {p}){RESET}"
     if e == "run_end":
         return f"{stamp}  {BOLD}{BGREEN}■ run complete{RESET} {DIM}—{RESET} {GREEN}{ev.get('outcome','?')}{RESET}"
@@ -460,7 +464,7 @@ def plain_line(ev):
     ts = hhmmss(ev)
     e = ev.get("event", "")
     # Capability transitions carry the presenter's semantics, not just raw keys:
-    # a reader of `wiggum events` sees "observability structured" / "observability
+    # a reader of `specstride events` sees "observability structured" / "observability
     # degraded — <reason>" rather than a bare mode= dump (T061/T062, SC-012).
     if e == "agent_observability":
         mode = ev.get("mode", "?")
@@ -538,8 +542,8 @@ def iter_events(path, follow):
 
 
 def stop_requested(events_path):
-    """True when .wiggum/stop.flag exists next to this events.jsonl. Handles both
-    layouts: .wiggum/events.jsonl (symlink) and .wiggum/runs/<id>/events.jsonl."""
+    """True when .specstride/stop.flag exists next to this events.jsonl. Handles both
+    layouts: .specstride/events.jsonl (symlink) and .specstride/runs/<id>/events.jsonl."""
     d = os.path.dirname(os.path.abspath(events_path))
     return any(os.path.exists(os.path.normpath(os.path.join(d, rel, "stop.flag")))
                for rel in (".", "../.."))
@@ -678,7 +682,7 @@ class State:
                 self.last_verdict[ph] = f"{RED}✗{ev.get('attempt','?')}{RESET}"
                 self.last_reason = ev.get("reason", "")
         elif e == "run_stop":
-            self.outcome = "STOPPED — resume with: wiggum resume" \
+            self.outcome = "STOPPED — resume with: specstride resume" \
                 if ev.get("reason") == "stop_flag" else "HALT: " + str(ev.get("reason", "?"))
         elif e == "run_end":
             self.outcome = ev.get("outcome", "done")
@@ -713,7 +717,7 @@ class State:
         cols = shutil.get_terminal_size((100, 24)).columns
         rows = shutil.get_terminal_size((100, 24)).lines
         feed_rows = max(4, rows - 9)
-        title = f"─ wiggum · {self.proposer}→{self.critic} "
+        title = f"─ specstride · {self.proposer}→{self.critic} "
         lines = [f"{BOLD}{CYAN}┌{title}{'─' * max(0, cols - len(title) - 2)}┐{RESET}"]
         lines += self._header_lines(spin_frame)
         lines.append(f"{DIM}  {'┄' * max(10, cols - 4)}{RESET}")
@@ -766,13 +770,13 @@ def run_card(path, detail):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Wiggum live presenter")
+    ap = argparse.ArgumentParser(description="Specstride live presenter")
     ap.add_argument("--events", default=None, help="path to events.jsonl")
-    ap.add_argument("--workdir", default=".", help="workdir (to find .wiggum/events.jsonl)")
+    ap.add_argument("--workdir", default=".", help="workdir (to find .specstride/events.jsonl)")
     ap.add_argument("--mode", choices=["timeline", "card", "plain"], default="timeline")
     ap.add_argument("--follow", action="store_true", help="tail for new events")
     ap.add_argument("--detail", choices=list(DETAILS),
-                    default=os.environ.get("WIGGUM_LIVE_DETAIL", "tools"),
+                    default=os.environ.get("SPECSTRIDE_LIVE_DETAIL", "tools"),
                     help="timeline verbosity (default: tools)")
     ap.add_argument("--quiet", action="store_true", help="raw JSONL passthrough")
     ap.add_argument("--debug", action="store_true")
@@ -784,7 +788,7 @@ def main():
     if args.detail not in DETAILS:
         args.detail = "tools"
 
-    path = args.events or os.path.join(args.workdir, ".wiggum", "events.jsonl")
+    path = args.events or os.path.join(specstride_env.state_dir(args.workdir), "events.jsonl")
 
     if args.quiet:
         for ev in iter_events(path, follow=args.follow):
@@ -815,7 +819,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     except BrokenPipeError:
-        # `wiggum events --json | head` closes the pipe early; exit quietly
+        # `specstride events --json | head` closes the pipe early; exit quietly
         # instead of dumping a traceback. Redirect stdout to devnull so the
         # interpreter's final flush-on-exit doesn't re-raise.
         try:

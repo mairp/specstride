@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """learn.py — Step 0 of the self-improvement design: measure, change nothing.
 
-Reads one or more Wiggum ``events.jsonl`` streams (optionally the matching
+Reads one or more Specstride ``events.jsonl`` streams (optionally the matching
 ``run.log`` and ``verification/`` directory) and computes the metric set of
 ``roadmap/research/self-improvement-loops/02-wiggum-loop-design.md`` §5.3 and
 ``03-002-run-telemetry.md`` §6. Pure functions; nothing here reads or writes
-Wiggum state, and nothing in Wiggum reads this output yet.
+Specstride state, and nothing in Specstride reads this output yet.
 
     python3 lib/learn.py summarize --events <events.jsonl|run-dir|runs-dir> [...]
                                    [--run-log <run.log>] [--verification-dir <dir>]
@@ -14,7 +14,7 @@ Wiggum state, and nothing in Wiggum reads this output yet.
 Keying
 ------
 Every figure is keyed on ``(run_id, phase, attempt)``: ``attempt`` numbers reset
-on every Wiggum run restart, so ``(phase, attempt)`` alone silently merges
+on every Specstride run restart, so ``(phase, attempt)`` alone silently merges
 unrelated data (telemetry report, methodology note). Events the critic emits
 (``critic_start``, ``verdict``, ``grounding_gap``) carry no ``run_id``; they are
 attributed to the run of the stream they were read from. Events the proposer
@@ -53,7 +53,7 @@ one entry per apply/revert, each keyed by a ``run_id``) so the two can never be
 conflated. The adjustable-knob allowlist (``ADJUSTABLE_KNOBS``, §5.5) is a locked
 literal set: nothing the critic reads may ever appear in it. ``resolve`` is the
 one integration point another component may call — see ``resolve_knob`` — and it
-is a total no-op unless ``WIGGUM_LEARNING=apply`` is set in its environment,
+is a total no-op unless ``SPECSTRIDE_LEARNING=apply`` is set in its environment,
 matching the "suggest is the default; unset/off changes nothing" rule of §5.5
 invariant 5.
 
@@ -65,14 +65,14 @@ phase's entry from ``summarize``'s ``phases`` map, wrapped with provenance — t
 table; it never reads or writes ``applied.json`` and nothing here decides
 anything from it automatically. It exists so an orchestrator hook can call one
 line at ``phase_done`` and leave a phase's own history somewhere the *next* run
-of that phase (or a human, or `wiggum learn --show`) can read it without
+of that phase (or a human, or `specstride learn --show`) can read it without
 re-deriving it from every run's raw ``events.jsonl`` each time:
 
     python3 lib/learn.py observe --events <events.jsonl|run-dir|runs-dir> \\
                                  --phase <N> [--out <feature-dir>/learning/phase-<N>.json]
 
 The documented call for an orchestrator's ``phase_done`` hook (one line, run
-after ``wiggum_emit phase_done ...``, using the orchestrator's own ``$LIB_DIR``,
+after ``specstride_emit phase_done ...``, using the orchestrator's own ``$LIB_DIR``,
 ``$FEATURE_DIR`` and current-phase ``$n``):
 
     python3 "$LIB_DIR/learn.py" observe --events "$FEATURE_DIR/runs" --phase "$n" \\
@@ -86,10 +86,10 @@ reflect every run that has ever touched it, the same cross-run view
 same ``"observation"`` content (only ``generated_at`` differs run to run) — safe
 to call once per ``phase_done``, and safe to call again by hand.
 
-Output schema (``wiggum.learn.summary/1``)
+Output schema (``specstride.learn.summary/1``)
 ------------------------------------------
 {
-  "schema": "wiggum.learn.summary/1",
+  "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
   "runs": { "<run_id>": {
       "feature", "backend", "started", "stopped", "stop_reason", "stop_phase",
@@ -139,7 +139,11 @@ from collections import Counter, OrderedDict
 from datetime import datetime, timezone
 from typing import Dict, Iterable, List, Optional, Tuple
 
-SCHEMA = "wiggum.learn.summary/1"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
+
+SCHEMA = "specstride.learn.summary/1"
 
 # The wait/poll classifier of 03-002-run-telemetry.md §2, applied to Bash targets.
 WAIT_RE = re.compile(
@@ -736,13 +740,13 @@ YIELD_POLL_WASTE_FRACTION = 0.1
 
 # `inject_yield_hint`'s threshold: a phase whose passes spend at least this share
 # of their tool calls on the WAIT_RE idioms (sleep/tail -f/poll loops) is one
-# where the agent is hand-rolling the wait Wiggum can do for free (§2.2). A
+# where the agent is hand-rolling the wait Specstride can do for free (§2.2). A
 # hard_cap kill landing on a pass that was busy waiting is decisive on its own,
 # regardless of the phase's median — see `suggest_inject_yield_hint`.
 INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD = 0.5
 
-LEARN_APPLIED_SCHEMA = "wiggum.learn.applied/1"
-OBSERVATION_SCHEMA = "wiggum.learn.observation/1"
+LEARN_APPLIED_SCHEMA = "specstride.learn.applied/1"
+OBSERVATION_SCHEMA = "specstride.learn.observation/1"
 
 
 def _now_ts() -> str:
@@ -1091,7 +1095,7 @@ def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None
 
 
 def revert_all(applied_file: str, events_file: Optional[str] = None) -> List[dict]:
-    """`wiggum learn --off`: revert every (knob, phase) currently at a non-default
+    """`specstride learn --off`: revert every (knob, phase) currently at a non-default
     value, in one pass — the bulk form of `revert_run` for "turn learning off"."""
     latest: "OrderedDict[Tuple[str, int], dict]" = OrderedDict()
     for e in _read_jsonl(applied_file):
@@ -1111,8 +1115,8 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     `resolve_proposer_timeout`) calls to get this run's value for `knob`/`phase`.
 
     Total no-op — the applied log is not even opened — unless the environment sets
-    WIGGUM_LEARNING=apply. Unset, "off", "suggest", or any other value all return
-    `default` unchanged: this is what makes "WIGGUM_LEARNING unset or off" and the
+    SPECSTRIDE_LEARNING=apply. Unset, "off", "suggest", or any other value all return
+    `default` unchanged: this is what makes "SPECSTRIDE_LEARNING unset or off" and the
     default "suggest" mode both zero-behaviour-change (§5.5 invariant 5; the
     migration table in the design doc).
 
@@ -1121,7 +1125,7 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     never to Python's `True`/`False` spelling — `default` for it should likewise
     be passed as `0` or `1` by its caller."""
     env = os.environ if env is None else env
-    if env.get("WIGGUM_LEARNING") != "apply":
+    if env.get("SPECSTRIDE_LEARNING") != "apply":
         return int(default)
     if knob not in ADJUSTABLE_KNOBS:
         return int(default)
@@ -1233,19 +1237,19 @@ def _cmd_advise(args: argparse.Namespace) -> int:
                   f"work p50={r.get('work_sec_p50')}s p90={r.get('work_sec_p90')}s, "
                   f"current={r['current']}{unit} → suggest {r['value']}{unit} "
                   f"(bounds={r['bounds']}, step_cap={r['step_cap']}) "
-                  f"[not applied — run `wiggum learn --apply` to take effect]")
+                  f"[not applied — run `specstride learn --apply` to take effect]")
         elif r["knob"] == "yield_poll_interval":
             print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s), "
                   f"job_duration p50={r.get('job_duration_p50')}s, "
                   f"current={r['current']}{unit} → suggest {r['value']}{unit} "
                   f"(bounds={r['bounds']}, step_cap={r['step_cap']}) "
-                  f"[not applied — run `wiggum learn --apply` to take effect]")
+                  f"[not applied — run `specstride learn --apply` to take effect]")
         else:   # inject_yield_hint — boolean, no numeric bounds to print
             print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s), "
                   f"wait_share p50={r.get('wait_share_p50')}, "
                   f"hard_cap_kills_with_wait={r.get('hard_cap_kills_with_wait')}, "
                   f"current={r['current']} → suggest {r['value']} "
-                  f"[not applied — run `wiggum learn --apply` to take effect]")
+                  f"[not applied — run `specstride learn --apply` to take effect]")
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
         with open(args.out, "w", encoding="utf-8") as fh:
@@ -1307,7 +1311,7 @@ def _cmd_off(args: argparse.Namespace) -> int:
             print(f"learn: reverted {e['reverts_run_id']} — {e['knob']}[{e['phase']}] back to {e['value']}{unit}")
     else:
         print("learn: nothing was applied — already at defaults")
-    print("learn: note — WIGGUM_LEARNING=off (or unset) in the run's environment is what actually "
+    print("learn: note — SPECSTRIDE_LEARNING=off (or unset) in the run's environment is what actually "
           "makes `resolve` ignore applied.json; this command only clears the recorded decisions.")
     return 0
 
@@ -1391,14 +1395,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     r.add_argument("--events-file")
     r.set_defaults(func=_cmd_revert)
 
-    o = sub.add_parser("off", help="revert every currently-applied knob at once (`wiggum learn --off`)")
+    o = sub.add_parser("off", help="revert every currently-applied knob at once (`specstride learn --off`)")
     o.add_argument("--feature-dir")
     o.add_argument("--applied-file")
     o.add_argument("--events-file")
     o.set_defaults(func=_cmd_off)
 
     rs = sub.add_parser("resolve", help="the shell-callable integration point: print one integer — the effective "
-                                         "value of --knob/--phase, or --default if WIGGUM_LEARNING != apply")
+                                         "value of --knob/--phase, or --default if SPECSTRIDE_LEARNING != apply")
     rs.add_argument("--knob", required=True, choices=sorted(ADJUSTABLE_KNOBS))
     rs.add_argument("--phase", type=int, required=True)
     rs.add_argument("--default", type=int, required=True)

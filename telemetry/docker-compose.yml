@@ -1,4 +1,4 @@
-# Wiggum OPTIONAL telemetry stack — self-contained Loki + Grafana with the
+# Specstride OPTIONAL telemetry stack — self-contained Loki + Grafana with the
 # "Ralph Loops" dashboard pre-provisioned. Off by default; only relevant when you
 # run the orchestrator with --telemetry.
 #
@@ -8,15 +8,17 @@
 # .env variable — a collision is a one-line change.
 #
 #   cd telemetry && docker compose up -d
-#   open http://localhost:${WIGGUM_GRAFANA_PORT:-3010}   (anonymous, Admin)
-#   ./orchestrator.sh --telemetry --loki-url http://localhost:${WIGGUM_LOKI_PORT:-3110} ...
-#   ./orchestrator.sh --otel     --otel-url http://localhost:${WIGGUM_OTEL_PORT:-4318} ...
+#   open http://localhost:${SPECSTRIDE_GRAFANA_PORT:-3010}   (anonymous, Admin)
+#   ./orchestrator.sh --telemetry --loki-url http://localhost:${SPECSTRIDE_LOKI_PORT:-3110} ...
+#   ./orchestrator.sh --otel     --otel-url http://localhost:${SPECSTRIDE_OTEL_PORT:-4318} ...
 #   docker compose down            # stop; add -v to wipe volumes
 #
 # The optional OTEL path (--otel) sends OTLP to the collector, which forwards logs to
 # the SAME Loki (so the existing dashboard keeps working) and exposes metrics for the
 # bundled Prometheus. Both telemetry backends can run at once (dual-ship).
 
+# The compose project keeps its pre-rename name: named volumes are prefixed with it,
+# so renaming it would orphan existing Loki/Grafana/Prometheus data.
 name: wiggum-telemetry
 
 services:
@@ -24,7 +26,7 @@ services:
     image: grafana/loki:3.1.1
     command: -config.file=/etc/loki/loki-config.yaml
     ports:
-      - "${WIGGUM_LOKI_PORT:-3110}:3100"
+      - "${SPECSTRIDE_LOKI_PORT:-${WIGGUM_LOKI_PORT:-3110}}:3100"
     volumes:
       - ./loki/loki-config.yaml:/etc/loki/loki-config.yaml:ro
       - loki-data:/loki
@@ -37,8 +39,8 @@ services:
     image: otel/opentelemetry-collector-contrib:0.109.0
     command: ["--config=/etc/otelcol/collector-config.yaml"]
     ports:
-      - "${WIGGUM_OTEL_PORT:-4318}:4318"     # OTLP/HTTP (what the shipper posts to)
-      - "${WIGGUM_OTEL_GRPC_PORT:-4317}:4317" # OTLP/gRPC (unused by the shipper, exposed for convenience)
+      - "${SPECSTRIDE_OTEL_PORT:-${WIGGUM_OTEL_PORT:-4318}}:4318"     # OTLP/HTTP (what the shipper posts to)
+      - "${SPECSTRIDE_OTEL_GRPC_PORT:-${WIGGUM_OTEL_GRPC_PORT:-4317}}:4317" # OTLP/gRPC (unused by the shipper, exposed for convenience)
     volumes:
       - ./otel/collector-config.yaml:/etc/otelcol/collector-config.yaml:ro
     depends_on:
@@ -50,7 +52,7 @@ services:
   prometheus:
     image: prom/prometheus:v2.54.1
     ports:
-      - "${WIGGUM_PROMETHEUS_PORT:-9091}:9090"
+      - "${SPECSTRIDE_PROMETHEUS_PORT:-${WIGGUM_PROMETHEUS_PORT:-9091}}:9090"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -61,7 +63,7 @@ services:
   grafana:
     image: grafana/grafana:11.2.0
     ports:
-      - "${WIGGUM_GRAFANA_PORT:-3010}:3000"
+      - "${SPECSTRIDE_GRAFANA_PORT:-${WIGGUM_GRAFANA_PORT:-3010}}:3000"
     environment:
       GF_AUTH_ANONYMOUS_ENABLED: "true"
       GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"

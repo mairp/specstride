@@ -9,15 +9,15 @@ description: "Task list template for feature implementation"
 **Prerequisites**: plan.md (required), spec.md (required for user stories)
 
 This is a minimal but real GitHub Spec Kit `tasks.md` you can run end-to-end with
-Wiggum to watch the proposer → critic → gate loop drive a Spec Kit feature. Each
-`## Phase N:` heading becomes one Wiggum phase; every `- [ ]` task line under it
+Specstride to watch the proposer → critic → gate loop drive a Spec Kit feature. Each
+`## Phase N:` heading becomes one Specstride phase; every `- [ ]` task line under it
 becomes a required deliverable the critic gates on. Run it with:
 
 ```bash
-mkdir -p /tmp/wiggum-speckit && cp examples/speckit-tasks.example.md /tmp/wiggum-speckit/tasks.md
-./wiggum run -w /tmp/wiggum-speckit -s /tmp/wiggum-speckit/tasks.md
+mkdir -p /tmp/specstride-speckit && cp examples/speckit-tasks.example.md /tmp/specstride-speckit/tasks.md
+./specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md
 # format is auto-detected (a file named tasks.md → speckit-tasks); force it with
-#   --spec-format speckit-tasks   or   WIGGUM_SPEC_FORMAT=speckit-tasks
+#   --spec-format speckit-tasks   or   SPECSTRIDE_SPEC_FORMAT=speckit-tasks
 ```
 
 ## Phase 1: Setup (Shared Infrastructure)

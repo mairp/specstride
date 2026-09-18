@@ -1,8 +1,8 @@
 # Spec Formats
 
-Wiggum parses the spec through a **single pluggable layer** — [`lib/wiggum_spec.py`](../lib/wiggum_spec.py),
+Specstride parses the spec through a **single pluggable layer** — [`lib/specstride_spec.py`](../lib/specstride_spec.py),
 the one source of truth both the bash side and the critic call. Three formats ship; the format
-is **auto-detected**, or forced with `--spec-format` / `WIGGUM_SPEC_FORMAT`.
+is **auto-detected**, or forced with `--spec-format` / `SPECSTRIDE_SPEC_FORMAT`.
 
 ## `native` (the default)
 
@@ -21,7 +21,7 @@ Each phase is a level-2 heading whose text starts with `Phase <N>`, containing a
 ## `speckit-tasks`
 
 A [GitHub Spec Kit](https://github.com/github/spec-kit) `tasks.md`. Each `## Phase N:` heading
-becomes a Wiggum phase, and every `- [ ]` task line under it becomes a required deliverable the
+becomes a Specstride phase, and every `- [ ]` task line under it becomes a required deliverable the
 critic gates on (the task's cited file paths are exactly what the grounding pass verifies):
 
 ```markdown
@@ -31,7 +31,7 @@ critic gates on (the task's cited file paths are exactly what the grounding pass
 - [ ] T004 [US1] Add a __main__ block to src/greet.py
 ```
 
-Wiggum also accepts implementations that group executable tasks under priority headings such
+Specstride also accepts implementations that group executable tasks under priority headings such
 as `## P0 — Safety`, `## P1 — Contracts`. Each task-bearing priority section becomes an ordered
 phase with a unique gate id. Trailing shared sections such as `## Dependency order` and
 `## Definition of done` are included in every normalized phase's context.
@@ -45,15 +45,15 @@ context budget truncates from the tail):
 `constitution.md` → `spec.md` → `plan.md` → every `contracts/*.md` → `data-model.md` →
 `research.md` → `quickstart.md` → every `checklists/*.md`.
 
-The total injected context respects `WIGGUM_CONTEXT_BUDGET` (default ~24000 chars), allocated
+The total injected context respects `SPECSTRIDE_CONTEXT_BUDGET` (default ~24000 chars), allocated
 in that priority order with per-doc floors — so a large `plan.md` cannot starve `contracts/` —
 and truncation is line-clean and code-fence-safe.
 
 Runnable example: [`examples/speckit-tasks.example.md`](../examples/speckit-tasks.example.md).
 
 ```bash
-mkdir -p /tmp/wiggum-speckit && cp examples/speckit-tasks.example.md /tmp/wiggum-speckit/tasks.md
-wiggum run -w /tmp/wiggum-speckit -s /tmp/wiggum-speckit/tasks.md
+mkdir -p /tmp/specstride-speckit && cp examples/speckit-tasks.example.md /tmp/specstride-speckit/tasks.md
+specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md
 ```
 
 ## `openspec-change`
@@ -71,10 +71,10 @@ dotted checkbox items become required deliverables:
 - [ ] 2.1 Implement the exporter in `src/audit/export.py`.
 ```
 
-The change name becomes the feature-scoped Wiggum state slug. Wiggum injects the change's
+The change name becomes the feature-scoped Specstride state slug. Specstride injects the change's
 `proposal.md`, every delta `specs/**/spec.md`, `design.md`, and matching current
 `openspec/specs/**/spec.md` documents into both proposer and critic as read-only context. The
-task list remains the gate; Wiggum does not sync or archive the OpenSpec change.
+task list remains the gate; Specstride does not sync or archive the OpenSpec change.
 
 Canonical OpenSpec paths are detected before the generic `tasks.md` filename rule. The numbered
 task shape is also content-detected when the file has another name. Example:
@@ -82,7 +82,7 @@ task shape is also content-detected when the file has another name. Example:
 
 ## Spec resolution (zero-flag start)
 
-Inside a Spec Kit or OpenSpec project you rarely need `-s`. When it is omitted, Wiggum resolves
+Inside a Spec Kit or OpenSpec project you rarely need `-s`. When it is omitted, Specstride resolves
 the spec in this order (never silently picking between candidates):
 
 1. `<workdir>/SPECS.md` — unchanged precedence, so native users are unaffected.
@@ -93,12 +93,12 @@ the spec in this order (never silently picking between candidates):
 4. none of the above → an error naming every location tried.
 
 ```bash
-wiggum run -w ./            # resolves specs/001-.../tasks.md, no -s
+specstride run -w ./            # resolves specs/001-.../tasks.md, no -s
 ```
 
 ## `SPECS.md` vs `tasks.md`: which is the source of truth?
 
-Never keep both for the same work — gate approvals live in `.wiggum/`, not in either markdown,
+Never keep both for the same work — gate approvals live in `.specstride/`, not in either markdown,
 so a hand-written `SPECS.md` beside a `tasks.md` becomes a second, un-reconciled source of truth.
 
 - **Inside a `.specify` project → `tasks.md` is the SoT.** It is generated from the feature's
@@ -106,7 +106,7 @@ so a hand-written `SPECS.md` beside a `tasks.md` becomes a second, un-reconciled
 - **For non-feature-shaped work → `SPECS.md` (native) is the SoT.** Migrations, refactors, ops
   roadmaps — anything not a Spec Kit feature.
 
-Wiggum never writes checkbox state back into `tasks.md`; approvals stay in
-`.wiggum/features/<slug>/gates/`, so there is exactly one source of truth for "is phase N done".
+Specstride never writes checkbox state back into `tasks.md`; approvals stay in
+`.specstride/features/<slug>/gates/`, so there is exactly one source of truth for "is phase N done".
 
 Next: [On-Disk Contract](On-Disk-Contract) · [Architecture](Architecture)

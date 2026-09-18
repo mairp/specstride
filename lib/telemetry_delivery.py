@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Local-first telemetry fan-out + receiver-state vocabulary (stdlib only).
 
-Single source of truth for the delivery contract, the way ``wiggum_spec.py`` owns
+Single source of truth for the delivery contract, the way ``specstride_spec.py`` owns
 spec grammar for bash + critic. ``agent_stream.py`` fans normalized Prime events out
-through :class:`LocalFirstFanout`; the bash surfaces (``orchestrator.sh``, ``wiggum``)
+through :class:`LocalFirstFanout`; the bash surfaces (``orchestrator.sh``, ``specstride``)
 render receiver status through :class:`ReceiverState`. Keeping both here means the
 Python tap and the shell startup describe delivery the same way.
 
@@ -179,7 +179,7 @@ def _load_delivery_records(events_path):
     """Read ``telemetry_delivery`` records from an events.jsonl, newest last.
 
     Tolerates a missing file and malformed lines — telemetry status is advisory
-    and must never crash a ``wiggum status`` call.
+    and must never crash a ``specstride status`` call.
     """
     import json
     records = []

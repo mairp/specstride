@@ -17,7 +17,7 @@ SPEC = """# Verification integration
 
 # ── T068 (US6) — orchestrator lifecycle regression harness ───────────────────
 # These tests drive the REAL orchestrator.sh end-to-end (proposer.sh + critic.py)
-# hermetically: a single fake Prime Agent, injected via WIGGUM_PRIME_AGENT_BIN,
+# hermetically: a single fake Prime Agent, injected via SPECSTRIDE_PRIME_AGENT_BIN,
 # serves BOTH roles. proposer.sh and critic.py both shell out to that executable,
 # so no live LLM, network, or credential is touched — the injection point that
 # makes provider-neutral (Prime, not Claude/Bebop) coverage possible. The critic
@@ -66,7 +66,7 @@ else
   # pass-ceiling test can drive it into the watchdog instead of writing evidence.
   sleep "${FAKE_PROPOSER_SLEEP:-0}"
   rel="$(printf '%s\n' "$prompt" \
-    | grep -oE '\.wiggum/features/[^ ]*/gates/GATE[0-9]+-EVIDENCE\.md' | head -1)"
+    | grep -oE '\.specstride/features/[^ ]*/gates/GATE[0-9]+-EVIDENCE\.md' | head -1)"
   mkdir -p "$(dirname "$WORKDIR_ABS/$rel")"
   printf '# Evidence\nPhase work complete.\n' > "$WORKDIR_ABS/$rel"
 fi
@@ -93,10 +93,10 @@ def _run_orchestrator(tmp_path, *, verdict="APPROVED", extra_env=None,
 
     env = dict(os.environ)
     env.update({
-        "WIGGUM_PRIME_AGENT_BIN": str(fake),
+        "SPECSTRIDE_PRIME_AGENT_BIN": str(fake),
         "WORKDIR_ABS": str(workdir),
-        "WIGGUM_AGENT_STREAM": "false",   # explicit raw-text Prime path (no live tap)
-        "WIGGUM_GIT_COMMITS": "off",      # never touch the outer repo
+        "SPECSTRIDE_AGENT_STREAM": "false",   # explicit raw-text Prime path (no live tap)
+        "SPECSTRIDE_GIT_COMMITS": "off",      # never touch the outer repo
         "FAKE_VERDICT": verdict,
     })
     env.update(extra_env or {})
@@ -127,7 +127,7 @@ def _run_orchestrator(tmp_path, *, verdict="APPROVED", extra_env=None,
 
 
 def _read_events(workdir):
-    runs = workdir / ".wiggum" / "features" / "obs-lifecycle" / "runs"
+    runs = workdir / ".specstride" / "features" / "obs-lifecycle" / "runs"
     events = sorted(runs.rglob("events.jsonl"))
     if not events:
         return []
@@ -171,7 +171,7 @@ def test_lifecycle_ordering_and_provider_neutral_terminal(tmp_path):
     assert run_end["backend"] == "prop:prime/crit:prime"
 
     # Both gate markers exist; no leftover feedback from an approved run.
-    gates = tmp_path / "work" / ".wiggum" / "features" / "obs-lifecycle" / "gates"
+    gates = tmp_path / "work" / ".specstride" / "features" / "obs-lifecycle" / "gates"
     assert (gates / "GATE1-APPROVED").is_file()
     assert (gates / "GATE2-APPROVED").is_file()
 
@@ -180,7 +180,7 @@ def test_phase_advancement_resumes_from_preapproved_gate(tmp_path):
     """A pre-existing GATE1-APPROVED marker is honored: the run resumes at the
     first unapproved phase (2) instead of restarting from phase 1."""
     workdir = tmp_path / "work"
-    gates = workdir / ".wiggum" / "features" / "obs-lifecycle" / "gates"
+    gates = workdir / ".specstride" / "features" / "obs-lifecycle" / "gates"
     gates.mkdir(parents=True)
     (gates / "GATE1-APPROVED").write_text("")
 
@@ -197,8 +197,8 @@ def test_stop_flag_halts_cleanly_and_rerun_resumes(tmp_path):
     """stop.flag makes the orchestrator halt cleanly (exit 6, reason stop_flag),
     consuming the flag and approving nothing; a rerun then resumes to completion."""
     workdir = tmp_path / "work"
-    (workdir / ".wiggum").mkdir(parents=True)
-    stop_flag = workdir / ".wiggum" / "stop.flag"
+    (workdir / ".specstride").mkdir(parents=True)
+    stop_flag = workdir / ".specstride" / "stop.flag"
     stop_flag.write_text("")
 
     result, _workdir, events = _run_orchestrator(tmp_path, verdict="APPROVED")
@@ -207,7 +207,7 @@ def test_stop_flag_halts_cleanly_and_rerun_resumes(tmp_path):
 
     stops = [e for e in events if e["event"] == "run_stop"]
     assert stops and stops[-1]["reason"] == "stop_flag"
-    gates = workdir / ".wiggum" / "features" / "obs-lifecycle" / "gates"
+    gates = workdir / ".specstride" / "features" / "obs-lifecycle" / "gates"
     assert not (gates / "GATE1-APPROVED").exists(), "a stopped run approves nothing"
 
     # Rerun (no stop.flag) drives the same feature to completion — proof the halt
@@ -237,12 +237,12 @@ def test_critic_rejection_halts_at_max_rejects_without_approval(tmp_path):
     assert stops and stops[-1]["reason"] == "max_rejects"
     assert stops[-1]["phase"] == "1"
 
-    gates = workdir / ".wiggum" / "features" / "obs-lifecycle" / "gates"
+    gates = workdir / ".specstride" / "features" / "obs-lifecycle" / "gates"
     assert not (gates / "GATE1-APPROVED").exists()
 
 
 def _feature_paths(workdir):
-    feature = workdir / ".wiggum" / "features" / "obs-lifecycle"
+    feature = workdir / ".specstride" / "features" / "obs-lifecycle"
     return feature, feature / "gates", feature / "attempts" / "phase1"
 
 
@@ -318,7 +318,7 @@ def test_required_verification_runs_release_gate_when_phases_are_already_approve
     npm.write_text("#!/bin/sh\nexit 0\n")
     npm.chmod(npm.stat().st_mode | stat.S_IXUSR)
 
-    gates = tmp_path / ".wiggum" / "features" / "default" / "gates"
+    gates = tmp_path / ".specstride" / "features" / "default" / "gates"
     gates.mkdir(parents=True)
     (gates / "GATE1-APPROVED").write_text("")
 
@@ -355,7 +355,7 @@ def test_required_verification_runs_release_gate_when_phases_are_already_approve
         os.path.join(generated, "verification.generated.json")
     )
     runs = sorted(
-        (tmp_path / ".wiggum" / "features" / "default" / "runs").iterdir()
+        (tmp_path / ".specstride" / "features" / "default" / "runs").iterdir()
     )
     assert len(runs) == 1
     canonical = runs[0] / "verification" / "verification-plan.json"
@@ -390,12 +390,12 @@ def test_default_verification_executes_and_isolates_artifacts_by_feature(tmp_pat
     npm.chmod(npm.stat().st_mode | stat.S_IXUSR)
     env = dict(os.environ)
     env["PATH"] = "%s:/usr/bin:/bin" % fake_bin
-    env.pop("WIGGUM_VERIFICATION", None)
-    env.pop("WIGGUM_TEST_PLAN", None)
-    env.pop("WIGGUM_GENERATE_TESTS", None)
+    env.pop("SPECSTRIDE_VERIFICATION", None)
+    env.pop("SPECSTRIDE_TEST_PLAN", None)
+    env.pop("SPECSTRIDE_GENERATE_TESTS", None)
 
     for raw_feature, slug in (("001/alpha", "001-alpha"), ("002-beta", "002-beta")):
-        gates = workdir / ".wiggum" / "features" / slug / "gates"
+        gates = workdir / ".specstride" / "features" / slug / "gates"
         gates.mkdir(parents=True)
         (gates / "GATE1-APPROVED").write_text("")
         result = subprocess.run(
@@ -415,19 +415,19 @@ def test_default_verification_executes_and_isolates_artifacts_by_feature(tmp_pat
         assert (artifact_dir / "TEST_PLAN.md").is_file()
         assert (artifact_dir / "generated" / "verification.generated.json").is_file()
 
-        runs = list((workdir / ".wiggum" / "features" / slug / "runs").iterdir())
+        runs = list((workdir / ".specstride" / "features" / slug / "runs").iterdir())
         assert len(runs) == 1
         assert (runs[0] / "verification" / "verification-plan.json").is_file()
         assert (runs[0] / "verification" / "release.json").is_file()
 
-        config = (workdir / ".wiggum" / "features" / slug / "last-run.conf").read_text()
+        config = (workdir / ".specstride" / "features" / slug / "last-run.conf").read_text()
         assert "VERIFICATION=required" in config
         assert "TEST_PLAN=%s" % (artifact_dir / "TEST_PLAN.md") in config
         assert "GENERATE_TESTS=%s" % (artifact_dir / "generated") in config
 
     assert (workdir / "testautomation" / "001-alpha" / "TEST_PLAN.md").is_file()
     assert (workdir / "testautomation" / "002-beta" / "TEST_PLAN.md").is_file()
-    root_config = (workdir / ".wiggum" / "last-run.conf").read_text()
+    root_config = (workdir / ".specstride" / "last-run.conf").read_text()
     assert "FEATURE=002-beta" in root_config
 
 
@@ -458,7 +458,7 @@ def test_accelerator_takes_the_retry_after_a_new_hint_then_yields_to_proposer(tm
     rem = [e for e in events if e["event"] == "accelerator_start"][0]
     assert rem["phase"] == "1" and rem["backend"] == "prime"
 
-    feature = workdir / ".wiggum" / "features" / "obs-lifecycle"
+    feature = workdir / ".specstride" / "features" / "obs-lifecycle"
     rem_prompt = (feature / "accelerator-prompt.phase1.txt").read_text()
     assert "You are the ACCELERATOR" in rem_prompt
     assert "your PRIMARY instruction" in rem_prompt
@@ -479,7 +479,7 @@ def test_accelerator_takes_the_retry_after_a_new_hint_then_yields_to_proposer(tm
 def test_accelerator_can_be_disabled(tmp_path):
     result, _workdir, events = _run_orchestrator(
         tmp_path, verdict="REJECTED", max_iter="1", max_rejects="2",
-        extra_env={"WIGGUM_ACCELERATOR": "false"})
+        extra_env={"SPECSTRIDE_ACCELERATOR": "false"})
     assert result.returncode == 2, result.stdout + "\n" + result.stderr
     names = _names(events)
     assert "accelerator_start" not in names
@@ -550,13 +550,13 @@ def test_critic_outage_halts_before_burning_the_reject_budget(tmp_path):
     contentless ("(no critic output)"), so every further attempt is a full agent
     pass run blind. No other breaker catches it: check_oscillation keys on
     criterion IDs, and a contentless feedback has none. The run must halt at
-    WIGGUM_CRITIC_MALFORMED_LIMIT with reason critic_unavailable (exit 1), which
+    SPECSTRIDE_CRITIC_MALFORMED_LIMIT with reason critic_unavailable (exit 1), which
     names the real cause, rather than at max_rejects (exit 2), which would blame
     the code.
     """
     result, workdir, events = _run_orchestrator(
         tmp_path, verdict="MALFORMED", max_iter="1", max_rejects="10",
-        extra_env={"WIGGUM_CRITIC_MALFORMED_LIMIT": "2"})
+        extra_env={"SPECSTRIDE_CRITIC_MALFORMED_LIMIT": "2"})
 
     assert result.returncode == 1, result.stdout + "\n" + result.stderr
 
@@ -574,7 +574,7 @@ def test_critic_outage_halts_before_burning_the_reject_budget(tmp_path):
     assert stops[-1]["streak"] == "2"
     assert len([e for e in events if e["event"] == "reject"]) == 2
 
-    gates = workdir / ".wiggum" / "features" / "obs-lifecycle" / "gates"
+    gates = workdir / ".specstride" / "features" / "obs-lifecycle" / "gates"
     assert not (gates / "GATE1-APPROVED").exists(), "an unanswered critic approves nothing"
 
 
@@ -584,7 +584,7 @@ def test_a_genuine_rejection_resets_the_critic_outage_streak(tmp_path):
     it resets the streak and the run stays on the normal max_rejects path."""
     result, _workdir, events = _run_orchestrator(
         tmp_path, verdict="REJECTED", max_iter="1", max_rejects="2",
-        extra_env={"WIGGUM_CRITIC_MALFORMED_LIMIT": "1"})
+        extra_env={"SPECSTRIDE_CRITIC_MALFORMED_LIMIT": "1"})
 
     # Limit of 1 would trip on the very first malformed verdict; none occur, so
     # the run halts the ordinary way instead.
@@ -606,10 +606,10 @@ def test_orchestrator_refuses_a_missing_verification_commands_document(tmp_path)
     fake = _fake_prime(tmp_path)
     env = dict(os.environ)
     env.update({
-        "WIGGUM_PRIME_AGENT_BIN": str(fake),
+        "SPECSTRIDE_PRIME_AGENT_BIN": str(fake),
         "WORKDIR_ABS": str(workdir),
-        "WIGGUM_GIT_COMMITS": "off",
-        "WIGGUM_AGENT_STREAM": "false",
+        "SPECSTRIDE_GIT_COMMITS": "off",
+        "SPECSTRIDE_AGENT_STREAM": "false",
     })
     result = subprocess.run(
         [
@@ -666,11 +666,11 @@ def test_orchestrator_executes_declared_commands_and_records_the_revision(tmp_pa
                 "phase": 1,
                 "executable": "/usr/bin/env",
                 "args": ["sh", "-c",
-                         'test "$WIGGUM_TEST_MARK" = declared && echo ran > "$1"',
+                         'test "$SPECSTRIDE_TEST_MARK" = declared && echo ran > "$1"',
                          "sh", str(witness)],
                 "cwd": str(workdir),
                 "timeoutSec": 60,
-                "env": {"WIGGUM_TEST_MARK": "declared"},
+                "env": {"SPECSTRIDE_TEST_MARK": "declared"},
             },
             {
                 "id": "p1-prestage",
@@ -694,10 +694,10 @@ def test_orchestrator_executes_declared_commands_and_records_the_revision(tmp_pa
             },
         ],
     }))
-    # The run writes every artifact under .wiggum/; ignoring it keeps the tree
+    # The run writes every artifact under .specstride/; ignoring it keeps the tree
     # clean, which is what lets the gate reuse the pre-stage at all.
     (workdir / ".gitignore").write_text(
-        ".wiggum/\ntestautomation/\ndeclared-ran.txt\n"
+        ".specstride/\ntestautomation/\ndeclared-ran.txt\n"
     )
     subprocess.run(["git", "init", "-q", str(workdir)], check=True)
     subprocess.run(["git", "-C", str(workdir), "add", "-A"], check=True)
@@ -709,11 +709,11 @@ def test_orchestrator_executes_declared_commands_and_records_the_revision(tmp_pa
 
     env = dict(os.environ)
     env.update({
-        "WIGGUM_PRIME_AGENT_BIN": str(fake),
+        "SPECSTRIDE_PRIME_AGENT_BIN": str(fake),
         "WORKDIR_ABS": str(workdir),
         "ORDER_WITNESS": str(ordering),
-        "WIGGUM_GIT_COMMITS": "off",
-        "WIGGUM_AGENT_STREAM": "false",
+        "SPECSTRIDE_GIT_COMMITS": "off",
+        "SPECSTRIDE_AGENT_STREAM": "false",
         "FAKE_VERDICT": "APPROVED",
     })
     result = subprocess.run(
@@ -732,19 +732,19 @@ def test_orchestrator_executes_declared_commands_and_records_the_revision(tmp_pa
     assert witness.is_file(), (
         "declared command never ran\n" + result.stdout + result.stderr
     )
-    runs = workdir / ".wiggum" / "features" / "obs-lifecycle" / "runs"
+    runs = workdir / ".specstride" / "features" / "obs-lifecycle" / "runs"
     evidence_files = sorted(runs.rglob("verification/phase-1-attempt-*.json"))
     assert evidence_files, result.stdout + result.stderr
     evidence = json.loads(evidence_files[0].read_text())
     declared = [c for c in evidence["commands"] if c["source"] == "declared"]
     assert [c["declaredId"] for c in declared] == ["p1-witness", "p1-prestage"]
-    assert declared[0]["env"] == {"WIGGUM_TEST_MARK": "declared"}
+    assert declared[0]["env"] == {"SPECSTRIDE_TEST_MARK": "declared"}
     assert evidence["sourceRevision"]["available"] is True
     assert len(evidence["sourceRevision"]["revision"]) == 40
 
-    # The saved config carries the document so `wiggum resume` cannot silently
+    # The saved config carries the document so `specstride resume` cannot silently
     # narrow later gates back to the discovered heuristic.
-    conf = (workdir / ".wiggum" / "features" / "obs-lifecycle" / "last-run.conf").read_text()
+    conf = (workdir / ".specstride" / "features" / "obs-lifecycle" / "last-run.conf").read_text()
     assert "VERIFICATION_COMMANDS=" in conf
     assert str(commands) in conf
     # ── step 4: the pre-stage ran ONCE, and it ran BEFORE the proposer ────────
@@ -824,11 +824,11 @@ def test_a_per_phase_override_is_resolved_and_sourced(tmp_path):
 
 
 def test_the_env_spelling_of_the_override_is_the_same_route(tmp_path):
-    """WIGGUM_PROPOSER_TIMEOUT_PHASE_<N> is what a wrapper or a resume sets; it
+    """SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_<N> is what a wrapper or a resume sets; it
     resolves identically to the flag."""
     _result, _workdir, events = _run_orchestrator(
         tmp_path, proposer_timeout=900,
-        extra_env={"WIGGUM_PROPOSER_TIMEOUT_PHASE_2": "1500"})
+        extra_env={"SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_2": "1500"})
 
     caps = {c["phase"]: c for c in _caps(events)}
     assert caps["1"]["seconds"] == "900" and caps["1"]["source"] == "global"
@@ -850,9 +850,9 @@ def test_the_per_phase_timeout_reaches_the_proposer_subprocess(tmp_path):
     result, _workdir, events = _run_orchestrator(
         tmp_path, proposer_timeout=900, phase_timeouts=("1=3",),
         extra_env={"FAKE_PROPOSER_SLEEP": "60",
-                   "WIGGUM_WATCHDOG_TICK": "1",
-                   "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "0",
-                   "WIGGUM_PROPOSER_REPEAT_LIMIT": "0"},
+                   "SPECSTRIDE_WATCHDOG_TICK": "1",
+                   "SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "0",
+                   "SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "0"},
         timeout=180)
 
     kills = [e for e in events if e["event"] == "pass_killed"]
@@ -865,16 +865,16 @@ def test_the_per_phase_timeout_reaches_the_proposer_subprocess(tmp_path):
 
 
 def test_last_run_conf_round_trips_the_ceiling_and_its_overrides(tmp_path):
-    """PROPOSER_TIMEOUT was never persisted, so `wiggum resume` silently reverted
+    """PROPOSER_TIMEOUT was never persisted, so `specstride resume` silently reverted
     every phase to the 1800s default. Both it and the per-phase map must survive."""
     _result, workdir, _events = _run_orchestrator(
         tmp_path, proposer_timeout=900, phase_timeouts=("2=1234", "1=600"))
 
     for conf_path in (
-        workdir / ".wiggum" / "features" / "obs-lifecycle" / "last-run.conf",
-        workdir / ".wiggum" / "last-run.conf",
+        workdir / ".specstride" / "features" / "obs-lifecycle" / "last-run.conf",
+        workdir / ".specstride" / "last-run.conf",
     ):
-        # The file is %q-escaped and sourced by `wiggum resume`, so read it the
+        # The file is %q-escaped and sourced by `specstride resume`, so read it the
         # way resume does rather than pattern-matching one escaping of a space.
         sourced = subprocess.run(
             ["/usr/bin/bash", "-c",
@@ -907,10 +907,10 @@ def test_the_declared_document_can_carry_the_phase_ceiling(tmp_path):
     }))
     env = dict(os.environ)
     env.update({
-        "WIGGUM_PRIME_AGENT_BIN": str(fake),
+        "SPECSTRIDE_PRIME_AGENT_BIN": str(fake),
         "WORKDIR_ABS": str(workdir),
-        "WIGGUM_GIT_COMMITS": "off",
-        "WIGGUM_AGENT_STREAM": "false",
+        "SPECSTRIDE_GIT_COMMITS": "off",
+        "SPECSTRIDE_AGENT_STREAM": "false",
         "FAKE_VERDICT": "APPROVED",
     })
     result = subprocess.run(
@@ -953,10 +953,10 @@ def test_an_explicit_override_outranks_the_declared_document(tmp_path):
     }))
     env = dict(os.environ)
     env.update({
-        "WIGGUM_PRIME_AGENT_BIN": str(fake),
+        "SPECSTRIDE_PRIME_AGENT_BIN": str(fake),
         "WORKDIR_ABS": str(workdir),
-        "WIGGUM_GIT_COMMITS": "off",
-        "WIGGUM_AGENT_STREAM": "false",
+        "SPECSTRIDE_GIT_COMMITS": "off",
+        "SPECSTRIDE_AGENT_STREAM": "false",
         "FAKE_VERDICT": "APPROVED",
     })
     result = subprocess.run(
@@ -979,7 +979,7 @@ def test_an_explicit_override_outranks_the_declared_document(tmp_path):
 
 # ── route 1.5: the learned ceiling (step 5 wired into step 2) ────────────────
 def _seed_applied(tmp_path, phase, value):
-    learning = tmp_path / "work" / ".wiggum" / "features" / "obs-lifecycle" / "learning"
+    learning = tmp_path / "work" / ".specstride" / "features" / "obs-lifecycle" / "learning"
     learning.mkdir(parents=True, exist_ok=True)
     (learning / "applied.json").write_text(json.dumps(
         {"knob": "proposer_timeout", "phase": phase, "value": value,
@@ -987,11 +987,11 @@ def _seed_applied(tmp_path, phase, value):
 
 
 def test_an_applied_learning_decision_resolves_as_learned_only_when_applying(tmp_path):
-    """With WIGGUM_LEARNING=apply an applied decision for phase 1 is the ceiling
+    """With SPECSTRIDE_LEARNING=apply an applied decision for phase 1 is the ceiling
     and is SOURCED as learned; phase 2, with no decision, stays global."""
     _seed_applied(tmp_path, 1, 1234)
     _result, _workdir, events = _run_orchestrator(
-        tmp_path, proposer_timeout=900, extra_env={"WIGGUM_LEARNING": "apply"})
+        tmp_path, proposer_timeout=900, extra_env={"SPECSTRIDE_LEARNING": "apply"})
     caps = {c["phase"]: c for c in _caps(events)}
     assert caps["1"]["seconds"] == "1234" and caps["1"]["source"] == "learned"
     assert caps["2"]["seconds"] == "900" and caps["2"]["source"] == "global"
@@ -1011,7 +1011,7 @@ def test_an_explicit_override_outranks_a_learned_value(tmp_path):
     _seed_applied(tmp_path, 1, 1234)
     _result, _workdir, events = _run_orchestrator(
         tmp_path, proposer_timeout=900, phase_timeouts=("1=777",),
-        extra_env={"WIGGUM_LEARNING": "apply"})
+        extra_env={"SPECSTRIDE_LEARNING": "apply"})
     caps = {c["phase"]: c for c in _caps(events)}
     assert caps["1"]["seconds"] == "777" and caps["1"]["source"] == "override"
 
@@ -1019,14 +1019,14 @@ def test_an_explicit_override_outranks_a_learned_value(tmp_path):
 # ── the phase_done observation hook (design §5.4) ────────────────────────────
 # The loop's per-phase observations are written where the phase closes, not
 # recomputed on demand from a run's events later. The hook is deliberately the
-# weakest thing that can work: one call site, guarded by WIGGUM_LEARNING, and
+# weakest thing that can work: one call site, guarded by SPECSTRIDE_LEARNING, and
 # best-effort in every direction — because an observation that can fail an
 # APPROVED phase is worse than no observation at all.
 #
 # `learn.py observe` itself is landing on another branch, so these tests run the
 # orchestrator from a script root whose lib/learn.py is a stand-in: one that has
 # the subcommand, one that does not, one that fails. That is also how the
-# absence is pinned — a Wiggum whose learn.py predates `observe` must run
+# absence is pinned — a Specstride whose learn.py predates `observe` must run
 # exactly as it always did.
 _LEARN_HEAD = '''#!/usr/bin/env python3
 import argparse, json, sys
@@ -1086,7 +1086,7 @@ def _script_root(tmp_path, learn_source):
 
 
 def _observations(workdir):
-    learning = workdir / ".wiggum" / "features" / "obs-lifecycle" / "learning"
+    learning = workdir / ".specstride" / "features" / "obs-lifecycle" / "learning"
     return sorted(p.name for p in learning.glob("phase-*.json")) if learning.is_dir() else []
 
 
@@ -1107,7 +1107,7 @@ def test_phase_done_writes_one_observation_per_phase_and_announces_it(tmp_path):
     orchestrator = _script_root(tmp_path, _learn_stub())
     result, workdir, events = _run_orchestrator(
         tmp_path, orchestrator=orchestrator,
-        extra_env={"WIGGUM_LEARNING": "suggest"})
+        extra_env={"SPECSTRIDE_LEARNING": "suggest"})
 
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
     assert _observations(workdir) == ["phase-1.json", "phase-2.json"]
@@ -1131,12 +1131,12 @@ def test_phase_done_writes_one_observation_per_phase_and_announces_it(tmp_path):
 
 
 def test_a_learn_py_without_observe_leaves_the_run_untouched(tmp_path):
-    """`observe` lands on another branch. A Wiggum whose learn.py predates it
+    """`observe` lands on another branch. A Specstride whose learn.py predates it
     must run exactly as before — silently, with no observation and no failure."""
     orchestrator = _script_root(tmp_path, _learn_stub(observe=False))
     result, workdir, events = _run_orchestrator(
         tmp_path, orchestrator=orchestrator,
-        extra_env={"WIGGUM_LEARNING": "suggest"})
+        extra_env={"SPECSTRIDE_LEARNING": "suggest"})
 
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
     assert _observations(workdir) == []
@@ -1151,13 +1151,13 @@ def test_a_failing_observe_never_fails_the_phase(tmp_path):
     orchestrator = _script_root(tmp_path, _learn_stub(fails=True))
     result, workdir, events = _run_orchestrator(
         tmp_path, orchestrator=orchestrator,
-        extra_env={"WIGGUM_LEARNING": "suggest"})
+        extra_env={"SPECSTRIDE_LEARNING": "suggest"})
 
     assert result.returncode == 0, result.stdout + "\n" + result.stderr
     assert _observations(workdir) == []
     assert [e for e in events if e["event"] == "learning_observed"] == []
-    gates = workdir / ".wiggum" / "features" / "obs-lifecycle" / "gates"
+    gates = workdir / ".specstride" / "features" / "obs-lifecycle" / "gates"
     assert (gates / "GATE1-APPROVED").is_file() and (gates / "GATE2-APPROVED").is_file()
-    run_log = sorted((workdir / ".wiggum" / "features" / "obs-lifecycle" / "runs")
+    run_log = sorted((workdir / ".specstride" / "features" / "obs-lifecycle" / "runs")
                      .rglob("run.log"))[-1].read_text()
     assert "observing phase 1 failed" in run_log

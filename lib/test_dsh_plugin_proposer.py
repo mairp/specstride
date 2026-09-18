@@ -8,8 +8,8 @@ PROPOSER = Path(__file__).parents[1] / "proposer.sh"
 
 
 def test_dsh_proposer_installs_allowlisted_request_then_restarts(tmp_path):
-    evidence = tmp_path / ".wiggum" / "gates" / "GATE1-EVIDENCE.md"
-    request = tmp_path / ".wiggum" / "features" / "feature-test" / "dsh-plugin-request.json"
+    evidence = tmp_path / ".specstride" / "gates" / "GATE1-EVIDENCE.md"
+    request = tmp_path / ".specstride" / "features" / "feature-test" / "dsh-plugin-request.json"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
     fake_dsh = tmp_path / "fake-dsh"
@@ -21,17 +21,17 @@ def test_dsh_proposer_installs_allowlisted_request_then_restarts(tmp_path):
         "n=0; [[ -f \"$COUNT\" ]] && n=$(cat \"$COUNT\"); n=$((n+1)); echo $n > \"$COUNT\"\n"
         "if [[ $n -eq 1 ]]; then\n"
         "  mkdir -p \"$(dirname \"$REQUEST\")\"\n"
-        "  printf '%s' '{\"contract\":\"wiggum-dsh-plugin-request/v1\",\"plugins\":[\"@safe/plugin@1.2.3\"],\"reason\":\"needed\"}' > \"$REQUEST.tmp\"\n"
+        "  printf '%s' '{\"contract\":\"specstride-dsh-plugin-request/v1\",\"plugins\":[\"@safe/plugin@1.2.3\"],\"reason\":\"needed\"}' > \"$REQUEST.tmp\"\n"
         "  mv \"$REQUEST.tmp\" \"$REQUEST\"\n"
         "else mkdir -p \"$(dirname \"$EVIDENCE\")\"; echo done > \"$EVIDENCE\"; fi\n"
     )
     fake_dsh.chmod(0o755)
     env = os.environ.copy()
     env.update({
-        "WIGGUM_DSH_BIN": str(fake_dsh),
-        "WIGGUM_DSH_PLUGIN_ALLOWLIST": "@safe/plugin@1.2.3",
-        "WIGGUM_AGENT_STREAM": "false",
-        "WIGGUM_EVENTS": str(tmp_path / "events.jsonl"),
+        "SPECSTRIDE_DSH_BIN": str(fake_dsh),
+        "SPECSTRIDE_DSH_PLUGIN_ALLOWLIST": "@safe/plugin@1.2.3",
+        "SPECSTRIDE_AGENT_STREAM": "false",
+        "SPECSTRIDE_EVENTS": str(tmp_path / "events.jsonl"),
         "COUNT": str(count), "INSTALLS": str(installs), "REQUEST": str(request),
         "EVIDENCE": str(evidence),
     })
@@ -55,19 +55,19 @@ def test_dsh_proposer_installs_allowlisted_request_then_restarts(tmp_path):
 
 def test_dsh_proposer_halts_on_denied_request(tmp_path):
     evidence = tmp_path / "evidence.md"
-    request = tmp_path / ".wiggum" / "features" / "feature-test" / "dsh-plugin-request.json"
+    request = tmp_path / ".specstride" / "features" / "feature-test" / "dsh-plugin-request.json"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
     fake_dsh = tmp_path / "fake-dsh"
     fake_dsh.write_text(
         "#!/bin/bash\nmkdir -p \"$(dirname \"$REQUEST\")\"\n"
-        "printf '%s' '{\"contract\":\"wiggum-dsh-plugin-request/v1\",\"plugins\":[\"evil@1.0.0\"],\"reason\":\"wanted\"}' > \"$REQUEST\"\n"
+        "printf '%s' '{\"contract\":\"specstride-dsh-plugin-request/v1\",\"plugins\":[\"evil@1.0.0\"],\"reason\":\"wanted\"}' > \"$REQUEST\"\n"
     )
     fake_dsh.chmod(0o755)
     env = os.environ.copy()
-    env.update({"WIGGUM_DSH_BIN": str(fake_dsh),
-                "WIGGUM_DSH_PLUGIN_ALLOWLIST": "safe@1.0.0",
-                "WIGGUM_AGENT_STREAM": "false", "REQUEST": str(request)})
+    env.update({"SPECSTRIDE_DSH_BIN": str(fake_dsh),
+                "SPECSTRIDE_DSH_PLUGIN_ALLOWLIST": "safe@1.0.0",
+                "SPECSTRIDE_AGENT_STREAM": "false", "REQUEST": str(request)})
     result = subprocess.run([
         "bash", str(PROPOSER), "-w", str(tmp_path), "-e", str(evidence),
         "-f", str(prompt), "--backend", "dsh", "-n", "2", "-s", "0",
