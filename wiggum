@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# wiggum — deprecated alias. Specstride was formerly Wiggum; this command was
+# renamed to `specstride` and forwards to it unchanged. Removed in a future release.
+echo "wiggum: this command was renamed to specstride; the alias will be removed in a future release" >&2
+exec "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/specstride" "$@"
