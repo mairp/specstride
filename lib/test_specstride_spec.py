@@ -482,3 +482,14 @@ def test_first_unapproved_explicit_gates_dir(tmp_path):
     # bash shim with the 3rd arg passes it through.
     shim = _shim("specstride_spec_first_unapproved", str(spec), str(tmp_path), str(gates))
     assert shim.stdout.strip() == "1"
+
+
+def test_module_is_importable_under_its_new_name_only():
+    """Specstride was formerly Wiggum: the parser module was renamed, not copied."""
+    import importlib.util
+    assert importlib.util.find_spec("specstride_spec") is not None
+    assert importlib.util.find_spec("wiggum_spec") is None
+    assert not os.path.exists(os.path.join(HERE, "wiggum_spec.py"))
+    p = subprocess.run([sys.executable, "-c", "import wiggum_spec"], cwd=HERE,
+                       capture_output=True, text=True)
+    assert p.returncode != 0 and "ModuleNotFoundError" in p.stderr
