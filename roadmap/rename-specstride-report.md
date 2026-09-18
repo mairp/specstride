@@ -2,20 +2,22 @@
 
 Date: 2026-09-18
 
-Status: **Phases 0–4 done and green. Phase 5 stopped at PR creation**:
-the GitHub token cannot create pull requests (the exact error is below). Both
-branches are pushed. Nothing was merged, the repository was not renamed, and
-neither `main` was changed on GitHub.
+Status: **Done.** Phases 0–4 are green. For Phase 5, `gh pr create` was refused
+because the token cannot create pull requests (the error is below). On the
+owner's instruction, both `rename/specstride` branches were then pushed straight
+to `main` as fast-forwards: no merge commit, no force. After that the
+repository was renamed to `mairp/specstride`, and its description and topics were set.
 
 ## Outcome at a glance
 
 | Item | State |
 |---|---|
-| Wiggum rename (code, env, state dir, docs, shims, tests) | committed on `rename/specstride`, pushed |
-| mixture-of-loops (stage-kind alias, docs, tests) | committed on `rename/specstride`, pushed |
-| mixture-of-loops `main` docs commit (`8052c32`) | committed locally on `main`; on GitHub only through the pushed branch |
-| Pull requests | **not created** (token refused) |
-| Merge, `gh repo rename specstride`, description/topics, remote URL | **not done** (blocked on the PRs) |
+| Specstride `main` | `8a717ed9fc6e2f9403660b3d8c85ae1c547177d4` (fast-forward from `efc9c9a`), matches GitHub |
+| mixture-of-loops `main` | `07fb48157dcbfac8c7f9a2dc1657fa134a982fe1` (fast-forward from `45c2e1e`), matches GitHub |
+| Repository | https://github.com/mairp/specstride (the old `mairp/wiggum` URL redirects); local `origin` updated |
+| Description / topics | "From specs to tested code." / `ralph-loop`, `spec-driven-development`, `autonomous-coding`, `formerly-wiggum` |
+| Pull requests | none (the token cannot create them); the changes went to `main` directly, as instructed |
+| `rename/specstride` branches | still on both remotes (fully merged; safe to delete) |
 | `/root/.bashrc` | migrated (Specstride block, `wiggum()` kept, `WIGGUM_HOME` kept) |
 
 ## The Phase 5 error
@@ -31,30 +33,9 @@ token itself lacks the **Pull requests: write** permission. A repository
 rename also needs **Administration: write**, which this token probably lacks
 as well (untested).
 
-To finish, grant the token those permissions (or use `gh auth login` with a
-classic token), then run the remaining Phase 5 steps:
-
-```bash
-# Wiggum
-cd /root/wiggum
-gh pr create --base main --head rename/specstride --title "Rename Wiggum to Specstride" --fill
-gh pr merge --merge --delete-branch && git checkout main && git pull
-gh repo rename specstride --yes
-git remote set-url origin https://github.com/mairp/specstride.git && git fetch origin && git status -sb
-gh repo edit mairp/specstride --description "From specs to tested code." \
-  --add-topic ralph-loop --add-topic spec-driven-development \
-  --add-topic autonomous-coding --add-topic formerly-wiggum
-
-# mixture-of-loops (local main carries the docs commit 8052c32)
-cd /root/mixture-of-loops
-git push origin main
-gh pr create --base main --head rename/specstride --title "Target Specstride (formerly Wiggum)" --fill
-gh pr merge --merge --delete-branch && git checkout main && git pull
-```
-
-Until then the branches can be reviewed here:
-- https://github.com/mairp/wiggum/compare/main...rename/specstride
-- https://github.com/mairp/mixture-of-loops/compare/main...rename/specstride
+To open PRs in the future, the token needs "Pull requests: write" (or use a
+classic token through `gh auth login`). The rename itself succeeded with the
+current token.
 
 ## Commits
 
@@ -74,7 +55,7 @@ mixture-of-loops (`/root/mixture-of-loops`):
 | `8052c326865424fefe9c86945ac15e960c681bca` | `main` (local; also inside the pushed branch) | docs: add the how-it-works sequence diagram |
 | `07fb48157dcbfac8c7f9a2dc1657fa134a982fe1` | `rename/specstride` (pushed) | rename: target Specstride (formerly Wiggum); accept the old stage kind |
 
-PR URLs: none (creation refused). New repository URL: none yet (`mairp/wiggum` was not renamed).
+PR URLs: none (creation refused; pushed to `main` directly). New repository URL: https://github.com/mairp/specstride
 
 ## Test counts
 
@@ -211,12 +192,12 @@ $ ./run-002-extproc-data-path.sh --dry-run --no-color            (exit 0, stderr
 - **Smaller string renames.** Banner title: "Specstride · The Autonomous Ralph Loop". OTEL instrumentation scope: `specstride.ralph`. Provider-terminal contract id: `specstride-provider-terminal/v1`. dsh plugin install lock file: `.specstride-plugin-install.lock`. Nothing in these repos queries any of them. `job=ralph` and `service.name=ralph` are unchanged.
 - **`.bashrc` `wiggum()`** is `specstride "$@"` with no deprecation line, because it is the interactive shell's own alias. The tracked `wiggum` executable is the one that warns.
 - **mixture-of-loops normalization** goes a little beyond the legacy stage kind. In any stage, a `wiggum` command (argv, `command_available`, `command_success`) is rewritten to `specstride`, keeping its directory, so `/root/wiggum/wiggum` becomes `/root/wiggum/specstride`, and `WIGGUM_*` action env keys become `SPECSTRIDE_*`. Without this, the real 002 contract's `command` preflight stage would have kept calling the shim. The renderer publishes the normalized contract. The runtime resolves `.specstride/` and `.wiggum/` paths with Specstride's fallback rule, so a legacy postcondition like `.wiggum/features/…/PROGRESS.md` holds on a fresh workdir. `validate_contract()` now returns the list of warnings; it used to return `None`.
-- **This report was committed on `rename/specstride`, not `main`.** Phase 5 stopped before the merge, so pushing it to `main` would have described a rename that is not there. It rides along with the PR.
+- **No PRs.** The token cannot create pull requests, so on the owner's instruction both branches were fast-forwarded onto `main`, never forced.
 - **Commit trailers** use `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`, as the task asked. The work was actually done by Claude Opus 5.
 
 ## Follow-ups
 
-- **Finish Phase 5** with the commands above, once the token can create PRs (and rename the repository).
+- **Delete the merged `rename/specstride` branches** on both remotes when convenient.
 - **Out-of-scope consumers** keep working through the compatibility layer but should be migrated:
   - `/root/workflow_orchestration` (31 files): uses `WIGGUM_DIR` and `WIGGUM_OTEL_*` names and the `wiggum` command. The env names are mapped automatically; rename them when convenient.
   - `/root/fleet-config` (5 files): points at `/root/wiggum/.env` and sets `WIGGUM_*` keys such as `WIGGUM_COMPASS_KEY` and `WIGGUM_VISION_KEY`. `.env` files go through the same mapping. The path needs the checkout symlink if the checkout moves.
