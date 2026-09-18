@@ -53,7 +53,7 @@ def test_find_event_files_accepts_file_run_dir_and_dir_of_runs(tmp_path):
 # ── classifiers ──────────────────────────────────────────────────────────────
 def test_wait_classifier_matches_the_telemetry_report_idioms():
     for tgt in ("sleep 560; tail -4 /tmp/x.log", "tail -f run.log", "while pgrep -f x; do :; done",
-                "until grep -q ok f; do sleep 2; done", "pgrep -af wiggum", "ps aux | grep pytest",
+                "until grep -q ok f; do sleep 2; done", "pgrep -af specstride", "ps aux | grep pytest",
                 "watch -n 5 ls", "cd /x && sleep 30"):
         assert learn.classify_bash_target(tgt)[0], tgt
     for tgt in ("tail -4 /tmp/x.log", "pytest -q", "ls -la", "grep -n sleep lib/learn.py", "echo asleep"):
@@ -436,7 +436,7 @@ def test_knob_allowlist_is_locked_so_a_critic_facing_knob_can_never_be_added():
         # the operator's contract — never tunable by the loop
         "verification_commands", "verification_documents", "phase_timeouts_declared",
         # breakers must not relax themselves (§5.5)
-        "WIGGUM_PROPOSER_MAX_ERRORS", "WIGGUM_PROPOSER_MAX_NOPROGRESS", "WIGGUM_PROPOSER_MAX_CAPS",
+        "SPECSTRIDE_PROPOSER_MAX_ERRORS", "SPECSTRIDE_PROPOSER_MAX_NOPROGRESS", "SPECSTRIDE_PROPOSER_MAX_CAPS",
         "repeat_limit", "repeat_ignore",
     }
     assert never_allowed.isdisjoint(learn.ADJUSTABLE_KNOBS)
@@ -815,10 +815,10 @@ def test_off_reverts_every_currently_applied_knob_across_all_three_kinds(tmp_pat
 def test_resolve_returns_the_default_when_nothing_is_applied(tmp_path):
     applied, _ = _applied_paths(tmp_path)   # file does not even exist yet
     assert learn.resolve_knob("proposer_timeout", 7, 5400, applied,
-                               env={"WIGGUM_LEARNING": "apply"}) == 5400
+                               env={"SPECSTRIDE_LEARNING": "apply"}) == 5400
 
 
-def test_wiggum_learning_off_or_unset_is_a_total_no_op_for_resolve(tmp_path):
+def test_specstride_learning_off_or_unset_is_a_total_no_op_for_resolve(tmp_path):
     summary = learn.summarize(_events_for_phase(3, [1200.0, 1300.0, 1250.0]))
     applied, events_file = _applied_paths(tmp_path)
     entry = learn.apply_proposer_timeout(summary, 3, 5400, applied, events_file=events_file,
@@ -826,10 +826,10 @@ def test_wiggum_learning_off_or_unset_is_a_total_no_op_for_resolve(tmp_path):
     assert entry["value"] != 5400
     # unset, "off", and any other spelling all ignore the applied decision entirely
     assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env={}) == 5400
-    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env={"WIGGUM_LEARNING": "off"}) == 5400
-    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env={"WIGGUM_LEARNING": "suggest"}) == 5400
+    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env={"SPECSTRIDE_LEARNING": "off"}) == 5400
+    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env={"SPECSTRIDE_LEARNING": "suggest"}) == 5400
     # only the explicit "apply" value turns resolve on
-    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env={"WIGGUM_LEARNING": "apply"}) == entry["value"]
+    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env={"SPECSTRIDE_LEARNING": "apply"}) == entry["value"]
 
 
 def test_resolve_cli_is_the_documented_shell_callable_entry_point(tmp_path):
@@ -839,7 +839,7 @@ def test_resolve_cli_is_the_documented_shell_callable_entry_point(tmp_path):
     summary = learn.summarize(_events_for_phase(9, [1200.0, 1300.0, 1250.0]))
     applied, _ = _applied_paths(tmp_path)
     entry = learn.apply_proposer_timeout(summary, 9, 5400, applied, run_id="learn-cli-1")
-    env = dict(os.environ, WIGGUM_LEARNING="apply")
+    env = dict(os.environ, SPECSTRIDE_LEARNING="apply")
     r = subprocess.run(
         [sys.executable, os.path.join(HERE, "learn.py"), "resolve",
          "--knob", "proposer_timeout", "--phase", "9", "--default", "5400",
@@ -847,8 +847,8 @@ def test_resolve_cli_is_the_documented_shell_callable_entry_point(tmp_path):
         capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == str(entry["value"])
-    # and with WIGGUM_LEARNING unset, the same call is a total no-op
-    env_off = {k: v for k, v in os.environ.items() if k != "WIGGUM_LEARNING"}
+    # and with SPECSTRIDE_LEARNING unset, the same call is a total no-op
+    env_off = {k: v for k, v in os.environ.items() if k != "SPECSTRIDE_LEARNING"}
     r2 = subprocess.run(
         [sys.executable, os.path.join(HERE, "learn.py"), "resolve",
          "--knob", "proposer_timeout", "--phase", "9", "--default", "5400",
@@ -865,7 +865,7 @@ def test_resolve_yield_poll_interval_clamps_to_the_hard_bounds(tmp_path):
         "samples": 3, "source_runs": [], "metric": "job_duration_p50", "applied_at": "x",
     })
     # an out-of-band 500 (e.g. hand-edited) still clamps to the hard 300 s bound
-    assert learn.resolve_knob("yield_poll_interval", 6, 30, applied, env={"WIGGUM_LEARNING": "apply"}) == 300
+    assert learn.resolve_knob("yield_poll_interval", 6, 30, applied, env={"SPECSTRIDE_LEARNING": "apply"}) == 300
     assert learn.resolve_knob("yield_poll_interval", 6, 30, applied, env={}) == 30
 
 
@@ -873,10 +873,10 @@ def test_resolve_inject_yield_hint_returns_one_or_zero_never_a_python_bool(tmp_p
     applied, _ = _applied_paths(tmp_path)
     summary = learn.summarize(_events_for_phase_wait(7, [(4, 5, None), (4, 5, None), (3, 5, None)]))
     learn.apply_inject_yield_hint(summary, 7, applied, run_id="learn-iy-3")
-    on = learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={"WIGGUM_LEARNING": "apply"})
+    on = learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={"SPECSTRIDE_LEARNING": "apply"})
     assert on == 1 and type(on) is int
     assert learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={}) == 0
-    assert learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={"WIGGUM_LEARNING": "off"}) == 0
+    assert learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={"SPECSTRIDE_LEARNING": "off"}) == 0
 
 
 # -- CLI: apply now round-trips for both new knobs too -----------------------

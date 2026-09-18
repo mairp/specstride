@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# wiggum-digest.sh — compress the live wiggum phase-8 state into ~40 lines.
+# specstride-digest.sh — compress the live specstride phase-8 state into ~40 lines.
 # Purpose: a babysitting agent reads ONE small file instead of grepping a 16k-line
 # resume log + multi-MB proof logs on every wake. Read-only; writes only its output file.
 #
-# Usage: wiggum-digest.sh [output-path]   (default /tmp/wiggum-digest.md)
+# Usage: specstride-digest.sh [output-path]   (default /tmp/specstride-digest.md)
 set -u
 
-OUT="${1:-/tmp/wiggum-digest.md}"
-F=/root/ainetops-demo/.wiggum/features/001-ainetops-sonic-evpn-fabric
+OUT="${1:-/tmp/specstride-digest.md}"
+# shellcheck source=/dev/null
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/specstride-lib.sh"
+W=/root/ainetops-demo
+specstride_resolve_state_dir "$W" 2>/dev/null   # the live run may predate the rename
+S="$W/$STATE_BASENAME"
+F="$S/features/001-ainetops-sonic-evpn-fabric"
 RUN=$(ls -1dt "$F"/runs/*/ 2>/dev/null | head -1)
 CYC="$F/gates/proofs/cycles/cycles.run.log"
 EVJ="$RUN/events.jsonl"
 
 {
-  echo "# wiggum phase-8 digest — $(date '+%Y-%m-%d %H:%M:%S %Z')"
+  echo "# specstride phase-8 digest — $(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo
   echo "## processes"
   # NB: the orchestrator's own cmdline contains "--long-job-cmd ...cycles_runner.sh",
@@ -22,8 +27,8 @@ EVJ="$RUN/events.jsonl"
     pids=$(pgrep -af "bash [^ ]*$n( |\$)" | awk '{print $1}')
     # proposer/critic: prefer the pid the loop currently owns
     case "$n" in
-      proposer.sh) cur=$(cat /root/ainetops-demo/.wiggum/proposer.pid 2>/dev/null) ;;
-      critic.sh)   cur=$(cat /root/ainetops-demo/.wiggum/critic.pid 2>/dev/null) ;;
+      proposer.sh) cur=$(cat "$S/proposer.pid" 2>/dev/null) ;;
+      critic.sh)   cur=$(cat "$S/critic.pid" 2>/dev/null) ;;
       *)           cur="" ;;
     esac
     if [ -n "$cur" ] && kill -0 "$cur" 2>/dev/null; then
@@ -47,7 +52,7 @@ EVJ="$RUN/events.jsonl"
   echo "- pass started: $(grep -E 'proposer pass [0-9]+/[0-9]+' "$RUN/run.log" 2>/dev/null | tail -1 | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+')"
   echo "- evidence file: $( [ -f "$F/gates/GATE8-EVIDENCE.md" ] && echo "PRESENT ($(wc -c < "$F/gates/GATE8-EVIDENCE.md") bytes)" || echo MISSING )"
   echo "- gate8 approved: $( [ -f "$F/gates/GATE8-APPROVED" ] && echo YES || echo no )"
-  echo "- stop.flag: $( [ -f /root/ainetops-demo/.wiggum/stop.flag ] && echo PRESENT || echo absent )"
+  echo "- stop.flag: $( [ -f "$S/stop.flag" ] && echo PRESENT || echo absent )"
 
   echo
   echo "## watchdog kills / errors this run"

@@ -15,7 +15,11 @@ import re
 import subprocess
 import sys
 
-CONTRACT = "wiggum-dsh-plugin-request/v1"
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
+
+CONTRACT = "specstride-dsh-plugin-request/v1"
 PACKAGE_SPEC = re.compile(
     r"^(?:@[a-z0-9][a-z0-9._-]*/)?[a-z0-9][a-z0-9._-]*@"
     r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
@@ -78,7 +82,7 @@ def process_request(request_path, archive_dir, allowlist, dsh_bin="dsh", profile
     request_path = Path(request_path)
     archive_dir = Path(archive_dir)
     dsh_home = Path(os.environ.get("DSH_HOME") or (Path.home() / ".dsh"))
-    lock_path = dsh_home / "profiles" / profile / ".wiggum-plugin-install.lock"
+    lock_path = dsh_home / "profiles" / profile / ".specstride-plugin-install.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     archive_dir.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as lock:
@@ -105,7 +109,7 @@ def process_request(request_path, archive_dir, allowlist, dsh_bin="dsh", profile
         archived_request = archive_dir / (stamp + ".request.json")
         os.replace(request_path, archived_request)
         receipt = {
-            "contract": "wiggum-dsh-plugin-install/v1",
+            "contract": "specstride-dsh-plugin-install/v1",
             "status": "installed",
             "profile": profile,
             "plugins": request["plugins"],
@@ -122,10 +126,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Process one allowlisted DSH plugin request")
     parser.add_argument("--request", required=True)
     parser.add_argument("--archive-dir", required=True)
-    parser.add_argument("--allowlist", default=os.environ.get("WIGGUM_DSH_PLUGIN_ALLOWLIST", ""))
-    parser.add_argument("--dsh-bin", default=os.environ.get("WIGGUM_DSH_BIN", "dsh"))
-    parser.add_argument("--profile", default=os.environ.get("WIGGUM_DSH_PROFILE", "headless"))
-    parser.add_argument("--timeout", type=int, default=int(os.environ.get("WIGGUM_DSH_PLUGIN_TIMEOUT", "600")))
+    parser.add_argument("--allowlist", default=os.environ.get("SPECSTRIDE_DSH_PLUGIN_ALLOWLIST", ""))
+    parser.add_argument("--dsh-bin", default=os.environ.get("SPECSTRIDE_DSH_BIN", "dsh"))
+    parser.add_argument("--profile", default=os.environ.get("SPECSTRIDE_DSH_PROFILE", "headless"))
+    parser.add_argument("--timeout", type=int, default=int(os.environ.get("SPECSTRIDE_DSH_PLUGIN_TIMEOUT", "600")))
     args = parser.parse_args(argv)
     try:
         result = process_request(args.request, args.archive_dir, args.allowlist,

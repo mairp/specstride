@@ -5,11 +5,15 @@ PLAN.md
 .claude/settings.local.json
 
 # Orchestrator/loop runtime state.
+.specstride/
+**/.specstride/
+# Legacy state dir (Specstride was formerly Wiggum): still used in place by
+# workdirs that predate the rename; never moved automatically.
 .wiggum/
 **/.wiggum/
 
 # Generated run artifacts from example/local runs (the contract files the
-# proposer/critic produce). These now live under .wiggum/gates/ (already ignored
+# proposer/critic produce). These now live under .specstride/gates/ (already ignored
 # above), so these root-level patterns are just belt-and-suspenders for anyone
 # resuming a run created under the old layout. The example SPEC is committed; its
 # outputs are not.
@@ -35,4 +39,5 @@ __pycache__/
 .pytest_cache/
 
 # stray test-run artifact (accidental gitlink)
+.specstride-autonomy-smoke
 .wiggum-autonomy-smoke

@@ -20,12 +20,12 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$SCRIPT_DIR/lib"          # all Python components live here
 # shellcheck source=/dev/null
-. "$SCRIPT_DIR/wiggum-lib.sh"
+. "$SCRIPT_DIR/specstride-lib.sh"
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Exit-code contract (documented in README):
 #    0 all phases approved · 1 internal error (incl. critic_unavailable: the
-#      critic never answered, see WIGGUM_CRITIC_MALFORMED_LIMIT) ·
+#      critic never answered, see SPECSTRIDE_CRITIC_MALFORMED_LIMIT) ·
 #    2 MAX_REJECTS exceeded (human) ·
 #    3 invalid spec/config · 4 budget exceeded (wall/MAX_ITER) · 5 lock held ·
 #    6 stopped via stop.flag (clean; rerun resumes).
@@ -34,52 +34,52 @@ E_OK=0; E_INTERNAL=1; E_REJECTS=2; E_SPEC=3; E_BUDGET=4; E_LOCK=5; E_STOP=6
 
 usage() {
   cat <<'EOF'
-orchestrator.sh — Wiggum: spec-driven Ralph loop with an automated critic gate.
+orchestrator.sh — Specstride: spec-driven Ralph loop with an automated critic gate.
 
 USAGE
   orchestrator.sh [options]
 
-Wiggum is a utility you install once; the WORKDIR and SPEC live in your project
+Specstride is a utility you install once; the WORKDIR and SPEC live in your project
 and can be anywhere. Point -w at the project and -s at its spec (any file name).
 
 OPTIONS
   -w, --workdir DIR     Run/work directory (default: $PWD). Proposer runs here;
-                        all generated state lives under .wiggum/ (PROGRESS.md in
-                        .wiggum/, gate files in .wiggum/gates/), keeping root clean.
+                        all generated state lives under .specstride/ (PROGRESS.md in
+                        .specstride/, gate files in .specstride/gates/), keeping root clean.
   -s, --specs FILE      Spec file — ANY name, ANY location (default:
                         <workdir>/SPECS.md). A relative path resolves against the
                         directory you launched from, not the workdir. Lets you
                         keep the spec (e.g. ROADMAP.md, plan.md) wherever it lives.
   --spec-format FMT     Spec grammar: native | speckit-tasks | openspec-change.
                         Default: auto-detect. Also settable via
-                        WIGGUM_SPEC_FORMAT.
-  --feature SLUG        Feature namespace for durable state (.wiggum/features/SLUG/).
+                        SPECSTRIDE_SPEC_FORMAT.
+  --feature SLUG        Feature namespace for durable state (.specstride/features/SLUG/).
                         Default: the Spec Kit feature or OpenSpec change directory
                         basename, else "default". Also disambiguates multiple
-                        discovered task specs. Also via WIGGUM_FEATURE.
+                        discovered task specs. Also via SPECSTRIDE_FEATURE.
   --proposer BACKEND    Proposer backend: dsh[:provider/model] | claude | codex |
                         bebop[:name] | prime[:variant]
-                        (default: $WIGGUM_PROPOSER or dsh).
+                        (default: $SPECSTRIDE_PROPOSER or dsh).
   --critic BACKEND      Critic provider: dsh[:provider/model] | claude | codex |
-                        bebop | prime[:variant] (default: $WIGGUM_CRITIC or claude).
+                        bebop | prime[:variant] (default: $SPECSTRIDE_CRITIC or claude).
   --max-rejects N       Critic REJECTs per phase before halting (default: 3).
   --max-iter N          Proposer passes per phase (default: 30).
   --proposer-timeout SECONDS  Hard wall-clock limit on a single proposer pass
-                        (default: 1800). Also WIGGUM_PROPOSER_TIMEOUT. Raise
+                        (default: 1800). Also SPECSTRIDE_PROPOSER_TIMEOUT. Raise
                         this when a phase's own verification work (e.g. a
                         long-job command, see --long-job-cmd) genuinely needs
                         longer than the default per pass to converge.
   --proposer-timeout-phase N=SECONDS
                         Override the pass ceiling for phase N only (repeatable).
-                        Also WIGGUM_PROPOSER_TIMEOUT_PHASE_<N>, and a
+                        Also SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_<N>, and a
                         "phaseTimeouts": {"N": SECONDS} map in the
                         --verification-commands document. First of those three,
                         in that order, wins; with none set the global value above
                         is used unchanged. Round-trips through last-run.conf, so
-                        `wiggum resume` keeps it.
+                        `specstride resume` keeps it.
   --critic-timeout SECONDS    Hard wall-clock limit on a single critic call
-                        (default: 300). Also WIGGUM_CRITIC_TIMEOUT.
-                        WIGGUM_CRITIC_MALFORMED_LIMIT (default 3) halts the run
+                        (default: 300). Also SPECSTRIDE_CRITIC_TIMEOUT.
+                        SPECSTRIDE_CRITIC_MALFORMED_LIMIT (default 3) halts the run
                         after that many consecutive MALFORMED verdicts — a critic
                         that times out or is unreachable produces no feedback, so
                         further proposer attempts run blind. 0 disables it.
@@ -87,10 +87,10 @@ OPTIONS
   --verification MODE   Verification lifecycle: off | plan | required.
                         plan creates/attaches a hash-bound TEST_PLAN.md before the
                         proposer loop; required also executes fixed-argv phase and
-                        release gates. Default: required. Also WIGGUM_VERIFICATION.
+                        release gates. Default: required. Also SPECSTRIDE_VERIFICATION.
   --test-plan FILE      Absolute TEST_PLAN.md projection path (default when
                         verification is enabled: <workdir>/testautomation/<feature>/TEST_PLAN.md).
-                        Also WIGGUM_TEST_PLAN.
+                        Also SPECSTRIDE_TEST_PLAN.
   --verification-commands FILE
                         JSON document of phase-scoped commands the gates MUST
                         execute, added to each phase suite after the discovered
@@ -107,15 +107,15 @@ OPTIONS
                         missing cwd or a phase the spec does not define aborts the
                         preflight rather than dropping the command. The document's
                         hash is bound into the plan hash. Also
-                        WIGGUM_VERIFICATION_COMMANDS.
+                        SPECSTRIDE_VERIFICATION_COMMANDS.
   --generate-tests DIR  Safely scaffold tests below this absolute directory (default:
                          <workdir>/testautomation/<feature>/generated).
                         Existing changed artifacts are never overwritten. Supplying
-                        this flag enables plan mode. Also WIGGUM_GENERATE_TESTS.
+                        this flag enables plan mode. Also SPECSTRIDE_GENERATE_TESTS.
   --telemetry           Ship the event stream to Loki (off by default). Receiver
                         status resolves to one of four states — configured /
                         reachable / request-accepted / query-verified — surfaced by
-                        `wiggum status`, never a collapsed "telemetry: true".
+                        `specstride status`, never a collapsed "telemetry: true".
   --loki-url URL        Loki base URL (with --telemetry; default :3100).
   --otel                Ship the event stream to an OTLP collector (off by default).
                         Independent of --telemetry; use both to dual-ship. A failed
@@ -123,7 +123,7 @@ OPTIONS
   --otel-url URL        OTLP/HTTP base URL (with --otel; default :4318).
   --live                Render a clean, scrolling timeline inline in THIS terminal
                         (like a coding agent working). Raw proposer/critic output
-                        goes to the run.log only. No second terminal / `wiggum watch`
+                        goes to the run.log only. No second terminal / `specstride watch`
                         needed. Auto-on when stdout is a TTY; --no-live to force off.
   --no-live             Force the raw tee'd output even on a TTY (old behavior).
   --debug               Verbose: dump phase transitions and retain each pass's raw
@@ -132,7 +132,7 @@ OPTIONS
                         critic (off by default; retention is opt-in).
   --long-job-phase N    Phase that owns a long-running setup/verification command
                         (e.g. an integration test runner) which can outlive a
-                        single proposer pass. Also WIGGUM_LONG_JOB_PHASE.
+                        single proposer pass. Also SPECSTRIDE_LONG_JOB_PHASE.
   --long-job-cmd CMD    Shell command to run for --long-job-phase. The
                         orchestrator launches it fully detached (setsid, own
                         session, reparented to init) BEFORE each proposer pass
@@ -152,13 +152,13 @@ OPTIONS
                         later, unrelated run. State lives under <feature-dir>/
                         long-jobs/phase<N>-attempt<M>-<run-id>.{pid,log,done};
                         the log path is also exported as
-                        WIGGUM_LONG_JOB_LOG so the proposer prompt can point
-                        the agent at it. Also WIGGUM_LONG_JOB_CMD.
+                        SPECSTRIDE_LONG_JOB_LOG so the proposer prompt can point
+                        the agent at it. Also SPECSTRIDE_LONG_JOB_CMD.
   -h, --help            Show this help.
 
 Each agent invocation records a capability mode — structured / raw-text / degraded
-— with a stable reason on degradation; `wiggum status` shows the active mode and the
-latest tool activity. Set WIGGUM_AGENT_STREAM=false to force Prime's raw-text
+— with a stable reason on degradation; `specstride status` shows the active mode and the
+latest tool activity. Set SPECSTRIDE_AGENT_STREAM=false to force Prime's raw-text
 fallback (no local structure).
 
 Config precedence: built-in defaults < .env (in repo root) < these flags.
@@ -167,12 +167,12 @@ EOF
 }
 
 # ── config: built-in defaults < .env < caller env < flags ───────────────────
-# Source .env FIRST (set -a exports every WIGGUM_* it sets), so the defaults just
+# Source .env FIRST (set -a exports every SPECSTRIDE_* it sets), so the defaults just
 # below read the already-populated environment in one pass — no second re-read.
 # Flags come last in the parse loop, so they win.
 #
 # .env is a *default* source, not an override: a var the caller already exported
-# (e.g. `WIGGUM_PROPOSER_TIMEOUT=5400 wiggum resume …`, exactly what the abort
+# (e.g. `SPECSTRIDE_PROPOSER_TIMEOUT=5400 specstride resume …`, exactly what the abort
 # remediation tells you to run) must win over .env. But `set -a; . .env` blindly
 # overwrites already-exported vars — so we snapshot the caller's environment and
 # re-assert it after sourcing. .env still fills in every var the caller left unset.
@@ -182,44 +182,45 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
   . "$SCRIPT_DIR/.env"; set +a
   eval "$_caller_env"        # caller-exported vars beat .env; unset ones keep .env's value
   unset _caller_env
+  specstride_env_compat      # a .env still using legacy names maps like the caller env
 fi
 
 WORKDIR="$PWD"
 SPECS=""
-SPEC_FORMAT="${WIGGUM_SPEC_FORMAT:-}"   # empty = auto-detect
-FEATURE="${WIGGUM_FEATURE:-}"           # explicit feature slug (Spec Kit multi-feature)
+SPEC_FORMAT="${SPECSTRIDE_SPEC_FORMAT:-}"   # empty = auto-detect
+FEATURE="${SPECSTRIDE_FEATURE:-}"           # explicit feature slug (Spec Kit multi-feature)
 START_PHASE=""
 DEBUG="false"
-PROPOSER_BACKEND="${WIGGUM_PROPOSER:-dsh}"
-CRITIC_BACKEND="${WIGGUM_CRITIC:-claude}"
-MAX_REJECTS="${WIGGUM_MAX_REJECTS:-3}"
-MAX_ITER="${WIGGUM_MAX_ITER:-30}"
-TELEMETRY="${WIGGUM_TELEMETRY_ENABLED:-false}"
-LOKI_URL="${WIGGUM_LOKI_URL:-http://localhost:3100}"
-OTEL="${WIGGUM_OTEL_ENABLED:-false}"
-OTEL_URL="${WIGGUM_OTEL_URL:-http://localhost:4318}"
+PROPOSER_BACKEND="${SPECSTRIDE_PROPOSER:-dsh}"
+CRITIC_BACKEND="${SPECSTRIDE_CRITIC:-claude}"
+MAX_REJECTS="${SPECSTRIDE_MAX_REJECTS:-3}"
+MAX_ITER="${SPECSTRIDE_MAX_ITER:-30}"
+TELEMETRY="${SPECSTRIDE_TELEMETRY_ENABLED:-false}"
+LOKI_URL="${SPECSTRIDE_LOKI_URL:-http://localhost:3100}"
+OTEL="${SPECSTRIDE_OTEL_ENABLED:-false}"
+OTEL_URL="${SPECSTRIDE_OTEL_URL:-http://localhost:4318}"
 # LIVE: inline scrolling timeline in this terminal. Default auto = on iff TTY.
-LIVE="${WIGGUM_LIVE:-auto}"
-PROPOSER_TIMEOUT="${WIGGUM_PROPOSER_TIMEOUT:-1800}"
+LIVE="${SPECSTRIDE_LIVE:-auto}"
+PROPOSER_TIMEOUT="${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}"
 # Per-phase overrides of that ceiling, as raw `N=SECONDS` entries (design §4.1).
 # One global number cannot be right for every phase: a phase whose work is a
 # 90-minute live suite and a phase that edits three files share it, so it gets
 # set for the worst phase and every other phase carries a ceiling that means
 # nothing. Collected here, resolved once per phase by resolve_proposer_timeout.
 PHASE_TIMEOUT_ARGS=()
-CRITIC_TIMEOUT="${WIGGUM_CRITIC_TIMEOUT:-300}"
+CRITIC_TIMEOUT="${SPECSTRIDE_CRITIC_TIMEOUT:-300}"
 # Consecutive MALFORMED verdicts (critic timed out / unreachable / produced no
 # verdict line) before the run halts instead of spending the rest of MAX_REJECTS
 # on proposer passes the critic will never read. 0 disables the breaker.
-CRITIC_MALFORMED_LIMIT="${WIGGUM_CRITIC_MALFORMED_LIMIT:-3}"
-MAX_WALL_MIN="${WIGGUM_MAX_WALL_MIN:-0}"
-GIT_COMMITS="${WIGGUM_GIT_COMMITS:-auto}"
-VERIFICATION="${WIGGUM_VERIFICATION:-required}"
-TEST_PLAN="${WIGGUM_TEST_PLAN:-}"
-VERIFICATION_COMMANDS="${WIGGUM_VERIFICATION_COMMANDS:-}"
-GENERATE_TESTS="${WIGGUM_GENERATE_TESTS:-}"
-LONG_JOB_PHASE="${WIGGUM_LONG_JOB_PHASE:-}"
-LONG_JOB_CMD="${WIGGUM_LONG_JOB_CMD:-}"
+CRITIC_MALFORMED_LIMIT="${SPECSTRIDE_CRITIC_MALFORMED_LIMIT:-3}"
+MAX_WALL_MIN="${SPECSTRIDE_MAX_WALL_MIN:-0}"
+GIT_COMMITS="${SPECSTRIDE_GIT_COMMITS:-auto}"
+VERIFICATION="${SPECSTRIDE_VERIFICATION:-required}"
+TEST_PLAN="${SPECSTRIDE_TEST_PLAN:-}"
+VERIFICATION_COMMANDS="${SPECSTRIDE_VERIFICATION_COMMANDS:-}"
+GENERATE_TESTS="${SPECSTRIDE_GENERATE_TESTS:-}"
+LONG_JOB_PHASE="${SPECSTRIDE_LONG_JOB_PHASE:-}"
+LONG_JOB_CMD="${SPECSTRIDE_LONG_JOB_CMD:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -253,7 +254,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# proposer.sh runs ensure_long_job() (wiggum-lib.sh) from its OWN per-pass loop
+# proposer.sh runs ensure_long_job() (specstride-lib.sh) from its OWN per-pass loop
 # too — the orchestrator only calls it once per attempt, before proposer.sh
 # even starts, which starves every later pass of a multi-hour attempt if that
 # one check saw a stale marker (confirmed live 2026-08-30). proposer.sh is a
@@ -263,7 +264,7 @@ export LONG_JOB_PHASE LONG_JOB_CMD
 
 # ── per-phase pass ceilings: collect the explicit operator overrides ──────────
 # Two spellings, one map. A flag is what a launcher writes; an env var is what a
-# `wiggum resume` or a wrapper sets. Both are the SAME route (route 1 of §4.1) —
+# `specstride resume` or a wrapper sets. Both are the SAME route (route 1 of §4.1) —
 # they are equally explicit, so neither shadows the other silently: the flag wins
 # only because it is the more local statement of intent.
 declare -A PHASE_TIMEOUT_OVERRIDE=()
@@ -275,8 +276,8 @@ _phase_timeout_set() {   # <source-label> <N=SECONDS>
   }
   PHASE_TIMEOUT_OVERRIDE["$n"]="$secs"
 }
-for _v in $(compgen -v WIGGUM_PROPOSER_TIMEOUT_PHASE_ 2>/dev/null); do
-  _phase_timeout_set "$_v" "${_v#WIGGUM_PROPOSER_TIMEOUT_PHASE_}=${!_v}"
+for _v in $(compgen -v SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_ 2>/dev/null); do
+  _phase_timeout_set "$_v" "${_v#SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_}=${!_v}"
 done
 for _spec in "${PHASE_TIMEOUT_ARGS[@]+"${PHASE_TIMEOUT_ARGS[@]}"}"; do
   _phase_timeout_set "--proposer-timeout-phase" "$_spec"
@@ -293,10 +294,10 @@ _phase_timeout_overrides_line() {
 }
 
 # ── resolve workdir + specs ──────────────────────────────────────────────────
-# Wiggum is the installed utility; the workdir + spec live in the user's project,
+# Specstride is the installed utility; the workdir + spec live in the user's project,
 # which can be anywhere. Two independent paths:
-#   * -w/--workdir  where the proposer operates; all .wiggum state (PROGRESS.md in
-#                   .wiggum/ + the gate files in .wiggum/gates/) lives here.
+#   * -w/--workdir  where the proposer operates; all .specstride state (PROGRESS.md in
+#                   .specstride/ + the gate files in .specstride/gates/) lives here.
 #   * -s/--specs    the spec file (any name, any location). A RELATIVE -s is
 #                   resolved against the LAUNCH dir (where the user typed the
 #                   command), NOT the workdir — captured here before we cd.
@@ -390,8 +391,8 @@ except Exception:
       echo "multiple feature specs found under $WORKDIR — disambiguate (nothing auto-selected):"
       for t in "${cands[@]}"; do
         echo "    $t"
-        echo "      → wiggum run -w $WORKDIR -s $t"
-        echo "      → wiggum run -w $WORKDIR --feature $(basename "$(dirname "$t")")"
+        echo "      → specstride run -w $WORKDIR -s $t"
+        echo "      → specstride run -w $WORKDIR --feature $(basename "$(dirname "$t")")"
       done
     } >&2
     return 2
@@ -420,36 +421,37 @@ SPECS="$(cd "$(dirname "$SPECS")" && pwd)/$(basename "$SPECS")"
 command -v python3 >/dev/null 2>&1 || { echo "python3 required on PATH" >&2; exit "$E_INTERNAL"; }
 
 # Resolve the spec format ONCE and export it, so every downstream consumer — the
-# wiggum_spec_* shims, the critic subprocess — agrees on the same adapter. An
-# explicit --spec-format/WIGGUM_SPEC_FORMAT wins; otherwise auto-detect and pin
+# specstride_spec_* shims, the critic subprocess — agrees on the same adapter. An
+# explicit --spec-format/SPECSTRIDE_SPEC_FORMAT wins; otherwise auto-detect and pin
 # the resolved value so a run never re-sniffs mid-flight.
 if [[ -z "$SPEC_FORMAT" ]]; then
-  SPEC_FORMAT="$(wiggum_spec_detect "$SPECS" 2>/dev/null || echo native)"
+  SPEC_FORMAT="$(specstride_spec_detect "$SPECS" 2>/dev/null || echo native)"
 fi
-export WIGGUM_SPEC_FORMAT="$SPEC_FORMAT"
+export SPECSTRIDE_SPEC_FORMAT="$SPEC_FORMAT"
 
 # ── feature-scoped state dir + per-run log/event stream ──────────────────────
 # Durable state is namespaced per FEATURE so multiple Spec Kit features can build
 # into ONE repo without their gates/evidence/verdicts colliding. Layout:
-#   .wiggum/
+#   .specstride/
 #     lock, stop.flag          ← STAY at root (one run per repo — concurrency is
 #                                per-workdir, not per-feature).
 #     last-run.conf            ← root copy = the "active feature" pointer for bare
-#                                `wiggum resume`; a per-feature copy lives below.
+#                                `specstride resume`; a per-feature copy lives below.
 #     run.log, events.jsonl    ← symlinks retargeted into the active feature's run.
 #     features/<slug>/
 #       gates/ (+ gates/proofs/) attempts/ verdicts/ debug/ runs/  PROGRESS.md
 # <slug> = the Spec Kit feature or OpenSpec change directory basename; "default"
 # otherwise
-# (also the back-compat identity of every pre-v2 .wiggum/gates/ on disk).
-STATE_DIR="$WORKDIR/.wiggum"
-# Resolve the feature slug: explicit --feature/WIGGUM_FEATURE wins (sanitized);
+# (also the back-compat identity of every pre-v2 .specstride/gates/ on disk).
+specstride_resolve_state_dir "$WORKDIR"   # STATE_BASENAME: .specstride, or a legacy dir
+STATE_DIR="$WORKDIR/$STATE_BASENAME"
+# Resolve the feature slug: explicit --feature/SPECSTRIDE_FEATURE wins (sanitized);
 # else derive from the spec's Spec Kit/OpenSpec location.
 if [[ -n "$FEATURE" ]]; then
   SLUG="$(printf '%s' "$FEATURE" | tr -c 'A-Za-z0-9._-' '-' | sed 's/^-*//;s/-*$//')"
   [[ -n "$SLUG" ]] || SLUG="default"
 else
-  SLUG="$(wiggum_spec_feature_slug "$SPECS" 2>/dev/null || echo default)"
+  SLUG="$(specstride_spec_feature_slug "$SPECS" 2>/dev/null || echo default)"
   [[ -n "$SLUG" ]] || SLUG="default"
 fi
 FEATURE_DIR="$STATE_DIR/features/$SLUG"
@@ -462,17 +464,17 @@ if [[ "$VERIFICATION" != "off" ]]; then
   TEST_PLAN="${TEST_PLAN:-$TEST_AUTOMATION_DIR/TEST_PLAN.md}"
   GENERATE_TESTS="${GENERATE_TESTS:-$TEST_AUTOMATION_DIR/generated}"
 fi
-# Wiggum-generated phase files (GATE<N>-EVIDENCE/APPROVED/FEEDBACK) live in the
+# Specstride-generated phase files (GATE<N>-EVIDENCE/APPROVED/FEEDBACK) live in the
 # feature's gates/ folder; PROGRESS.md lives directly under the feature dir. All
 # out of the project root, so the workdir holds only the user's real artifacts.
 GATES_DIR="$FEATURE_DIR/gates"
-WIGGUM_RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
-RUN_DIR="$FEATURE_DIR/runs/$WIGGUM_RUN_ID"
+SPECSTRIDE_RUN_ID="$(date +%Y%m%d-%H%M%S)-$$"
+RUN_DIR="$FEATURE_DIR/runs/$SPECSTRIDE_RUN_ID"
 VERIFICATION_JSON="$RUN_DIR/verification/verification-plan.json"
 # The lock comes BEFORE the run directory, the workdir symlinks and last-run.conf:
 # a launch that loses the lock must leave no trace. Observed 2026-09-08 on
-# semantic-router-sovereign: a second `wiggum run` exited 5 as designed but had
-# already retargeted .wiggum/run.log and events.jsonl at its own empty run dir
+# semantic-router-sovereign: a second `specstride run` exited 5 as designed but had
+# already retargeted .specstride/run.log and events.jsonl at its own empty run dir
 # and rewritten last-run.conf, so status/watch/tail went blank for the live run.
 mkdir -p "$STATE_DIR"
 LOCK="$STATE_DIR/lock"
@@ -485,14 +487,14 @@ acquire_lock() {
       echo "orchestrator.sh: another run holds the lock on $WORKDIR ($LOCK). Exiting." >&2
       exit "$E_LOCK"
     fi
-    echo "$WIGGUM_RUN_ID $(date -Is)" >&"$LOCK_FD"
+    echo "$SPECSTRIDE_RUN_ID $(date -Is)" >&"$LOCK_FD"
   else
     if ! mkdir "$LOCK.d" 2>/dev/null; then
       echo "orchestrator.sh: another run holds the lock on $WORKDIR ($LOCK.d). Exiting." >&2
       exit "$E_LOCK"
     fi
     trap 'rmdir "$LOCK.d" 2>/dev/null || true' EXIT
-    echo "$WIGGUM_RUN_ID $(date -Is)" > "$LOCK.d/owner"
+    echo "$SPECSTRIDE_RUN_ID $(date -Is)" > "$LOCK.d/owner"
   fi
 }
 acquire_lock
@@ -500,7 +502,7 @@ acquire_lock
 # fd by number across fork/exec regardless of shell-variable export — but only
 # knows what that number MEANS if told. Exporting it lets proposer.sh's own
 # ensure_long_job() calls close their inherited copy before backgrounding a
-# long-job, the same reason described in wiggum-lib.sh. Empty/unset (mkdir
+# long-job, the same reason described in specstride-lib.sh. Empty/unset (mkdir
 # lock fallback) exports as empty, which ensure_long_job already treats as a
 # no-op guard.
 export LOCK_FD
@@ -509,7 +511,7 @@ mkdir -p "$RUN_DIR" "$FEATURE_DIR/verdicts" "$FEATURE_DIR/attempts" \
          "$FEATURE_DIR/debug" "$GATES_DIR/proofs" "$RUN_DIR/verification"
 # Workdir-relative paths for the proposer prompt + critic threading (Phase 2). The
 # proposer is TOLD these literal paths, so they must track the feature dir.
-STATE_REL=".wiggum/features/$SLUG"
+STATE_REL="$STATE_BASENAME/features/$SLUG"
 GATES_REL="$STATE_REL/gates"
 
 # ── one-time migration: relocate stray control files to their current homes ──
@@ -519,16 +521,16 @@ GATES_REL="$STATE_REL/gates"
 # definition, the "default" feature's state (a workdir predating Spec Kit awareness
 # never had more than one feature). Idempotent: a fresh run finds nothing to move.
 #   (1) GATE*/PROGRESS.md at the WORKDIR ROOT               (pre-v1).
-#   (2) PROGRESS.md under a flat .wiggum/gates/             (interim).
-#   (3) flat .wiggum/{gates,attempts,verdicts,debug,runs,PROGRESS.md}  (pre-v2 —
-#       the whole durable tree at the .wiggum root, no features/ layer).
+#   (2) PROGRESS.md under a flat .specstride/gates/             (interim).
+#   (3) flat .specstride/{gates,attempts,verdicts,debug,runs,PROGRESS.md}  (pre-v2 —
+#       the whole durable tree at the .specstride root, no features/ layer).
 DEFAULT_FEATURE_DIR="$STATE_DIR/features/default"
 DEFAULT_GATES_DIR="$DEFAULT_FEATURE_DIR/gates"
 migrate_root_gate_files() {
   local moved=0 f base d target
   shopt -s nullglob
 
-  # (3) Pre-v2 flat durable tree → features/default/. A flat .wiggum/gates that is
+  # (3) Pre-v2 flat durable tree → features/default/. A flat .specstride/gates that is
   # NOT the features/ layer is unambiguously pre-v2 (GATES_DIR is now
   # features/<slug>/gates). Move each whole subtree once; merge if the target
   # already holds newer state (target wins).
@@ -576,7 +578,7 @@ migrate_root_gate_files() {
     moved=$((moved + 1))
   done
   shopt -u nullglob
-  (( moved > 0 )) && { log "----- migrated $moved stray control item(s) into features/default/ -----"; wiggum_emit gates_migrated count "$moved" dir "$DEFAULT_FEATURE_DIR"; }
+  (( moved > 0 )) && { log "----- migrated $moved stray control item(s) into features/default/ -----"; specstride_emit gates_migrated count "$moved" dir "$DEFAULT_FEATURE_DIR"; }
 }
 
 # The canonical progress note is $FEATURE_DIR/PROGRESS.md. The proposer prompt says
@@ -595,28 +597,28 @@ sweep_stray_progress() {
       mv -f "$f" "$canon"              # stray is newer (or canon absent) → promote it
     fi
     log "----- swept stray PROGRESS.md ($f) into $canon -----"
-    wiggum_emit progress_swept from "$f" to "$canon"
+    specstride_emit progress_swept from "$f" to "$canon"
   done
 }
 
 LOG="$RUN_DIR/run.log"
-WIGGUM_EVENTS="$RUN_DIR/events.jsonl"
-: > "$LOG"; : > "$WIGGUM_EVENTS"
-# Root symlinks point INTO the active feature's newest run, so `wiggum tail`/`watch`/
+SPECSTRIDE_EVENTS="$RUN_DIR/events.jsonl"
+: > "$LOG"; : > "$SPECSTRIDE_EVENTS"
+# Root symlinks point INTO the active feature's newest run, so `specstride tail`/`watch`/
 # `events` and present.py keep working with no --feature. Targets are relative to
-# .wiggum/ (where the symlink lives), hence the features/<slug>/ prefix.
-ln -sfn "features/$SLUG/runs/$WIGGUM_RUN_ID/run.log"      "$STATE_DIR/run.log"
-ln -sfn "features/$SLUG/runs/$WIGGUM_RUN_ID/events.jsonl" "$STATE_DIR/events.jsonl"
+# .specstride/ (where the symlink lives), hence the features/<slug>/ prefix.
+ln -sfn "features/$SLUG/runs/$SPECSTRIDE_RUN_ID/run.log"      "$STATE_DIR/run.log"
+ln -sfn "features/$SLUG/runs/$SPECSTRIDE_RUN_ID/events.jsonl" "$STATE_DIR/events.jsonl"
 
 # Persist the RESOLVED config so a stopped/halted run can be brought back with
-# plain `wiggum resume` — no retyping flags. Sourceable KEY=VALUE (%q-escaped).
-# Written to BOTH the feature dir (so `wiggum resume --feature X` finds X's config)
-# and the .wiggum/ root (the "active feature" pointer bare `wiggum resume` uses).
+# plain `specstride resume` — no retyping flags. Sourceable KEY=VALUE (%q-escaped).
+# Written to BOTH the feature dir (so `specstride resume --feature X` finds X's config)
+# and the .specstride/ root (the "active feature" pointer bare `specstride resume` uses).
 write_last_run_conf() {
   local dest="$1"
   {
-    echo "# wiggum last-run config — resolved values ($(date -Is), run $WIGGUM_RUN_ID)"
-    echo "# consumed by: wiggum resume  (flags passed to resume override these)"
+    echo "# specstride last-run config — resolved values ($(date -Is), run $SPECSTRIDE_RUN_ID)"
+    echo "# consumed by: specstride resume  (flags passed to resume override these)"
     printf 'WORKDIR=%q\n'          "$WORKDIR"
     printf 'SPECS=%q\n'            "$SPECS"
     printf 'SPEC_FORMAT=%q\n'      "$SPEC_FORMAT"
@@ -656,24 +658,24 @@ write_last_run_conf "$FEATURE_DIR/last-run.conf"
 write_last_run_conf "$STATE_DIR/last-run.conf"
 
 STOP_FLAG="$STATE_DIR/stop.flag"
-WIGGUM_TASK="$(basename "$WORKDIR")"
-WIGGUM_BACKEND_LABEL="prop:${PROPOSER_BACKEND}/crit:${CRITIC_BACKEND}"
-WIGGUM_SHIP="$LIB_DIR/ralph_loki_ship.py"
-WIGGUM_TELEMETRY="$TELEMETRY"
-WIGGUM_LOKI_URL="$LOKI_URL"
-WIGGUM_OTEL_SHIP="$LIB_DIR/ralph_otel_ship.py"
-WIGGUM_OTEL_ENABLED="$OTEL"
-WIGGUM_OTEL_URL="$OTEL_URL"
-# Ambient correlation for lifecycle events (wiggum_emit): the resolved feature
+SPECSTRIDE_TASK="$(basename "$WORKDIR")"
+SPECSTRIDE_BACKEND_LABEL="prop:${PROPOSER_BACKEND}/crit:${CRITIC_BACKEND}"
+SPECSTRIDE_SHIP="$LIB_DIR/ralph_loki_ship.py"
+SPECSTRIDE_TELEMETRY="$TELEMETRY"
+SPECSTRIDE_LOKI_URL="$LOKI_URL"
+SPECSTRIDE_OTEL_SHIP="$LIB_DIR/ralph_otel_ship.py"
+SPECSTRIDE_OTEL_ENABLED="$OTEL"
+SPECSTRIDE_OTEL_URL="$OTEL_URL"
+# Ambient correlation for lifecycle events (specstride_emit): the resolved feature
 # slug so remote copies are queryable per Prime run (FR-032), and any inbound
 # distributed-trace id so lifecycle and agent activity share trace context when
-# one exists (FR-033). WIGGUM_TRACE_ID is passed through untouched — never
+# one exists (FR-033). SPECSTRIDE_TRACE_ID is passed through untouched — never
 # synthesized — so local capture never depends on trace creation.
-WIGGUM_FEATURE="$SLUG"
-WIGGUM_TRACE_ID="${WIGGUM_TRACE_ID:-}"
-export WIGGUM_EVENTS WIGGUM_RUN_ID WIGGUM_TASK WIGGUM_BACKEND_LABEL WIGGUM_SHIP \
-       WIGGUM_TELEMETRY WIGGUM_LOKI_URL WIGGUM_OTEL_SHIP WIGGUM_OTEL_ENABLED \
-       WIGGUM_OTEL_URL WIGGUM_FEATURE WIGGUM_TRACE_ID WIGGUM_MAX_REJECTS="$MAX_REJECTS"
+SPECSTRIDE_FEATURE="$SLUG"
+SPECSTRIDE_TRACE_ID="${SPECSTRIDE_TRACE_ID:-}"
+export SPECSTRIDE_EVENTS SPECSTRIDE_RUN_ID SPECSTRIDE_TASK SPECSTRIDE_BACKEND_LABEL SPECSTRIDE_SHIP \
+       SPECSTRIDE_TELEMETRY SPECSTRIDE_LOKI_URL SPECSTRIDE_OTEL_SHIP SPECSTRIDE_OTEL_ENABLED \
+       SPECSTRIDE_OTEL_URL SPECSTRIDE_FEATURE SPECSTRIDE_TRACE_ID SPECSTRIDE_MAX_REJECTS="$MAX_REJECTS"
 
 # In live mode the scrolling presenter owns the terminal, so log() writes to the
 # run.log only (no duplicated banners); otherwise it tees to the terminal too.
@@ -686,7 +688,7 @@ banner() { if [[ "${LIVE:-false}" == "true" ]]; then printf '%s\n' "$1" >> "$LOG
 
 # Terminal background detection (light/dark) + the Springfield palette now live in
 # lib/banner.py, which print_banner() below invokes. Detection order there:
-# WIGGUM_BANNER_BG env → COLORFGBG env → OSC 11 query → default "dark".
+# SPECSTRIDE_BANNER_BG env → COLORFGBG env → OSC 11 query → default "dark".
 
 # `print_banner()` — the startup splash: a Ralph Wiggum ASCII PORTRAIT (density art,
 # Mr-Burns-portrait style) + the title, colored from the Springfield palette matching
@@ -726,7 +728,7 @@ stop_presenter() {
 }
 start_presenter() {
   [[ "$LIVE" == "true" && -f "$LIB_DIR/present.py" ]] || return 0
-  python3 "$LIB_DIR/present.py" --events "$WIGGUM_EVENTS" --mode timeline --follow &
+  python3 "$LIB_DIR/present.py" --events "$SPECSTRIDE_EVENTS" --mode timeline --follow &
   PRESENTER_PID="$!"
   trap 'stop_presenter' EXIT
 }
@@ -740,11 +742,11 @@ fi
 
 
 # ── preflight spec validation (exit 3 on bad spec) ───────────────────────────
-PHASE_COUNT="$(wiggum_spec_validate "$SPECS")" || {
+PHASE_COUNT="$(specstride_spec_validate "$SPECS")" || {
   echo "orchestrator.sh: invalid spec (see errors above): $SPECS" >&2
   exit "$E_SPEC"
 }
-mapfile -t PHASES < <(wiggum_spec_phase_numbers "$SPECS")
+mapfile -t PHASES < <(specstride_spec_phase_numbers "$SPECS")
 LAST_PHASE="${PHASES[-1]}"
 
 # ── pre-loop verification plan ───────────────────────────────────────────────
@@ -822,9 +824,9 @@ START_EPOCH="$(date +%s)"
 # proposer.sh checks these itself inside a yield wait: the orchestrator only
 # tests the budget at phase boundaries, and a yield can sit between two of them
 # for hours while holding the workdir flock.
-WIGGUM_RUN_START_EPOCH="$START_EPOCH"
-WIGGUM_MAX_WALL_MIN="$MAX_WALL_MIN"
-export WIGGUM_RUN_START_EPOCH WIGGUM_MAX_WALL_MIN
+SPECSTRIDE_RUN_START_EPOCH="$START_EPOCH"
+SPECSTRIDE_MAX_WALL_MIN="$MAX_WALL_MIN"
+export SPECSTRIDE_RUN_START_EPOCH SPECSTRIDE_MAX_WALL_MIN
 over_budget() {
   [[ "$MAX_WALL_MIN" =~ ^[0-9]+$ ]] || return 1
   (( MAX_WALL_MIN == 0 )) && return 1
@@ -834,7 +836,7 @@ over_budget() {
 
 # ── derive the resume phase (first phase lacking GATE<N>-APPROVED) ───────────
 derive_phase() {
-  wiggum_spec_first_unapproved "$SPECS" "$WORKDIR" "$GATES_DIR"
+  specstride_spec_first_unapproved "$SPECS" "$WORKDIR" "$GATES_DIR"
 }
 
 # Relocate any old root-level control files BEFORE deriving the resume phase, so
@@ -850,7 +852,7 @@ fi
 
 print_banner
 log ""
-log "wiggum orchestrator start $(date -Is)"
+log "specstride orchestrator start $(date -Is)"
 log "  workdir  : $WORKDIR"
 log "  specs    : $SPECS  ($PHASE_COUNT phases: ${PHASES[*]})"
 log "  feature  : $SLUG   (state: $STATE_REL/)"
@@ -863,32 +865,32 @@ log "  git      : $GIT_COMMITS"
 # collapsed `telemetry: true`. At startup we can honestly claim only configured →
 # reachable (a probe); acceptance/query-verification come later from the JSONL.
 if [[ "$TELEMETRY" == "true" ]]; then
-  log "  telemetry: $(wiggum_telemetry_status_line loki "$LOKI_URL" "$WIGGUM_EVENTS")"
+  log "  telemetry: $(specstride_telemetry_status_line loki "$LOKI_URL" "$SPECSTRIDE_EVENTS")"
 else
   log "  telemetry: off (loki export not configured)"
 fi
 if [[ "$OTEL" == "true" ]]; then
-  log "  otel     : $(wiggum_telemetry_status_line otel "$OTEL_URL" "$WIGGUM_EVENTS")"
+  log "  otel     : $(specstride_telemetry_status_line otel "$OTEL_URL" "$SPECSTRIDE_EVENTS")"
 fi
 log "  verify   : $VERIFICATION$( [[ "$VERIFICATION" != "off" ]] && echo "  plan: $TEST_PLAN" )$( [[ -n "$GENERATE_TESTS" ]] && echo "  scaffolds: $GENERATE_TESTS" )"
 log "  resume   : phase ${CUR_PHASE:-<all approved>}$( [[ -n "$START_PHASE" ]] && echo " (--start-phase)" )"
-log "  run_id   : $WIGGUM_RUN_ID"
+log "  run_id   : $SPECSTRIDE_RUN_ID"
 log "  stop with: touch $STOP_FLAG"
 [[ -n "${SANDBOX_NOTE:-}" ]] && log "  note     : $SANDBOX_NOTE"
 log ""
 
 # In live mode, give the terminal an immediate header (the presenter narrates the
 # rest), then start the background presenter BEFORE the first event so nothing is
-# missed. The full banner is in run.log; `wiggum tail`/`--debug` show the raw feed.
+# missed. The full banner is in run.log; `specstride tail`/`--debug` show the raw feed.
 if [[ "$LIVE" == "true" ]]; then
   term ""
-  term "  wiggum — $WIGGUM_TASK · ${PHASE_COUNT} phase(s) · prop:${PROPOSER_BACKEND} crit:${CRITIC_BACKEND}"
+  term "  specstride — $SPECSTRIDE_TASK · ${PHASE_COUNT} phase(s) · prop:${PROPOSER_BACKEND} crit:${CRITIC_BACKEND}"
   term "  log: $LOG   (raw output here; this view is the timeline)"
   term ""
 fi
 start_presenter
 
-wiggum_emit run_start workdir "$WORKDIR" phases "$PHASE_COUNT" feature "$SLUG" \
+specstride_emit run_start workdir "$WORKDIR" phases "$PHASE_COUNT" feature "$SLUG" \
   proposer "$PROPOSER_BACKEND" critic "$CRITIC_BACKEND" resume "${CUR_PHASE:-done}" \
   verification "$VERIFICATION" verification_plan "$VERIFICATION_JSON"
 
@@ -906,18 +908,18 @@ run_release_verification() {
   if [[ "$release_rc" -ne 0 ]]; then
     log "# HALT — release verification failed (exit $release_rc)."
     log "#   evidence: $release_evidence"
-    wiggum_emit run_stop reason release_verification rc "$release_rc" \
+    specstride_emit run_stop reason release_verification rc "$release_rc" \
       evidence "$release_evidence"
     exit "$E_REJECTS"
   fi
-  wiggum_emit verification_release_passed evidence "$release_evidence"
+  specstride_emit verification_release_passed evidence "$release_evidence"
 }
 
 # Already fully done?
 if [[ -z "$CUR_PHASE" ]]; then
   run_release_verification
   log "# All phases already approved. Nothing to do."
-  wiggum_emit run_end outcome all_approved
+  specstride_emit run_end outcome all_approved
   exit "$E_OK"
 fi
 
@@ -931,9 +933,9 @@ maybe_git_checkpoint() {
     return 0
   fi
   git -C "$WORKDIR" add -A >/dev/null 2>&1 || true
-  if git -C "$WORKDIR" commit -q -m "wiggum: phase $n approved — ${title:-phase $n}" >/dev/null 2>&1; then
+  if git -C "$WORKDIR" commit -q -m "specstride: phase $n approved — ${title:-phase $n}" >/dev/null 2>&1; then
     log "----- git checkpoint: phase $n approved -----"
-    wiggum_emit git_checkpoint phase "$n"
+    specstride_emit git_checkpoint phase "$n"
   fi
 }
 
@@ -996,10 +998,10 @@ unmet_signature() {
   printf '%s' "$sig"
 }
 
-WIGGUM_DIAGNOSTICIAN="${WIGGUM_DIAGNOSTICIAN:-true}"
+SPECSTRIDE_DIAGNOSTICIAN="${SPECSTRIDE_DIAGNOSTICIAN:-true}"
 maybe_run_diagnostician() {
   local n="$1" attempt="$2"
-  [[ "$WIGGUM_DIAGNOSTICIAN" == "true" ]] || return 0
+  [[ "$SPECSTRIDE_DIAGNOSTICIAN" == "true" ]] || return 0
   local fb="$GATES_DIR/GATE${n}-FEEDBACK.md"
   [[ -f "$fb" ]] || return 0
   local sig; sig="$(unmet_signature "$fb")"
@@ -1008,8 +1010,8 @@ maybe_run_diagnostician() {
     return 0   # already diagnosed this exact unmet set; nothing new to say
   fi
   log "----- diagnostician: phase $n attempt $attempt (unmet set changed) -----"
-  wiggum_emit diagnostician_trigger phase "$n" attempt "$attempt"
-  WIGGUM_ROLE=diagnostician python3 "$LIB_DIR/critic.py" \
+  specstride_emit diagnostician_trigger phase "$n" attempt "$attempt"
+  SPECSTRIDE_ROLE=diagnostician python3 "$LIB_DIR/critic.py" \
     --workdir "$WORKDIR" --specs "$SPECS" --phase "$n" --attempt "$attempt" \
     --provider "$CRITIC_BACKEND" --timeout "$CRITIC_TIMEOUT" \
     --format "$SPEC_FORMAT" --feature "$SLUG" --diagnose 2>&1 | emit_out
@@ -1027,15 +1029,15 @@ maybe_run_diagnostician() {
 # diagnostician signature and never runs twice in a row: if the critic rejects
 # the accelerated attempt, the full proposer pass runs next with a note of what
 # the accelerator changed (GATE<N>-ACCELERATION.md). It counts toward MAX_REJECTS
-# like any attempt. Disable with WIGGUM_ACCELERATOR=false.
-WIGGUM_ACCELERATOR="${WIGGUM_ACCELERATOR:-true}"
-WIGGUM_ACCELERATOR_BACKEND="${WIGGUM_ACCELERATOR_BACKEND:-}"   # empty = the proposer's
+# like any attempt. Disable with SPECSTRIDE_ACCELERATOR=false.
+SPECSTRIDE_ACCELERATOR="${SPECSTRIDE_ACCELERATOR:-true}"
+SPECSTRIDE_ACCELERATOR_BACKEND="${SPECSTRIDE_ACCELERATOR_BACKEND:-}"   # empty = the proposer's
 
 # accelerator_due N PREV_ROLE — prints the diagnostician signature to act on and
 # returns 0 when the next attempt should be an accelerator pass; 1 otherwise.
 accelerator_due() {
   local n="$1" prev_role="${2:-}"
-  [[ "$WIGGUM_ACCELERATOR" == "true" ]] || return 1
+  [[ "$SPECSTRIDE_ACCELERATOR" == "true" ]] || return 1
   [[ "$prev_role" != "accelerator" ]] || return 1
   [[ -f "$GATES_DIR/GATE${n}-HINT.md" && -f "$GATES_DIR/GATE${n}-FEEDBACK.md" ]] || return 1
   local sig; sig="$(cat "$GATES_DIR/.diagnosed-phase${n}" 2>/dev/null)"
@@ -1111,8 +1113,8 @@ write_acceleration_note() {
 build_accelerator_prompt() {
   local n="$1" attempt="$2" sig="$3" out="$4"
   local section title ids_re prev_ev
-  section="$(wiggum_spec_slice "$SPECS" "$n")"
-  title="$(wiggum_spec_phase_title "$SPECS" "$n")"
+  section="$(specstride_spec_slice "$SPECS" "$n")"
+  title="$(specstride_spec_phase_title "$SPECS" "$n")"
   ids_re="$(unmet_ids_re "$sig")"
   prev_ev="$(ls -t "$FEATURE_DIR/attempts/phase${n}"/*/GATE${n}-EVIDENCE.md 2>/dev/null | head -1)"
   {
@@ -1209,8 +1211,8 @@ build_accelerator_prompt() {
 # answered".
 last_verdict_result() {
   local n="$1" attempt="$2"
-  [[ -f "$WIGGUM_EVENTS" ]] || return 0
-  python3 - "$WIGGUM_EVENTS" "$n" "$attempt" <<'PY'
+  [[ -f "$SPECSTRIDE_EVENTS" ]] || return 0
+  python3 - "$SPECSTRIDE_EVENTS" "$n" "$attempt" <<'PY'
 import json, sys
 path, phase, attempt = sys.argv[1], sys.argv[2], sys.argv[3]
 found = ""
@@ -1231,7 +1233,7 @@ print(found)
 PY
 }
 
-WIGGUM_OSC_MAX="${WIGGUM_OSC_MAX:-2}"
+SPECSTRIDE_OSC_MAX="${SPECSTRIDE_OSC_MAX:-2}"
 check_oscillation() {
   local n="$1"
   local -a fbs=()
@@ -1242,7 +1244,7 @@ check_oscillation() {
   # the current (not-yet-archived) attempt's feedback lives in the gates dir
   [[ -f "$GATES_DIR/GATE${n}-FEEDBACK.md" ]] && fbs+=( "$GATES_DIR/GATE${n}-FEEDBACK.md" )
   (( ${#fbs[@]} >= 4 )) || return 0   # a flip-flop needs several attempts to appear
-  python3 - "$WIGGUM_OSC_MAX" "$START_EPOCH" "${fbs[@]}" <<'PY'
+  python3 - "$SPECSTRIDE_OSC_MAX" "$START_EPOCH" "${fbs[@]}" <<'PY'
 import os, re, sys
 thresh = int(sys.argv[1])
 run_started = int(sys.argv[2])
@@ -1287,7 +1289,7 @@ archive_attempt() {
   # Attempts restart at 1 on resume. Never overwrite audit history from an older
   # run that used the same phase-local attempt number.
   if [[ -e "$dir" ]]; then
-    dir="$FEATURE_DIR/attempts/phase${n}/attempt${attempt}-${WIGGUM_RUN_ID}"
+    dir="$FEATURE_DIR/attempts/phase${n}/attempt${attempt}-${SPECSTRIDE_RUN_ID}"
   fi
   mkdir -p "$dir"
   [[ -f "$GATES_DIR/GATE${n}-EVIDENCE.md" ]] && mv "$GATES_DIR/GATE${n}-EVIDENCE.md" "$dir/GATE${n}-EVIDENCE.md"
@@ -1303,7 +1305,7 @@ archive_attempt() {
   # newest verdict transcript for this phase/attempt, if any
   local vt; vt="$(ls -t "$FEATURE_DIR/verdicts/phase${n}.attempt${attempt}."*.txt 2>/dev/null | head -1)"
   [[ -n "$vt" && -f "$vt" ]] && cp "$vt" "$dir/verdict.txt"
-  wiggum_emit attempt_archived phase "$n" attempt "$attempt" dir "$dir"
+  specstride_emit attempt_archived phase "$n" attempt "$attempt" dir "$dir"
 }
 
 # ── evidence contract (W6) — shared by the proposer and accelerator prompts ──
@@ -1344,7 +1346,7 @@ emit_evidence_contract() {
 # window together. A new block is therefore appended only when the prompt it is
 # joining still has room for it, and a block that does not fit is SAID OUT LOUD —
 # an agent that silently never learned it could yield is the failure this guards.
-: "${WIGGUM_PROMPT_MAX_BYTES:=180000}"
+: "${SPECSTRIDE_PROMPT_MAX_BYTES:=180000}"
 append_budgeted_block() {
   local out="$1" name="$2"; shift 2
   local block have need
@@ -1352,10 +1354,10 @@ append_budgeted_block() {
   [[ -n "$block" ]] || return 0
   have="$(wc -c < "$out" 2>/dev/null || echo 0)"
   need="$(printf '%s' "$block" | wc -c)"
-  if (( WIGGUM_PROMPT_MAX_BYTES > 0 && have + need > WIGGUM_PROMPT_MAX_BYTES )); then
-    log ">>> prompt block '$name' dropped: ${have}B already assembled + ${need}B exceeds WIGGUM_PROMPT_MAX_BYTES=${WIGGUM_PROMPT_MAX_BYTES}"
-    wiggum_emit prompt_block_dropped block "$name" assembled_bytes "$have" \
-      block_bytes "$need" budget_bytes "$WIGGUM_PROMPT_MAX_BYTES"
+  if (( SPECSTRIDE_PROMPT_MAX_BYTES > 0 && have + need > SPECSTRIDE_PROMPT_MAX_BYTES )); then
+    log ">>> prompt block '$name' dropped: ${have}B already assembled + ${need}B exceeds SPECSTRIDE_PROMPT_MAX_BYTES=${SPECSTRIDE_PROMPT_MAX_BYTES}"
+    specstride_emit prompt_block_dropped block "$name" assembled_bytes "$have" \
+      block_bytes "$need" budget_bytes "$SPECSTRIDE_PROMPT_MAX_BYTES"
     return 0
   fi
   printf '\n%s\n' "$block" >> "$out"
@@ -1369,27 +1371,27 @@ append_budgeted_block() {
 # way to ask the harness for it.
 emit_yield_contract() {
   local n="$1" attempt="$2"
-  local artifact="$FEATURE_DIR/yield/phase${n}-attempt${attempt}-${WIGGUM_RUN_ID}.json"
+  local artifact="$FEATURE_DIR/yield/phase${n}-attempt${attempt}-${SPECSTRIDE_RUN_ID}.json"
   echo "## If this phase depends on a job that cannot finish inside one pass: YIELD"
   echo "Do NOT sleep, poll, tail, or \`until ... done\` your way through a long job."
   echo "Waiting inside a pass costs a full context rebuild per pass and gets the pass"
   echo "killed at the ceiling — which also kills the job, because a job you start from"
   echo "your own Bash tool lives in the pass's process tree."
-  echo "Instead, END THE PASS and let wiggum do the waiting with no model session open."
+  echo "Instead, END THE PASS and let specstride do the waiting with no model session open."
   echo "Write this file ATOMICALLY (tmp then \`mv\`), then STOP without writing evidence:"
   echo "  $artifact"
   echo '```json'
-  echo '{"contract": "wiggum-pass-yield/v1",'
+  echo '{"contract": "specstride-pass-yield/v1",'
   echo ' "reason": "one line: what you are waiting on and why the evidence needs it",'
   echo ' "job": {"mode": "launch", "argv": ["/usr/bin/make", "live"], "cwd": "'"$WORKDIR"'"},'
   echo ' "resume_when": {"kind": "exit_code_file"},'
   echo ' "deadline_sec": 7200,'
   echo ' "on_resume": "exactly what the next pass should do with the result"}'
   echo '```'
-  echo "- \`job.mode\`: \"launch\" (PREFERRED — wiggum starts it in its own session, where no"
+  echo "- \`job.mode\`: \"launch\" (PREFERRED — specstride starts it in its own session, where no"
   echo "  pass kill can reach it) or \"adopt\" with \`"pid": N\` if you already started it"
   echo "  under \`setsid\`. An adopt naming a pid in this pass's own session is REFUSED."
-  echo "- \`resume_when.kind\`: exit_code_file (defaults to the rc file wiggum writes for a"
+  echo "- \`resume_when.kind\`: exit_code_file (defaults to the rc file specstride writes for a"
   echo "  job it launched) | pid (defaults to the job it launched) | file_exists |"
   echo "  file_stable (+ \`stable_sec\`) | grep (+ \`path\`, \`pattern\`)."
   echo "- \`deadline_sec\` is REQUIRED — the run holds this workdir for the whole wait."
@@ -1405,8 +1407,8 @@ emit_yield_contract() {
 build_proposer_prompt() {
   local n="$1" attempt="$2" out="$3"
   local section title
-  section="$(wiggum_spec_slice "$SPECS" "$n")"
-  title="$(wiggum_spec_phase_title "$SPECS" "$n")"
+  section="$(specstride_spec_slice "$SPECS" "$n")"
+  title="$(specstride_spec_phase_title "$SPECS" "$n")"
   {
     echo "You are the PROPOSER in an automated spec-driven loop. Do the work for"
     echo "ONE phase, then write its evidence and STOP."
@@ -1458,7 +1460,7 @@ build_proposer_prompt() {
     # Document-set context (Spec Kit or OpenSpec) is read-only background. The
     # shared renderer owns discovery, priority, budgeting, and safe truncation.
     local ctx_block
-    ctx_block="$(wiggum_spec_render_context "$SPECS" 2>/dev/null)"
+    ctx_block="$(specstride_spec_render_context "$SPECS" 2>/dev/null)"
     if [[ -n "$ctx_block" ]]; then
       echo
       printf '%s\n' "$ctx_block"
@@ -1521,12 +1523,12 @@ build_proposer_prompt() {
 }
 
 # ── long-running phase jobs (survive across proposer passes) ────────────────
-# ensure_long_job() now lives in wiggum-lib.sh (already sourced above) so both
+# ensure_long_job() now lives in specstride-lib.sh (already sourced above) so both
 # this script AND proposer.sh's own per-pass loop can call it -- calling it
 # only here, once per attempt before proposer.sh even starts, let a stale
 # .done marker starve an entire multi-hour attempt with no further chance to
 # launch (confirmed live 2026-08-30, ainetops-demo phase 8: two full 3h passes
-# ran with no long job ever launched). See wiggum-lib.sh for the full history.
+# ran with no long job ever launched). See specstride-lib.sh for the full history.
 
 # ── resolve_proposer_timeout — this phase's pass ceiling, and where it came from
 #
@@ -1538,10 +1540,10 @@ build_proposer_prompt() {
 # upward (design §4.1).
 #
 # Resolution order, first hit wins:
-#   1. --proposer-timeout-phase N=SECONDS / WIGGUM_PROPOSER_TIMEOUT_PHASE_<N>
+#   1. --proposer-timeout-phase N=SECONDS / SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_<N>
 #   2. "phaseTimeouts": {"N": SECONDS} in the --verification-commands document
 #   3. the global --proposer-timeout
-#   1.5 the learned value (step 5, `learn.py resolve`) — only under WIGGUM_LEARNING=apply,
+#   1.5 the learned value (step 5, `learn.py resolve`) — only under SPECSTRIDE_LEARNING=apply,
 #       and only when an applied decision exists for this phase
 #
 # Prints "<seconds>\t<source>". The source is not decoration: an unsourced number
@@ -1565,7 +1567,7 @@ resolve_proposer_timeout() {
     # Route 1.5 (§4.1's learned value; step 5): ONLY when the operator has turned
     # application on. `learn.py resolve` prints the applied value for this
     # (knob, phase) or the fallback unchanged; anything unparseable falls through.
-    if [[ "${WIGGUM_LEARNING:-}" == "apply" ]]; then
+    if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" ]]; then
       local learned
       learned="$(python3 "$LIB_DIR/learn.py" resolve --knob proposer_timeout \
                    --phase "$n" --default "$fallback" --feature-dir "$FEATURE_DIR" \
@@ -1582,9 +1584,9 @@ resolve_proposer_timeout() {
 # ── the phase loop ───────────────────────────────────────────────────────────
 run_phase() {
   local n="$1"
-  local title; title="$(wiggum_spec_phase_title "$SPECS" "$n")"
+  local title; title="$(specstride_spec_phase_title "$SPECS" "$n")"
   local attempt=1
-  wiggum_emit phase_start phase "$n" title "$title" total "$PHASE_COUNT"
+  specstride_emit phase_start phase "$n" title "$title" total "$PHASE_COUNT"
   log ""
   log "===== PHASE $n${title:+ — $title}  ($(date -Is)) ====="
   sweep_stray_progress
@@ -1594,7 +1596,7 @@ run_phase() {
   # Archive that evidence before invoking the proposer so resume cannot treat it
   # as newly completed work. Keep the feedback available for the repair prompt.
   if [[ -f "$GATES_DIR/GATE${n}-EVIDENCE.md" && -f "$GATES_DIR/GATE${n}-FEEDBACK.md" ]]; then
-    archive_attempt "$n" "resume-${WIGGUM_RUN_ID}"
+    archive_attempt "$n" "resume-${SPECSTRIDE_RUN_ID}"
   fi
 
   local prev_role=""
@@ -1606,13 +1608,13 @@ run_phase() {
     # stop.flag / budget checks at each phase-boundary step
     if [[ -f "$STOP_FLAG" ]]; then
       log ">>> stop.flag detected — halting cleanly (exit $E_STOP; rerun resumes)."
-      wiggum_emit run_stop reason stop_flag phase "$n"
+      specstride_emit run_stop reason stop_flag phase "$n"
       rm -f "$STOP_FLAG"
       exit "$E_STOP"
     fi
     if over_budget; then
       log ">>> wall-clock budget (${MAX_WALL_MIN}min) exceeded — halting (exit $E_BUDGET)."
-      wiggum_emit run_stop reason wall_budget phase "$n"
+      specstride_emit run_stop reason wall_budget phase "$n"
       exit "$E_BUDGET"
     fi
 
@@ -1620,15 +1622,15 @@ run_phase() {
 
     # step 4: prestage — declared commands marked `"stage": "prestage"` run ONCE
     # here, before the proposer, so the gate reuses the result instead of re-running
-    # it (wiggum-lib.sh:wiggum_prestage_phase; no-op when none are declared).
-    wiggum_prestage_phase "$n" "$attempt"
+    # it (specstride-lib.sh:specstride_prestage_phase; no-op when none are declared).
+    specstride_prestage_phase "$n" "$attempt"
 
     # Which agent takes this attempt: the wide proposer, or — right after a NEW
     # diagnostician hint — the narrowed accelerator (see accelerator_due).
     local role="proposer" backend="$PROPOSER_BACKEND" rem_sig=""
     if rem_sig="$(accelerator_due "$n" "$prev_role")"; then
       role="accelerator"
-      backend="${WIGGUM_ACCELERATOR_BACKEND:-$PROPOSER_BACKEND}"
+      backend="${SPECSTRIDE_ACCELERATOR_BACKEND:-$PROPOSER_BACKEND}"
     fi
     local prompt_file="$FEATURE_DIR/${role}-prompt.phase${n}.txt"
     local rem_before="" rem_after=""
@@ -1643,17 +1645,17 @@ run_phase() {
       rem_after="$RUN_DIR/accelerator/phase${n}-attempt${attempt}.after"
       workdir_change_snapshot "$rem_before"
       log "----- accelerator: phase $n attempt $attempt/$MAX_REJECTS ($backend) — acting on the hint for ${rem_sig%,} -----"
-      wiggum_emit accelerator_start phase "$n" attempt "$attempt" backend "$backend" criteria "${rem_sig%,}"
+      specstride_emit accelerator_start phase "$n" attempt "$attempt" backend "$backend" criteria "${rem_sig%,}"
     else
       build_proposer_prompt "$n" "$attempt" "$prompt_file"
       log "----- proposer: phase $n attempt $attempt/$MAX_REJECTS ($PROPOSER_BACKEND) -----"
-      wiggum_emit proposer_start phase "$n" attempt "$attempt" backend "$PROPOSER_BACKEND"
+      specstride_emit proposer_start phase "$n" attempt "$attempt" backend "$PROPOSER_BACKEND"
     fi
     # The budget this pass runs under, and WHERE IT CAME FROM, recorded beside
     # the start of the pass it governs. Reconstructing that afterwards from a
     # halted run's flags, env and documents is the expensive part of budget
     # archaeology, so it is never left implicit.
-    wiggum_emit proposer_cap phase "$n" attempt "$attempt" role "$role" \
+    specstride_emit proposer_cap phase "$n" attempt "$attempt" role "$role" \
       seconds "$phase_timeout" source "$phase_timeout_source"
     log "      pass ceiling: ${phase_timeout}s (${phase_timeout_source})"
     prev_role="$role"
@@ -1670,7 +1672,7 @@ run_phase() {
       --role "$role"
       --phase "$n"
       --attempt "$attempt"
-      --invocation-id "${WIGGUM_RUN_ID}-${role}-phase-${n}-attempt-${attempt}"
+      --invocation-id "${SPECSTRIDE_RUN_ID}-${role}-phase-${n}-attempt-${attempt}"
     )
     [[ "$TELEMETRY" == "true" ]] && prop_args+=( --stream-json --loki-url "$LOKI_URL" )
     # OTEL is independent of --telemetry; --stream-json is idempotent if both add it.
@@ -1683,15 +1685,15 @@ run_phase() {
     if [[ "$role" == "accelerator" ]]; then
       workdir_change_snapshot "$rem_after"
       write_acceleration_note "$n" "$attempt" "$rem_sig" "$rem_before" "$rem_after"
-      wiggum_emit acceleration_note phase "$n" attempt "$attempt" note "$GATES_DIR/GATE${n}-ACCELERATION.md"
+      specstride_emit acceleration_note phase "$n" attempt "$attempt" note "$GATES_DIR/GATE${n}-ACCELERATION.md"
     fi
 
-    # Proposer exits 6 when it saw stop.flag (graceful stop, or a `wiggum stop
+    # Proposer exits 6 when it saw stop.flag (graceful stop, or a `specstride stop
     # --now` kill followed by the flag check). That is a CLEAN stop: consume the
     # flag so the next rerun resumes instead of instantly stopping again.
     if [[ "$prc" -eq 6 ]]; then
       log ">>> stop.flag detected during proposer — halting cleanly (exit $E_STOP; rerun resumes)."
-      wiggum_emit run_stop reason stop_flag phase "$n"
+      specstride_emit run_stop reason stop_flag phase "$n"
       rm -f "$STOP_FLAG"
       exit "$E_STOP"
     fi
@@ -1699,7 +1701,7 @@ run_phase() {
     if [[ ! -f "$GATES_DIR/GATE${n}-EVIDENCE.md" ]]; then
       if [[ "$prc" -eq 4 ]]; then
         log ">>> proposer hit max-iter ($MAX_ITER) without evidence for phase $n — halting (exit $E_BUDGET)."
-        wiggum_emit run_stop reason proposer_max_iter phase "$n"
+        specstride_emit run_stop reason proposer_max_iter phase "$n"
         exit "$E_BUDGET"
       fi
       if [[ "$prc" -eq 8 ]]; then
@@ -1713,8 +1715,8 @@ run_phase() {
         log "#     - the newest agent note in $FEATURE_DIR/PROGRESS.md (it names the blocker)"
         log "#     - the phase's run note under the spec's runs/ directory (it usually lists"
         log "#       the options the operator has to choose between)"
-        log "#   Record the decision where the note asks for it, then: wiggum resume -w $WORKDIR"
-        wiggum_emit run_stop reason proposer_no_progress phase "$n"
+        log "#   Record the decision where the note asks for it, then: specstride resume -w $WORKDIR"
+        specstride_emit run_stop reason proposer_no_progress phase "$n"
         exit "$E_BUDGET"
       fi
       if [[ "$prc" -eq 7 ]]; then
@@ -1725,11 +1727,11 @@ run_phase() {
         log "#   A hard_cap kill is NOT counted here — it has its own breaker (exit 10)."
         log "#   Each killed pass left a checkpoint in $FEATURE_DIR/pass-checkpoints — read the"
         log "#   newest one first; it says what the agent was actually doing. Options:"
-        log "#     - raise the per-pass timeout:  WIGGUM_PROPOSER_TIMEOUT=3600 wiggum resume -w $WORKDIR"
-        log "#     - raise the error tolerance:    WIGGUM_PROPOSER_MAX_ERRORS=5 wiggum resume -w $WORKDIR"
-        log "#     - loosen a futility detector:   WIGGUM_PROPOSER_REPEAT_LIMIT=0 / WIGGUM_PROPOSER_PROGRESS_TIMEOUT=0"
+        log "#     - raise the per-pass timeout:  SPECSTRIDE_PROPOSER_TIMEOUT=3600 specstride resume -w $WORKDIR"
+        log "#     - raise the error tolerance:    SPECSTRIDE_PROPOSER_MAX_ERRORS=5 specstride resume -w $WORKDIR"
+        log "#     - loosen a futility detector:   SPECSTRIDE_PROPOSER_REPEAT_LIMIT=0 / SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT=0"
         log "#     - or fix the phase's live harness so a pass completes within the timeout."
-        wiggum_emit run_stop reason proposer_consecutive_errors phase "$n"
+        specstride_emit run_stop reason proposer_consecutive_errors phase "$n"
         exit "$E_BUDGET"
       fi
       # A spent yield budget is not a failing agent either: the passes ended
@@ -1738,29 +1740,29 @@ run_phase() {
       if [[ "$prc" -eq 9 ]]; then
         log ">>> proposer's yield budget is spent for phase $n — halting (exit $E_BUDGET)."
         log "#   A pass ended cleanly while a job it depends on was still running, and"
-        log "#   wiggum waited for that job with no model session open — but the wait hit"
+        log "#   specstride waited for that job with no model session open — but the wait hit"
         log "#   the yield's own deadline_sec, or the run's wall-clock budget, or the"
-        log "#   attempt yielded more than WIGGUM_YIELD_MAX_PER_ATTEMPT (default 4) times."
+        log "#   attempt yielded more than SPECSTRIDE_YIELD_MAX_PER_ATTEMPT (default 4) times."
         log "#   The job was LEFT ALONE, not killed: read its log first (named in the"
         log "#   yield_timeout event and in $FEATURE_DIR/yield-jobs/)."
         log "#     - if the job is simply slower than declared: raise that phase's"
         log "#       deadline_sec, or its pass ceiling (--proposer-timeout-phase $n=SECONDS)"
         log "#     - if the job is hung: fix the job; no budget here will help"
         log "#     - if the phase needs several long jobs in sequence, it is really several"
-        log "#       phases — split it rather than raising WIGGUM_YIELD_MAX_PER_ATTEMPT"
-        log "#   Then: wiggum resume -w $WORKDIR"
-        wiggum_emit run_stop reason proposer_yield_budget phase "$n"
+        log "#       phases — split it rather than raising SPECSTRIDE_YIELD_MAX_PER_ATTEMPT"
+        log "#   Then: specstride resume -w $WORKDIR"
+        specstride_emit run_stop reason proposer_yield_budget phase "$n"
         exit "$E_BUDGET"
       fi
       # Cap exhaustion is a DIFFERENT cause from exit 7 and deserves different
       # guidance, so it gets its own arm before the catch-all below. Telling an
       # operator to "raise the cap" here is exactly how one project ended up with
-      # WIGGUM_PROPOSER_MAX_ERRORS=30 and no working breaker at all: the passes
+      # SPECSTRIDE_PROPOSER_MAX_ERRORS=30 and no working breaker at all: the passes
       # were not failing, the work simply did not fit, and a bigger number buys
       # another full ceiling of nothing.
       if [[ "$prc" -eq 10 ]]; then
         log ">>> proposer hit the pass ceiling repeatedly for phase $n — halting (exit $E_BUDGET)."
-        log "#   WIGGUM_PROPOSER_MAX_CAPS (default 3) consecutive passes were killed at the"
+        log "#   SPECSTRIDE_PROPOSER_MAX_CAPS (default 3) consecutive passes were killed at the"
         log "#   absolute pass ceiling (--proposer-timeout). That is a BUDGET signal, not an"
         log "#   agent error: the passes may have been productive the whole time. This phase's"
         log "#   work does not fit one pass."
@@ -1771,14 +1773,14 @@ run_phase() {
         log "#       result rather than waiting for it"
         log "#     - split the phase so each pass has a finishable unit of work"
         log "#     - only if the work genuinely IS one indivisible pass, raise the ceiling:"
-        log "#       WIGGUM_PROPOSER_TIMEOUT=<seconds> wiggum resume -w $WORKDIR"
+        log "#       SPECSTRIDE_PROPOSER_TIMEOUT=<seconds> specstride resume -w $WORKDIR"
         log "#   Note: those passes report no cost at all (a kill severs the provider stream),"
         log "#   so their pass_cost_unknown events — not a cost metric — are the honest record."
-        wiggum_emit run_stop reason proposer_cap_exhausted phase "$n"
+        specstride_emit run_stop reason proposer_cap_exhausted phase "$n"
         exit "$E_BUDGET"
       fi
       log ">>> proposer exited ($prc) without writing evidence for phase $n — internal error."
-      wiggum_emit run_stop reason proposer_no_evidence phase "$n" rc "$prc"
+      specstride_emit run_stop reason proposer_no_evidence phase "$n" rc "$prc"
       exit "$E_INTERNAL"
     fi
 
@@ -1791,7 +1793,7 @@ run_phase() {
     if [[ "$VERIFICATION" == "required" ]]; then
       local verification_evidence="$RUN_DIR/verification/phase-${n}-attempt-${attempt}.json"
       log "----- verification: phase $n attempt $attempt (fixed argv) -----"
-      wiggum_emit verification_start phase "$n" attempt "$attempt" plan "$VERIFICATION_JSON"
+      specstride_emit verification_start phase "$n" attempt "$attempt" plan "$VERIFICATION_JSON"
       python3 "$LIB_DIR/verification_plan.py" run \
         --plan "$VERIFICATION_JSON" \
         --specs "$SPECS" \
@@ -1824,10 +1826,10 @@ run_phase() {
           echo
           echo "The phase cannot be approved solely from the proposer or critic claim."
         } > "$GATES_DIR/GATE${n}-FEEDBACK.md"
-        wiggum_emit verification_failed phase "$n" attempt "$attempt" rc "$vrc" \
+        specstride_emit verification_failed phase "$n" attempt "$attempt" rc "$vrc" \
           evidence "$verification_evidence"
       else
-        wiggum_emit verification_passed phase "$n" attempt "$attempt" \
+        specstride_emit verification_passed phase "$n" attempt "$attempt" \
           evidence "$verification_evidence"
       fi
     fi
@@ -1857,13 +1859,13 @@ run_phase() {
       # These are exported ONLY for this subprocess (env prefix), so role=critic never
       # leaks into the next proposer iteration; run/feature come from the exported globals.
       local crit_invocation_id crit_invocation_dir
-      crit_invocation_id="${WIGGUM_RUN_ID}-critic-phase-${n}-attempt-${attempt}"
-      crit_invocation_dir="$FEATURE_DIR/debug/invocations/$WIGGUM_RUN_ID/critic/phase-$n/attempt-$attempt/iter-0/$crit_invocation_id"
+      crit_invocation_id="${SPECSTRIDE_RUN_ID}-critic-phase-${n}-attempt-${attempt}"
+      crit_invocation_dir="$FEATURE_DIR/debug/invocations/$SPECSTRIDE_RUN_ID/critic/phase-$n/attempt-$attempt/iter-0/$crit_invocation_id"
 
-      WIGGUM_ROLE=critic \
-      WIGGUM_ITERATION=0 \
-      WIGGUM_INVOCATION_ID="$crit_invocation_id" \
-      WIGGUM_INVOCATION_DIR="$crit_invocation_dir" \
+      SPECSTRIDE_ROLE=critic \
+      SPECSTRIDE_ITERATION=0 \
+      SPECSTRIDE_INVOCATION_ID="$crit_invocation_id" \
+      SPECSTRIDE_INVOCATION_DIR="$crit_invocation_dir" \
         python3 "${crit_args[@]}" 2>&1 | emit_out
       crc="${PIPESTATUS[0]}"
     fi
@@ -1882,7 +1884,7 @@ run_phase() {
         [[ -f "$GATES_DIR/GATE${n}-ACCELERATION.md" ]] && mv "$GATES_DIR/GATE${n}-ACCELERATION.md" "$adir/GATE${n}-ACCELERATION.md"
       fi
       rm -f "$GATES_DIR/.diagnosed-phase${n}" "$GATES_DIR/.accelerated-phase${n}"
-      wiggum_emit phase_done phase "$n" attempt "$attempt" title "$title"
+      specstride_emit phase_done phase "$n" attempt "$attempt" title "$title"
       # ── learning: observe at phase_done ──────────────────────────────────
       # One per-phase observation written from every run of this feature (design §5.4;
       # the learn.py docstring explains why the runs directory, not this run's events:
@@ -1892,13 +1894,13 @@ run_phase() {
       # installed learn.py has no `observe` subcommand, and any failure is
       # logged to the run log and dropped. An approved phase is never undone by
       # a measurement of it.
-      if [[ -n "${WIGGUM_LEARNING:-}" && "${WIGGUM_LEARNING}" != "off" ]] \
+      if [[ -n "${SPECSTRIDE_LEARNING:-}" && "${SPECSTRIDE_LEARNING}" != "off" ]] \
          && python3 "$LIB_DIR/learn.py" observe --help >/dev/null 2>&1; then
         local observation="$FEATURE_DIR/learning/phase-$n.json"
         mkdir -p "$FEATURE_DIR/learning" 2>/dev/null || true
         if python3 "$LIB_DIR/learn.py" observe --events "$FEATURE_DIR/runs" \
              --phase "$n" --out "$observation" >>"$LOG" 2>&1; then
-          wiggum_emit learning_observed phase "$n" path "$observation"
+          specstride_emit learning_observed phase "$n" path "$observation"
         else
           log "#   (learning: observing phase $n failed — continuing; the run is unaffected)"
         fi
@@ -1910,13 +1912,13 @@ run_phase() {
 
     if [[ "$crc" -eq 3 ]]; then
       log ">>> critic config/usage error (exit 3) — halting."
-      wiggum_emit run_stop reason critic_config phase "$n"
+      specstride_emit run_stop reason critic_config phase "$n"
       exit "$E_SPEC"
     fi
 
     # REJECTED / MALFORMED (crc == 10 or other). Record and maybe retry.
     log "----- phase $n REJECTED on attempt $attempt/$MAX_REJECTS -----"
-    wiggum_emit reject phase "$n" attempt "$attempt"
+    specstride_emit reject phase "$n" attempt "$attempt"
 
     # Critic-outage breaker: MALFORMED means the critic produced no usable reply
     # at all — it timed out, was unreachable, or never emitted a verdict line —
@@ -1934,7 +1936,7 @@ run_phase() {
         # fatal if this script ever gains `set -e`.
         malformed_streak=$(( malformed_streak + 1 ))
         log ">>> critic returned no usable verdict (MALFORMED ${malformed_streak}/${CRITIC_MALFORMED_LIMIT})"
-        wiggum_emit critic_malformed phase "$n" attempt "$attempt" \
+        specstride_emit critic_malformed phase "$n" attempt "$attempt" \
           streak "$malformed_streak" limit "$CRITIC_MALFORMED_LIMIT"
         if (( malformed_streak >= CRITIC_MALFORMED_LIMIT )); then
           archive_attempt "$n" "$attempt"
@@ -1947,13 +1949,13 @@ run_phase() {
           log "#   run blind and the phase can never be approved. This is a CRITIC"
           log "#   AVAILABILITY problem, not a code gap — do not edit the spec."
           log "#   critic backend  : $CRITIC_BACKEND (timeout ${CRITIC_TIMEOUT}s)"
-          log "#   latest verdicts : wiggum verdicts -w $WORKDIR --feature $SLUG"
+          log "#   latest verdicts : specstride verdicts -w $WORKDIR --feature $SLUG"
           log "#   Options:"
-          log "#     - raise the critic timeout: WIGGUM_CRITIC_TIMEOUT=900 wiggum resume -w $WORKDIR"
-          log "#     - point at a reachable critic: wiggum resume -w $WORKDIR --critic <backend>"
-          log "#     - raise the tolerance:      WIGGUM_CRITIC_MALFORMED_LIMIT=5 wiggum resume -w $WORKDIR"
+          log "#     - raise the critic timeout: SPECSTRIDE_CRITIC_TIMEOUT=900 specstride resume -w $WORKDIR"
+          log "#     - point at a reachable critic: specstride resume -w $WORKDIR --critic <backend>"
+          log "#     - raise the tolerance:      SPECSTRIDE_CRITIC_MALFORMED_LIMIT=5 specstride resume -w $WORKDIR"
           log "############################################################"
-          wiggum_emit run_stop reason critic_unavailable phase "$n" \
+          specstride_emit run_stop reason critic_unavailable phase "$n" \
             attempts "$attempt" streak "$malformed_streak"
           exit "$E_INTERNAL"
         fi
@@ -1987,8 +1989,8 @@ run_phase() {
       log "#   excerpts) and the proposer's proof slices before treating it as a real gap."
       log "#   attempt history : $FEATURE_DIR/attempts/phase${n}/"
       log "############################################################"
-      wiggum_emit gate_oscillation phase "$n" attempt "$attempt" criterion "$osc_id" reappears "$osc_ct"
-      wiggum_emit run_stop reason gate_oscillation phase "$n" attempts "$attempt"
+      specstride_emit gate_oscillation phase "$n" attempt "$attempt" criterion "$osc_id" reappears "$osc_ct"
+      specstride_emit run_stop reason gate_oscillation phase "$n" attempts "$attempt"
       exit "$E_REJECTS"
     fi
 
@@ -2014,8 +2016,8 @@ run_phase() {
       # cause is a TOOLING blind spot (a file exists but the critic couldn't ground
       # it) — point the human at the extractor, NOT the spec. Otherwise fall back to
       # the under-specified-criterion guess.
-      if grep -q "\"event\":\"grounding_gap\"" "$WIGGUM_EVENTS" 2>/dev/null; then
-        gp="$(grep -o '"event":"grounding_gap"[^}]*"paths":"[^"]*"' "$WIGGUM_EVENTS" 2>/dev/null | tail -1 | sed 's/.*"paths":"//;s/"$//')"
+      if grep -q "\"event\":\"grounding_gap\"" "$SPECSTRIDE_EVENTS" 2>/dev/null; then
+        gp="$(grep -o '"event":"grounding_gap"[^}]*"paths":"[^"]*"' "$SPECSTRIDE_EVENTS" 2>/dev/null | tail -1 | sed 's/.*"paths":"//;s/"$//')"
         log "#   HYPOTHESIS: TOOLING BLIND SPOT — the critic could not ground [$gp]"
         log "#   though it exists on disk. This is NOT an under-specified spec. Fix the"
         log "#   critic's path extractor (lib/critic.py extract_paths / grounding_gap),"
@@ -2025,7 +2027,7 @@ run_phase() {
         log "#   (often by editing SPECS.md), then rerun to resume."
       fi
       log "############################################################"
-      wiggum_emit run_stop reason max_rejects phase "$n" attempts "$attempt"
+      specstride_emit run_stop reason max_rejects phase "$n" attempts "$attempt"
       exit "$E_REJECTS"
     fi
 
@@ -2048,5 +2050,5 @@ run_release_verification
 
 log ""
 log "# DONE — all $PHASE_COUNT phase(s) approved. $(date -Is)"
-wiggum_emit run_end outcome all_approved phases "$PHASE_COUNT"
+specstride_emit run_end outcome all_approved phases "$PHASE_COUNT"
 exit "$E_OK"

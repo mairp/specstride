@@ -201,7 +201,7 @@ class ObservabilityPolicy:
         }
 
 
-RETENTION_POLICY_VERSION = "wiggum-retention/v1"
+RETENTION_POLICY_VERSION = "specstride-retention/v1"
 
 
 class RedactionRetentionPolicy:

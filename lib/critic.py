@@ -14,7 +14,7 @@ in the evidence can never approve the gate. Missing / duplicated / wrong-nonce /
 absent verdict all fail SAFE (counted as REJECTED, recorded malformed): an
 unattended approve-your-own-work loop must never auto-approve on ambiguity.
 
-Provider is chosen by WIGGUM_CRITIC = dsh[:provider/model] | claude | codex |
+Provider is chosen by SPECSTRIDE_CRITIC = dsh[:provider/model] | claude | codex |
 bebop | prime[:variant]. DSH runs a fresh, tool-free DeepSeek Harness headless
 turn; HTTP paths use stdlib urllib. No pip installs.
 
@@ -25,18 +25,20 @@ real contract, the exit code is a convenience.
 import sys, os, re, json, time, argparse, secrets, urllib.request, urllib.error
 import glob  # W20 — placeholder-in-citation resolution
 
-# Spec parsing is owned by ONE module (lib/wiggum_spec.py) shared with the bash
+# Spec parsing is owned by ONE module (lib/specstride_spec.py) shared with the bash
 # side — critic.py no longer carries its own copy of the grammar. Import it from
 # the same directory this file lives in, regardless of the caller's CWD.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import wiggum_spec  # noqa: E402
+import specstride_spec  # noqa: E402
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
 import verification_plan  # noqa: E402
 import verdict_pins  # noqa: E402  (W9 — per-criterion verdict pinning)
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Config knobs (env-overridable; flags override env).
 # ─────────────────────────────────────────────────────────────────────────────
-GROUNDING_MAX_FILES   = int(os.environ.get("WIGGUM_GROUNDING_MAX_FILES", 80))
+GROUNDING_MAX_FILES   = int(os.environ.get("SPECSTRIDE_GROUNDING_MAX_FILES", 80))
                                    # hard cap on PRESENCE LINES (one per cited path).
                                    # Env-overridable: a 45-task polish phase cited 236
                                    # paths (semantic-router-sovereign phase 17, 2026-09-08)
@@ -64,7 +66,7 @@ GROUNDING_TOTAL_CAP   = 327680    # 320 KB. Derived, not guessed: the critic's
                                    # This is the REFERENCE value, tuned against a 200k-
                                    # token context (gpt-5's window, per the W17 incident
                                    # below). It is NOT used directly any more — every
-                                   # provider wiggum supports has a DIFFERENT real window
+                                   # provider specstride supports has a DIFFERENT real window
                                    # (Claude Opus 200k, a locally-served Qwen3.8 measured
                                    # at 229,376 on this fleet's 3090, GLM-5.3 at 128,000,
                                    # Prime's backing model unknown from here) and using one
@@ -165,32 +167,32 @@ _CLAUDE_MODEL_CONTEXT_TOKENS = {
 # Newer family members have larger windows per their own OpenAI model pages:
 # gpt-5.5 1,000,000; gpt-5.4/gpt-5.4-pro ~1,050,000. "gpt-5.6-sol"/"gpt-5.2" are
 # this fleet's own LiteLLM/Compass routing aliases, not real OpenAI model ids --
-# dropped from this table; WIGGUM_CODEX_CRITIC_MODEL naming one of them should go
-# through WIGGUM_CRITIC_CONTEXT_TOKENS instead of a guessed table entry here.
+# dropped from this table; SPECSTRIDE_CODEX_CRITIC_MODEL naming one of them should go
+# through SPECSTRIDE_CRITIC_CONTEXT_TOKENS instead of a guessed table entry here.
 _CODEX_MODEL_CONTEXT_TOKENS = {
     "gpt-5": 400000, "gpt-5.5": 1000000, "gpt-5.4": 1050000, "gpt-5.4-pro": 1050000,
 }
 
 
 def _critic_context_tokens(provider):
-    """The critic backend's real context window, in tokens. WIGGUM_CRITIC_CONTEXT_TOKENS
+    """The critic backend's real context window, in tokens. SPECSTRIDE_CRITIC_CONTEXT_TOKENS
     always wins when set — it is the only correct answer for a host-specific model these
     tables can't know about (in particular Prime, whose backing model critic.py never
     sees). Otherwise resolved from the model actually configured for the given provider,
     falling back to _DEFAULT_CONTEXT_TOKENS for anything unrecognized."""
-    override = os.environ.get("WIGGUM_CRITIC_CONTEXT_TOKENS")
+    override = os.environ.get("SPECSTRIDE_CRITIC_CONTEXT_TOKENS")
     if override:
         try:
             return int(override)
         except ValueError:
-            warn("WIGGUM_CRITIC_CONTEXT_TOKENS=%r is not an integer; ignoring" % override)
+            warn("SPECSTRIDE_CRITIC_CONTEXT_TOKENS=%r is not an integer; ignoring" % override)
     if provider == "claude":
-        model = os.environ.get("WIGGUM_CLAUDE_CRITIC_MODEL", "claude-opus-4-8")
+        model = os.environ.get("SPECSTRIDE_CLAUDE_CRITIC_MODEL", "claude-opus-4-8")
         # fallback = Haiku 4.5's window, the smallest in the current Claude lineup —
         # safer than assuming an unrecognized future model matches the 1M majority.
         return _CLAUDE_MODEL_CONTEXT_TOKENS.get(model, 200000)
     if provider == "codex":
-        model = os.environ.get("WIGGUM_CODEX_CRITIC_MODEL", "gpt-5")
+        model = os.environ.get("SPECSTRIDE_CODEX_CRITIC_MODEL", "gpt-5")
         # fallback: a conservative modern-API floor, well under verified "gpt-5"
         # (400,000) — an unrecognized model name could be an older/smaller one.
         return _CODEX_MODEL_CONTEXT_TOKENS.get(model, 128000)
@@ -199,12 +201,12 @@ def _critic_context_tokens(provider):
         model = model_ref.rpartition("/")[2] if "/" in model_ref else model_ref
         return _LOCAL_MODEL_CONTEXT_TOKENS.get(model, _DEFAULT_CONTEXT_TOKENS)
     if provider == "bebop":
-        backend = os.environ.get("WIGGUM_BEBOP_BACKEND", "compass")
-        model = os.environ.get("WIGGUM_BEBOP_CRITIC_MODEL") or backend
+        backend = os.environ.get("SPECSTRIDE_BEBOP_BACKEND", "compass")
+        model = os.environ.get("SPECSTRIDE_BEBOP_CRITIC_MODEL") or backend
         return _LOCAL_MODEL_CONTEXT_TOKENS.get(model, _DEFAULT_CONTEXT_TOKENS)
     # prime / prime:<variant> — the backing model is never visible from critic.py
     # (call_prime_shell takes no model argument), so there is nothing to key a table
-    # lookup on; WIGGUM_CRITIC_CONTEXT_TOKENS above is the only way to correct this.
+    # lookup on; SPECSTRIDE_CRITIC_CONTEXT_TOKENS above is the only way to correct this.
     return _DEFAULT_CONTEXT_TOKENS
 
 
@@ -233,7 +235,7 @@ _GROUNDING_SKIP_DIRS = frozenset((
 _GROUNDING_DIR_EXPAND_MAX = 40     # a dir with MORE files than this is too broad to
                                    # be evidence (a package root) — skip it entirely
 _GROUNDING_DIR_EXPAND_TOTAL = 45   # global cap across ALL expanded dirs
-ANCHOR_MAX_BYTES_CEIL = int(os.environ.get("WIGGUM_ANCHOR_MAX_BYTES_CEIL", 49152))
+ANCHOR_MAX_BYTES_CEIL = int(os.environ.get("SPECSTRIDE_ANCHOR_MAX_BYTES_CEIL", 49152))
                                    # per-file CEILING (W14): a large criterion-named file
                                    # Env-overridable: anchored excerpts bypass the byte
                                    # budget, and three 50 KB prose documents cited by one
@@ -340,16 +342,16 @@ def die(code, msg):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  SPEC slicing — delegated to the shared parser (lib/wiggum_spec.py), the single
+#  SPEC slicing — delegated to the shared parser (lib/specstride_spec.py), the single
 #  source of truth for every spec format. `fmt` is the adapter chosen for this
 #  spec; it is resolved once in main() and threaded here.
 # ─────────────────────────────────────────────────────────────────────────────
 def slice_phase(specs_text, n, fmt="native"):
-    return wiggum_spec.slice_phase(specs_text, n, fmt)
+    return specstride_spec.slice_phase(specs_text, n, fmt)
 
 
 def phase_title(section_text):
-    return wiggum_spec.phase_title(section_text)
+    return specstride_spec.phase_title(section_text)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -509,12 +511,13 @@ def extract_paths(evidence_text, workdir=None, search_dirs=None):
 # The two gate dirs are placeholders — the real, feature-scoped dirs are computed per
 # run by grounding_search_dirs() and threaded through _resolve_cited. Kept as a
 # module constant for back-compat with any external caller.
-GROUNDING_SEARCH_DIRS = ("", ".wiggum/gates/proofs", ".wiggum/gates", "out")
+GROUNDING_SEARCH_DIRS = ("", specstride_env.STATE_DIRNAME + "/gates/proofs",
+                         specstride_env.STATE_DIRNAME + "/gates", "out")
 
 
 def grounding_search_dirs(gates_rel, workdir=None, specs_path=None):
     """The workdir-relative proof dirs to resolve a bare citation against, for the
-    ACTIVE feature. `gates_rel` is .wiggum/features/<slug>/gates. Root first (so an
+    ACTIVE feature. `gates_rel` is .specstride/features/<slug>/gates. Root first (so an
     exact path wins), then the feature's proofs/ and gates/, then a bare `out`.
 
     When `workdir` is given, ALSO include every immediate subdirectory of the gates
@@ -829,7 +832,7 @@ def _resolve_cited(p, workdir, search_dirs=None, members=None, hint=None):
     # above by explicit design; this guard is only for the relative family.
     if norm == ".." or norm.startswith(".." + os.sep):
         return None
-    # exact relative path (covers evidence that cites the full .wiggum/... path)
+    # exact relative path (covers evidence that cites the full .specstride/... path)
     direct = os.path.join(workdir, norm)
     if os.path.exists(direct):
         return direct
@@ -1079,7 +1082,8 @@ def harness_probes(paths, section, evidence, workdir):
         scanned = 0
         for root, dirs, files in os.walk(workdir):
             dirs[:] = [d for d in dirs if d not in
-                       (".git", ".wiggum", "node_modules", "__pycache__", "out",
+                       (".git", specstride_env.STATE_DIRNAME,
+                        specstride_env.LEGACY_STATE_DIRNAME, "node_modules", "__pycache__", "out",
                         "logs", "ComfyUI", "profiles", "checklists", "workflows",
                         ".run")]
             if root.count(os.sep) - workdir.count(os.sep) > 1:
@@ -1406,7 +1410,7 @@ def grounding_snapshot(paths, workdir, search_dirs=None, priority=None, anchors=
         # atomic write) resolves via search_dirs to its real home under the feature's
         # gates/ dir — but shown as the bare token it reads as a ROOT-LEVEL file and
         # the critic rejects "no file outside reversed/" on a file that only exists in
-        # expected .wiggum/ run-state. Show the workdir-relative resolved path so the
+        # expected .specstride/ run-state. Show the workdir-relative resolved path so the
         # location is unambiguous. Absolute citations and already-exact paths are left
         # as-is; a path resolving outside the workdir (rel starts with "..") keeps p.
         rel = os.path.relpath(full, workdir)
@@ -1662,7 +1666,7 @@ def run_diagnostician(args, workdir, n, feature_dir, gates_dir, gates_rel, secti
     """Stuck-loop mitigation. Triggered by orchestrator.sh the first time a phase's
     unmet-criteria signature is seen (see maybe_run_diagnostician in orchestrator.sh
     for the K=1-on-any-new-signature trigger and its idempotency guard). Reuses the
-    SAME critic backend/model (WIGGUM_CRITIC), but with the full rejection history
+    SAME critic backend/model (SPECSTRIDE_CRITIC), but with the full rejection history
     and full, untruncated file content instead of the critic's own budgeted
     grounding snapshot — a second opinion with more room to look, not a new judge.
     Writes GATE<N>-HINT.md; NEVER writes GATE<N>-APPROVED/FEEDBACK.md and never
@@ -1839,16 +1843,16 @@ def call_claude(prompt, model, timeout):
     # Critic-specific overrides keep an Anthropic-compatible critic gateway
     # isolated from the Claude CLI proposer, which inherits the process env.
     key = (
-        os.environ.get("WIGGUM_CLAUDE_CRITIC_API_KEY", "")
+        os.environ.get("SPECSTRIDE_CLAUDE_CRITIC_API_KEY", "")
         or os.environ.get("ANTHROPIC_API_KEY", "")
     )
     if not key:
         raise RuntimeError(
-            "WIGGUM_CRITIC=claude needs WIGGUM_CLAUDE_CRITIC_API_KEY "
+            "SPECSTRIDE_CRITIC=claude needs SPECSTRIDE_CLAUDE_CRITIC_API_KEY "
             "or ANTHROPIC_API_KEY"
         )
     base = (
-        os.environ.get("WIGGUM_CLAUDE_CRITIC_BASE_URL", "")
+        os.environ.get("SPECSTRIDE_CLAUDE_CRITIC_BASE_URL", "")
         or os.environ.get("ANTHROPIC_BASE_URL", "")
         or "https://api.anthropic.com"
     ).rstrip("/")
@@ -1913,13 +1917,13 @@ def _resolve_dsh_model_ref(model_ref, provider=None):
     """
     if not model_ref:
         return (None, None)
-    provider = provider or os.environ.get("WIGGUM_DSH_PROVIDER", "")
+    provider = provider or os.environ.get("SPECSTRIDE_DSH_PROVIDER", "")
     model = model_ref
     if "/" in model:
         embedded_provider, model = model.split("/", 1)
         if provider and provider != embedded_provider:
             raise RuntimeError(
-                "conflicting DSH providers: WIGGUM_DSH_PROVIDER=%s but model ref uses %s" %
+                "conflicting DSH providers: SPECSTRIDE_DSH_PROVIDER=%s but model ref uses %s" %
                 (provider, embedded_provider))
         provider = embedded_provider
     elif not provider and model.startswith("glm-"):
@@ -1929,7 +1933,7 @@ def _resolve_dsh_model_ref(model_ref, provider=None):
         model = "qwen3.8-27b-q5"
     if not provider:
         raise RuntimeError(
-            "DSH model '%s' needs a provider; use provider/model or set WIGGUM_DSH_PROVIDER" %
+            "DSH model '%s' needs a provider; use provider/model or set SPECSTRIDE_DSH_PROVIDER" %
             model_ref)
     import re
     if not re.match(r"^[A-Za-z0-9._-]+$", provider) or not re.match(r"^[A-Za-z0-9._:-]+$", model):
@@ -1974,7 +1978,7 @@ def _dsh_home_overlay(model_ref, provider=None):
         return None
     real_home = os.environ.get("DSH_HOME") or os.path.join(
         os.path.expanduser("~"), ".dsh")
-    overlay = tempfile.mkdtemp(prefix="wiggum-dsh-home.")
+    overlay = tempfile.mkdtemp(prefix="specstride-dsh-home.")
     if os.path.isdir(real_home):
         for name in os.listdir(real_home):
             if name == "settings.yaml":
@@ -1986,8 +1990,8 @@ def _dsh_home_overlay(model_ref, provider=None):
              "  model: %s" % model]
     # reasoningEffort belongs to the settings section, deliberately not to
     # plugin config (same README), so it is honoured here.
-    reasoning = os.environ.get("WIGGUM_DSH_CRITIC_REASONING_EFFORT") \
-        or os.environ.get("WIGGUM_DSH_REASONING_EFFORT")
+    reasoning = os.environ.get("SPECSTRIDE_DSH_CRITIC_REASONING_EFFORT") \
+        or os.environ.get("SPECSTRIDE_DSH_REASONING_EFFORT")
     if reasoning:
         lines.append("  reasoningEffort: %s" % reasoning)
     body = "\n".join(lines) + "\n"
@@ -2057,8 +2061,8 @@ def call_dsh_shell(prompt, timeout, workdir=None, model_ref=None):
     """
     import subprocess
     import tempfile
-    launcher = os.environ.get("WIGGUM_DSH_BIN", "dsh")
-    profile = os.environ.get("WIGGUM_DSH_PROFILE", "headless")
+    launcher = os.environ.get("SPECSTRIDE_DSH_BIN", "dsh")
+    profile = os.environ.get("SPECSTRIDE_DSH_PROFILE", "headless")
     patch = """\
 - id: tool-bash
   disabled: true
@@ -2100,10 +2104,10 @@ def call_dsh_shell(prompt, timeout, workdir=None, model_ref=None):
     # The tool-disabling patch above is pure composition, so --patch is the right
     # layer for it. The model selection is not: it must go in the settings layer.
     overlay_home = _dsh_home_overlay(
-        model_ref or os.environ.get("WIGGUM_DSH_CRITIC_MODEL")
-        or os.environ.get("WIGGUM_DSH_MODEL"),
-        os.environ.get("WIGGUM_DSH_CRITIC_PROVIDER")
-        or os.environ.get("WIGGUM_DSH_PROVIDER"),
+        model_ref or os.environ.get("SPECSTRIDE_DSH_CRITIC_MODEL")
+        or os.environ.get("SPECSTRIDE_DSH_MODEL"),
+        os.environ.get("SPECSTRIDE_DSH_CRITIC_PROVIDER")
+        or os.environ.get("SPECSTRIDE_DSH_PROVIDER"),
     )
     patch_path = None
     try:
@@ -2151,11 +2155,11 @@ def call_prime_shell(prompt, variant, timeout, workdir=None):
     """
     import subprocess
     if variant:
-        launcher = os.environ.get("WIGGUM_PRIME_FLEET_BIN",
-                                  os.environ.get("WIGGUM_PRIME_BIN", "prime"))
+        launcher = os.environ.get("SPECSTRIDE_PRIME_FLEET_BIN",
+                                  os.environ.get("SPECSTRIDE_PRIME_BIN", "prime"))
         argv = [launcher, variant]
     else:
-        launcher = os.environ.get("WIGGUM_PRIME_AGENT_BIN", "prime-agent")
+        launcher = os.environ.get("SPECSTRIDE_PRIME_AGENT_BIN", "prime-agent")
         argv = [launcher]
     argv += ["-p", "--mode", "text", "--no-session", "--no-tools",
              "--no-skills", "--no-context-files"]
@@ -2208,11 +2212,11 @@ def _prime_launch_argv(variant, mode, workdir):
     Identical restriction flags to ``call_prime_shell`` — a critic never gets
     tools, skills, session reuse, or context files — differing only in --mode."""
     if variant:
-        launcher = os.environ.get("WIGGUM_PRIME_FLEET_BIN",
-                                  os.environ.get("WIGGUM_PRIME_BIN", "prime"))
+        launcher = os.environ.get("SPECSTRIDE_PRIME_FLEET_BIN",
+                                  os.environ.get("SPECSTRIDE_PRIME_BIN", "prime"))
         argv = [launcher, variant]
     else:
-        launcher = os.environ.get("WIGGUM_PRIME_AGENT_BIN", "prime-agent")
+        launcher = os.environ.get("SPECSTRIDE_PRIME_AGENT_BIN", "prime-agent")
         argv = [launcher]
     argv += ["-p", "--mode", mode, "--no-session", "--no-tools",
              "--no-skills", "--no-context-files"]
@@ -2229,10 +2233,10 @@ def call_prime_critic(prompt, variant, timeout, workdir=None):
     response and to observe the provider terminal (model/provider/usage/duration/
     diagnostics). Prime exits 0 even when the provider itself errored, so the
     adapter's terminal — not the exit code — decides success vs. error. With
-    WIGGUM_AGENT_STREAM=false the critic falls back to raw ``--mode text`` output.
+    SPECSTRIDE_AGENT_STREAM=false the critic falls back to raw ``--mode text`` output.
     """
     import subprocess
-    structured = os.environ.get("WIGGUM_AGENT_STREAM", "true") == "true"
+    structured = os.environ.get("SPECSTRIDE_AGENT_STREAM", "true") == "true"
     mode = "json" if structured else "text"
     argv = _prime_launch_argv(variant, mode, workdir)
     start = time.time()
@@ -2305,10 +2309,10 @@ def critic_call(provider, prompt, timeout, workdir=None):
         model_ref = provider.partition(":")[2] if provider.startswith("dsh:") else None
         return call_dsh_shell(prompt, timeout, workdir, model_ref or None)
     if provider == "claude":
-        model = os.environ.get("WIGGUM_CLAUDE_CRITIC_MODEL", "claude-opus-4-8")
+        model = os.environ.get("SPECSTRIDE_CLAUDE_CRITIC_MODEL", "claude-opus-4-8")
         return call_claude(prompt, model, timeout)
     if provider == "codex":
-        model = os.environ.get("WIGGUM_CODEX_CRITIC_MODEL", "gpt-5")
+        model = os.environ.get("SPECSTRIDE_CODEX_CRITIC_MODEL", "gpt-5")
         base = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         key = os.environ.get("OPENAI_API_KEY", "")
         return call_openai_chat(prompt, model, timeout, base, key, "OPENAI_API_KEY")
@@ -2320,33 +2324,33 @@ def critic_call(provider, prompt, timeout, workdir=None):
             raise RuntimeError("empty Prime variant; use prime or prime:<variant>")
         return call_prime_shell(prompt, variant, timeout, workdir)
     if provider == "bebop":
-        via = os.environ.get("WIGGUM_CRITIC_VIA", "bebop")
-        backend = os.environ.get("WIGGUM_BEBOP_BACKEND", "compass")
+        via = os.environ.get("SPECSTRIDE_CRITIC_VIA", "bebop")
+        backend = os.environ.get("SPECSTRIDE_BEBOP_BACKEND", "compass")
         if via == "http":
-            base = os.environ.get("WIGGUM_COMPASS_URL", "http://localhost:4000/v1/chat/completions")
-            # WIGGUM_COMPASS_URL may already include the full path; call_openai_chat
+            base = os.environ.get("SPECSTRIDE_COMPASS_URL", "http://localhost:4000/v1/chat/completions")
+            # SPECSTRIDE_COMPASS_URL may already include the full path; call_openai_chat
             # appends /chat/completions, so strip it if present.
             if base.endswith("/chat/completions"):
                 base = base[: -len("/chat/completions")]
-            key = os.environ.get("WIGGUM_COMPASS_KEY", "")
+            key = os.environ.get("SPECSTRIDE_COMPASS_KEY", "")
             # Provider-agnostic: the model is env-controlled, never hardcoded here.
             # A bebop backend that IS a model id (e.g. `gpt`, `qwen`) can name itself;
             # a gateway backend like `compass` has no intrinsic model, so the model MUST
-            # be supplied via WIGGUM_BEBOP_CRITIC_MODEL — fail loudly if it isn't rather
+            # be supplied via SPECSTRIDE_BEBOP_CRITIC_MODEL — fail loudly if it isn't rather
             # than silently pick a provider's model.
-            model = os.environ.get("WIGGUM_BEBOP_CRITIC_MODEL") \
+            model = os.environ.get("SPECSTRIDE_BEBOP_CRITIC_MODEL") \
                 or (backend if backend != "compass" else "")
             if not model:
                 raise RuntimeError(
-                    "critic model is unset: set WIGGUM_BEBOP_CRITIC_MODEL "
+                    "critic model is unset: set SPECSTRIDE_BEBOP_CRITIC_MODEL "
                     "(no hardcoded default — the model is env-controlled)")
-            return call_openai_chat(prompt, model, timeout, base, key, "WIGGUM_COMPASS_KEY")
+            return call_openai_chat(prompt, model, timeout, base, key, "SPECSTRIDE_COMPASS_KEY")
         return call_bebop_shell(prompt, backend, timeout)
-    raise RuntimeError("unknown WIGGUM_CRITIC provider: %s (dsh[:provider/model]|claude|codex|bebop|prime[:variant])" % provider)
+    raise RuntimeError("unknown SPECSTRIDE_CRITIC provider: %s (dsh[:provider/model]|claude|codex|bebop|prime[:variant])" % provider)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Event emit (append to events.jsonl; best-effort; mirrors wiggum-lib.sh shape).
+#  Event emit (append to events.jsonl; best-effort; mirrors specstride-lib.sh shape).
 # ─────────────────────────────────────────────────────────────────────────────
 def critic_observability(provider):
     """Describe the critic's capability for an ``agent_observability`` event (T060).
@@ -2357,7 +2361,7 @@ def critic_observability(provider):
     capability to announce (a text-only provider needs no capability line)."""
     if provider != "prime" and not provider.startswith("prime:"):
         return None
-    structured = os.environ.get("WIGGUM_AGENT_STREAM", "true") == "true"
+    structured = os.environ.get("SPECSTRIDE_AGENT_STREAM", "true") == "true"
     if structured:
         return ("structured", "Prime JSON schema v3 selected", "text,result")
     return ("raw-text",
@@ -2382,26 +2386,26 @@ def emit(events_path, event, **fields):
 #  main
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
-    ap = argparse.ArgumentParser(description="Wiggum critic — automated approval gate")
+    ap = argparse.ArgumentParser(description="Specstride critic — automated approval gate")
     ap.add_argument("--workdir", required=True)
     ap.add_argument("--specs", required=True)
     ap.add_argument("--phase", type=int, required=True)
     ap.add_argument("--attempt", type=int, default=1)
     ap.add_argument("--max-rejects", type=int,
-                    default=int(os.environ.get("WIGGUM_MAX_REJECTS", "3")))
-    ap.add_argument("--provider", default=os.environ.get("WIGGUM_CRITIC", "claude"),
+                    default=int(os.environ.get("SPECSTRIDE_MAX_REJECTS", "3")))
+    ap.add_argument("--provider", default=os.environ.get("SPECSTRIDE_CRITIC", "claude"),
                     help="critic provider: dsh[:provider/model]|claude|codex|bebop|prime[:variant]")
     ap.add_argument("--timeout", type=int,
-                    default=int(os.environ.get("WIGGUM_CRITIC_TIMEOUT", "300")))
-    ap.add_argument("--grounding", default=os.environ.get("WIGGUM_CRITIC_GROUNDING", "true"))
-    ap.add_argument("--format", default=os.environ.get("WIGGUM_SPEC_FORMAT") or None,
+                    default=int(os.environ.get("SPECSTRIDE_CRITIC_TIMEOUT", "300")))
+    ap.add_argument("--grounding", default=os.environ.get("SPECSTRIDE_CRITIC_GROUNDING", "true"))
+    ap.add_argument("--format", default=os.environ.get("SPECSTRIDE_SPEC_FORMAT") or None,
                     help="spec format: native|speckit-tasks|openspec-change "
                          "(else auto-detect)")
-    ap.add_argument("--feature", default=os.environ.get("WIGGUM_FEATURE") or None,
-                    help="feature slug — durable state under .wiggum/features/<slug>/ "
+    ap.add_argument("--feature", default=os.environ.get("SPECSTRIDE_FEATURE") or None,
+                    help="feature slug — durable state under .specstride/features/<slug>/ "
                          "(else derived from its Spec Kit/OpenSpec location)")
     ap.add_argument("--verification-plan",
-                    default=os.environ.get("WIGGUM_VERIFICATION_PLAN") or None,
+                    default=os.environ.get("SPECSTRIDE_VERIFICATION_PLAN") or None,
                     help="absolute canonical VerificationPlan v1 JSON; its phase "
                          "obligations become approval criteria")
     ap.add_argument("--debug", action="store_true")
@@ -2415,22 +2419,23 @@ def main():
 
     workdir = os.path.abspath(args.workdir)
     n = args.phase
-    # Durable state is feature-scoped: .wiggum/features/<slug>/. The slug is passed
-    # explicitly by the orchestrator (--feature/WIGGUM_FEATURE); a standalone critic
+    # Durable state is feature-scoped: .specstride/features/<slug>/. The slug is passed
+    # explicitly by the orchestrator (--feature/SPECSTRIDE_FEATURE); a standalone critic
     # invocation derives it from the spec's Spec Kit/OpenSpec location.
-    slug = args.feature or wiggum_spec.feature_slug(args.specs)
+    slug = args.feature or specstride_spec.feature_slug(args.specs)
     slug = re.sub(r'[^A-Za-z0-9._-]+', '-', slug or "").strip("-") or "default"
-    feature_dir = os.path.join(workdir, ".wiggum", "features", slug)
+    state_name = specstride_env.state_dirname(workdir)   # .specstride, or a legacy dir
+    feature_dir = os.path.join(workdir, state_name, "features", slug)
     # All gate files (EVIDENCE/APPROVED/FEEDBACK) live in the feature's gates/, out
     # of the project root. The orchestrator creates it; make sure it exists here too
     # so a standalone critic invocation still works.
     gates_dir = os.path.join(feature_dir, "gates")
     verdicts_dir = os.path.join(feature_dir, "verdicts")
     debug_dir = os.path.join(feature_dir, "debug")
-    events_path = os.environ.get("WIGGUM_EVENTS",
-                                 os.path.join(workdir, ".wiggum", "events.jsonl"))
+    events_path = os.environ.get("SPECSTRIDE_EVENTS",
+                                 os.path.join(workdir, state_name, "events.jsonl"))
     # Feature-relative proof dirs for grounding citation resolution (Phase 2).
-    gates_rel = os.path.join(".wiggum", "features", slug, "gates")
+    gates_rel = os.path.join(state_name, "features", slug, "gates")
     os.makedirs(verdicts_dir, exist_ok=True)
     os.makedirs(gates_dir, exist_ok=True)
     if args.debug:
@@ -2444,7 +2449,7 @@ def main():
     # native) and slice this phase with that adapter. Same choice the bash side
     # makes, so proposer and critic always agree on what phase N's spec is.
     try:
-        fmt = wiggum_spec.detect_format(args.specs, specs_text, args.format)
+        fmt = specstride_spec.detect_format(args.specs, specs_text, args.format)
     except ValueError as e:
         die(3, str(e))
     section = slice_phase(specs_text, n, fmt)
@@ -2486,7 +2491,7 @@ def main():
         # the proposer, decides what needs proving. Evidence paths come first so
         # they win the presence-line budget; spec-only paths are appended.
         # Resolve bare citations against the ACTIVE feature's proof dirs (Phase 2),
-        # not a hardcoded flat .wiggum/gates.
+        # not a hardcoded flat .specstride/gates.
         search_dirs = grounding_search_dirs(gates_rel, workdir, args.specs)
         # Pass workdir so the extractor's de-noise pass (W5) can drop no-slash tokens
         # that don't resolve on disk (`jobs.run`, `events.subscribe`) instead of turning
@@ -2576,7 +2581,7 @@ def main():
 
     # Document-set context (Spec Kit/OpenSpec): read-only background,
     # budget-allocated and fence-safe truncated by the shared renderer.
-    context = wiggum_spec.render_context(args.specs, fmt=fmt)
+    context = specstride_spec.render_context(args.specs, fmt=fmt)
 
     # W9: per-criterion verdict pins. Compute a content hash of the criterion-backing
     # (priority) files; load any criteria CONFIRMED in an earlier attempt of THIS phase
@@ -2699,7 +2704,7 @@ def _first_reason_line(reply):
 def _write_transcript(path, nonce, verdict, detail, prompt, reply, args):
     try:
         with open(path, "w", encoding="utf-8") as fh:
-            fh.write("# Wiggum critic transcript\n")
+            fh.write("# Specstride critic transcript\n")
             fh.write("phase: %d\nattempt: %d\nprovider: %s\nnonce: %s\n" %
                      (args.phase, args.attempt, args.provider, nonce))
             fh.write("verdict: %s\nparse: %s\n\n" % (verdict, detail))

@@ -211,7 +211,7 @@ def test_duplicate_at_limit_minus_one_does_not_trip_breaker():
 # the same shape whatever ended the pass. Counting on that flag alone is what
 # made three productive passes killed at a 90-minute ceiling look like three
 # crashes (semantic-router-sovereign phase 15, 2026-09-11) and put
-# WIGGUM_PROPOSER_MAX_ERRORS=30 into a real .env. The class decides the counter:
+# SPECSTRIDE_PROPOSER_MAX_ERRORS=30 into a real .env. The class decides the counter:
 # budget → the cap breaker (exit 10), everything else → the error breaker.
 
 def test_kill_reasons_classify_exactly_as_the_legacy_ladder_does():
