@@ -1,9 +1,9 @@
 apiVersion: 1
 
 providers:
-  - name: wiggum
+  - name: specstride
     orgId: 1
-    folder: Wiggum
+    folder: Specstride
     type: file
     disableDeletion: false
     editable: true

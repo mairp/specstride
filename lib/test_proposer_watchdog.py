@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 PROPOSER = Path(__file__).parents[1] / "proposer.sh"
-LIB = Path(__file__).parents[1] / "wiggum-lib.sh"
+LIB = Path(__file__).parents[1] / "specstride-lib.sh"
 
 
 def _agent(tmp_path, body):
@@ -40,22 +40,22 @@ def _emit_tool(events, tool, target):
 
 
 def _run(tmp_path, agent, *, max_iter=1, env_extra=None, timeout="120"):
-    evidence = tmp_path / ".wiggum" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
     env = os.environ.copy()
     env.update({
-        "WIGGUM_DSH_BIN": str(agent),
-        "WIGGUM_AGENT_STREAM": "false",
-        "WIGGUM_EVENTS": str(tmp_path / ".wiggum" / "events.jsonl"),
-        "WIGGUM_WATCHDOG_TICK": "1",
+        "SPECSTRIDE_DSH_BIN": str(agent),
+        "SPECSTRIDE_AGENT_STREAM": "false",
+        "SPECSTRIDE_EVENTS": str(tmp_path / ".specstride" / "events.jsonl"),
+        "SPECSTRIDE_WATCHDOG_TICK": "1",
         "PROMPT_LOG": str(tmp_path / "prompts.log"),
-        "WIGGUM_PROPOSER_IDLE_TIMEOUT": "900",
-        "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "0",
-        "WIGGUM_PROPOSER_REPEAT_LIMIT": "0",
+        "SPECSTRIDE_PROPOSER_IDLE_TIMEOUT": "900",
+        "SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "0",
+        "SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "0",
     })
     env.update(env_extra or {})
-    (tmp_path / ".wiggum").mkdir(exist_ok=True)
+    (tmp_path / ".specstride").mkdir(exist_ok=True)
     result = subprocess.run(
         ["bash", str(PROPOSER), "-w", str(tmp_path), "-e", str(evidence),
          "-f", str(prompt), "--backend", "dsh", "-n", str(max_iter), "-s", "0",
@@ -63,7 +63,7 @@ def _run(tmp_path, agent, *, max_iter=1, env_extra=None, timeout="120"):
         text=True, capture_output=True, env=env, timeout=180,
     )
     events = []
-    events_file = tmp_path / ".wiggum" / "events.jsonl"
+    events_file = tmp_path / ".specstride" / "events.jsonl"
     if events_file.exists():
         for line in events_file.read_text().splitlines():
             try:
@@ -78,16 +78,16 @@ def _kills(events):
 
 
 def _checkpoints(tmp_path):
-    return sorted((tmp_path / ".wiggum" / "features" / "f" / "pass-checkpoints").glob("*.md"))
+    return sorted((tmp_path / ".specstride" / "features" / "f" / "pass-checkpoints").glob("*.md"))
 
 
 def test_repeated_tool_call_ends_the_pass(tmp_path):
     """Five identical calls, still going: busy, but not progressing."""
-    events = tmp_path / ".wiggum" / "events.jsonl"
+    events = tmp_path / ".specstride" / "events.jsonl"
     body = "for i in 1 2 3 4 5 6; do\n" + _emit_tool(events, "Bash", "make -C build-gnmi") + \
         "sleep 1\ndone\nsleep 120\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     kills = _kills(evs)
@@ -102,11 +102,11 @@ def test_repeated_tool_call_ends_the_pass(tmp_path):
 def test_repeated_edits_to_one_file_are_not_repetition(tmp_path):
     """Five Edits to the same path are five different edits: the summary carries
     only the path, so this is how work lands, not a stall."""
-    events = tmp_path / ".wiggum" / "events.jsonl"
+    events = tmp_path / ".specstride" / "events.jsonl"
     body = "for i in 1 2 3 4 5 6; do\n" + _emit_tool(events, "Edit", "/w/services/policy/selection.py") + \
         "sleep 1\ndone\nexit 0\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -114,10 +114,10 @@ def test_repeated_edits_to_one_file_are_not_repetition(tmp_path):
 
 def test_varied_tool_calls_are_left_alone(tmp_path):
     """The same COUNT of calls, none repeated: a working pass is never killed."""
-    events = tmp_path / ".wiggum" / "events.jsonl"
+    events = tmp_path / ".specstride" / "events.jsonl"
     body = "".join(_emit_tool(events, "Bash", f"step-{i}") for i in range(6)) + "exit 0\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -126,12 +126,12 @@ def test_varied_tool_calls_are_left_alone(tmp_path):
 
 def test_repeats_the_agent_moved_on_from_are_left_alone(tmp_path):
     """Over the limit in total, but no longer the current activity."""
-    events = tmp_path / ".wiggum" / "events.jsonl"
+    events = tmp_path / ".specstride" / "events.jsonl"
     body = ("".join(_emit_tool(events, "Bash", "flaky-test") for _ in range(6))
             + _emit_tool(events, "Edit", "src/fix.py")
             + "sleep 6\nexit 0\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -143,7 +143,7 @@ def test_rerunning_one_command_ends_the_pass_without_any_agent_stream(tmp_path):
     body = ("for i in 1 2 3 4 5 6; do timeout 2 tail -f /dev/null; done\n"
             "sleep 120\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     kills = _kills(evs)
@@ -157,14 +157,14 @@ def test_same_command_under_distinct_tool_calls_is_not_repetition(tmp_path):
     (semantic-router-sovereign 003 phase 14, 2026-09-13: `tesseract - - --psm 6`
     x12 over twelve images was killed as a stall). The process counter is keyed
     per tool call, so each of these counts 1."""
-    events = tmp_path / ".wiggum" / "events.jsonl"
+    events = tmp_path / ".specstride" / "events.jsonl"
     body = "".join(
         _emit_tool(events, "Bash", "ocr screenshot-%d.png with tesseract" % i)
         + "timeout 2 tail -f /dev/null\n"
         for i in range(1, 7)
     ) + "exit 0\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -174,12 +174,12 @@ def test_same_command_under_distinct_tool_calls_is_not_repetition(tmp_path):
 def test_one_command_rerun_under_one_tool_call_still_ends_the_pass(tmp_path):
     """The guarantee the tool-call keying must not weaken: the same argv spawned
     over and over from a SINGLE tool call is a retry loop, and is still killed."""
-    events = tmp_path / ".wiggum" / "events.jsonl"
+    events = tmp_path / ".specstride" / "events.jsonl"
     body = (_emit_tool(events, "Bash", "for f in shots/*.png; do tesseract $f; done")
             + "for i in 1 2 3 4 5 6 7; do timeout 2 tail -f /dev/null; done\n"
             + "sleep 120\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     kills = _kills(evs)
@@ -195,7 +195,7 @@ def test_default_ignore_pattern_exempts_per_file_batch_tools(tmp_path):
     body = ("for i in 1 2 3 4 5 6; do (exec -a tesseract sleep 2); done\n"
             "exit 0\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -203,24 +203,24 @@ def test_default_ignore_pattern_exempts_per_file_batch_tools(tmp_path):
 
 def test_ignored_commands_are_not_process_repetition(tmp_path):
     """A test-driven pass re-runs its suite between edits; that is progress, not a
-    stall. WIGGUM_PROPOSER_REPEAT_IGNORE names the command lines to leave alone."""
+    stall. SPECSTRIDE_PROPOSER_REPEAT_IGNORE names the command lines to leave alone."""
     body = ("for i in 1 2 3 4 5 6; do timeout 2 tail -f /dev/null; done\n"
             "exit 0\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5",
-                                  "WIGGUM_PROPOSER_REPEAT_IGNORE": "tail -f|pytest"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5",
+                                  "SPECSTRIDE_PROPOSER_REPEAT_IGNORE": "tail -f|pytest"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
 
 
 def test_default_ignore_pattern_exempts_test_runners(tmp_path):
-    """With no WIGGUM_PROPOSER_REPEAT_IGNORE set, a command line naming a test
+    """With no SPECSTRIDE_PROPOSER_REPEAT_IGNORE set, a command line naming a test
     runner is not counted: re-running the suite between edits is normal work."""
     body = ("for i in 1 2 3 4 5 6; do (exec -a pytest sleep 2); done\n"
             "exit 0\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -230,7 +230,7 @@ def test_one_long_command_is_not_repetition(tmp_path):
     """A single slow command is one pid however often it is sampled."""
     body = "timeout 8 tail -f /dev/null\nexit 0\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -240,7 +240,7 @@ def test_pacing_sleeps_are_not_repetition(tmp_path):
     """An agent pacing itself between checks is normal, and cheap."""
     body = "for i in 1 2 3 4 5 6 7; do sleep 1; done\nexit 0\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_REPEAT_LIMIT": "5"})
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -250,7 +250,7 @@ def test_pass_that_writes_nothing_to_disk_ends(tmp_path):
     """CPU-busy but producing no work product is a stall the idle check can't see."""
     body = "end=$((SECONDS+120)); while (( SECONDS < end )); do :; done\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "4"})
+                       env_extra={"SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "4"})
 
     assert result.returncode == 4, result.stderr
     kills = _kills(evs)
@@ -262,7 +262,7 @@ def test_disk_writes_keep_a_slow_pass_alive(tmp_path):
     body = ("for i in $(seq 1 8); do echo $i > work-$i.txt; sleep 1; done\n"
             "exit 0\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
-                       env_extra={"WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "4"})
+                       env_extra={"SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "4"})
 
     assert result.returncode == 4, result.stderr
     assert _kills(evs) == []
@@ -273,18 +273,18 @@ def test_hard_cap_kill_is_carried_into_the_next_pass(tmp_path):
     """A killed hour becomes a note the next pass reads, instead of vanishing."""
     body = ("for i in $(seq 1 60); do echo $i > tick-$i.txt; sleep 1; done\n")
     agent = _agent(tmp_path, body)
-    evidence = tmp_path / ".wiggum" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
     env = os.environ.copy()
     env.update({
-        "WIGGUM_DSH_BIN": str(agent), "WIGGUM_AGENT_STREAM": "false",
-        "WIGGUM_EVENTS": str(tmp_path / ".wiggum" / "events.jsonl"),
-        "WIGGUM_WATCHDOG_TICK": "1", "PROMPT_LOG": str(tmp_path / "prompts.log"),
-        "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "0", "WIGGUM_PROPOSER_REPEAT_LIMIT": "0",
-        "WIGGUM_PROPOSER_MAX_ERRORS": "5",
+        "SPECSTRIDE_DSH_BIN": str(agent), "SPECSTRIDE_AGENT_STREAM": "false",
+        "SPECSTRIDE_EVENTS": str(tmp_path / ".specstride" / "events.jsonl"),
+        "SPECSTRIDE_WATCHDOG_TICK": "1", "PROMPT_LOG": str(tmp_path / "prompts.log"),
+        "SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "0", "SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "0",
+        "SPECSTRIDE_PROPOSER_MAX_ERRORS": "5",
     })
-    (tmp_path / ".wiggum").mkdir(exist_ok=True)
+    (tmp_path / ".specstride").mkdir(exist_ok=True)
     result = subprocess.run(
         ["bash", str(PROPOSER), "-w", str(tmp_path), "-e", str(evidence),
          "-f", str(prompt), "--backend", "dsh", "-n", "2", "-s", "0",
@@ -307,7 +307,7 @@ def test_repeated_futility_kills_halt_the_attempt(tmp_path):
     the consecutive-error breaker and exits 7."""
     body = "end=$((SECONDS+120)); while (( SECONDS < end )); do :; done\n"
     result, evs = _run(tmp_path, _agent(tmp_path, body), max_iter=6, env_extra={
-        "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "4", "WIGGUM_PROPOSER_MAX_ERRORS": "2",
+        "SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "4", "SPECSTRIDE_PROPOSER_MAX_ERRORS": "2",
     })
 
     assert result.returncode == 7, result.stderr
@@ -322,7 +322,7 @@ def test_repeated_futility_kills_halt_the_attempt(tmp_path):
 
 # A cap kill is a BUDGET signal, not a failure: the pass was productive right up
 # to the ceiling and the work simply did not fit. Conflating the two is what put
-# WIGGUM_PROPOSER_MAX_ERRORS=30 into a real .env — disabling the error breaker for
+# SPECSTRIDE_PROPOSER_MAX_ERRORS=30 into a real .env — disabling the error breaker for
 # genuine crashes as well (semantic-router-sovereign phase 15, 2026-09-11). The
 # two tests below pin the split: same watchdog, two counters, two exit codes.
 def _capped_body():
@@ -337,8 +337,8 @@ def test_repeated_cap_kills_halt_with_the_cap_code(tmp_path):
     the halt can name the right remedy instead of 'raise the cap'."""
     result, evs = _run(tmp_path, _agent(tmp_path, _capped_body()), max_iter=6,
                        timeout="3", env_extra={
-                           "WIGGUM_PROPOSER_MAX_CAPS": "2",
-                           "WIGGUM_PROPOSER_MAX_ERRORS": "2",
+                           "SPECSTRIDE_PROPOSER_MAX_CAPS": "2",
+                           "SPECSTRIDE_PROPOSER_MAX_ERRORS": "2",
                        })
 
     assert result.returncode == 10, result.stderr
@@ -361,8 +361,8 @@ def test_a_cap_kill_does_not_count_as_an_agent_error(tmp_path):
     operator to raise a number that was never the problem."""
     result, evs = _run(tmp_path, _agent(tmp_path, _capped_body()), max_iter=3,
                        timeout="3", env_extra={
-                           "WIGGUM_PROPOSER_MAX_CAPS": "9",
-                           "WIGGUM_PROPOSER_MAX_ERRORS": "2",
+                           "SPECSTRIDE_PROPOSER_MAX_CAPS": "9",
+                           "SPECSTRIDE_PROPOSER_MAX_ERRORS": "2",
                        })
 
     # max-iter, not the error breaker: the loop ran all three passes.
@@ -381,7 +381,7 @@ def test_finished_long_job_prompt_forbids_new_open_ended_work(tmp_path):
     script = (
         f'. "{LIB}"\n'
         'LONG_JOB_PHASE=8 LONG_JOB_CMD="tests/cycles_runner.sh" '
-        f'FEATURE_DIR="{feature_dir}" WIGGUM_RUN_ID=run7 '
+        f'FEATURE_DIR="{feature_dir}" SPECSTRIDE_RUN_ID=run7 '
         "long_job_status_line 8 1\n"
     )
     out = subprocess.run(["bash", "-c", script], text=True, capture_output=True).stdout
@@ -407,19 +407,19 @@ def test_claude_prompt_over_the_argv_limit_arrives_on_stdin(tmp_path):
     prompt = tmp_path / "prompt.txt"
     big = "x" * 140000 + "\nEND-OF-PROMPT\n"
     prompt.write_text(big)
-    evidence = tmp_path / ".wiggum" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
     env = os.environ.copy()
     env.update({
         "PATH": str(fake_bin) + os.pathsep + env.get("PATH", ""),
-        "WIGGUM_AGENT_STREAM": "false",
-        "WIGGUM_EVENTS": str(tmp_path / ".wiggum" / "events.jsonl"),
-        "WIGGUM_WATCHDOG_TICK": "1",
+        "SPECSTRIDE_AGENT_STREAM": "false",
+        "SPECSTRIDE_EVENTS": str(tmp_path / ".specstride" / "events.jsonl"),
+        "SPECSTRIDE_WATCHDOG_TICK": "1",
         "PROMPT_LOG": str(tmp_path / "received.txt"),
-        "WIGGUM_PROPOSER_IDLE_TIMEOUT": "900",
-        "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "0",
-        "WIGGUM_PROPOSER_REPEAT_LIMIT": "0",
+        "SPECSTRIDE_PROPOSER_IDLE_TIMEOUT": "900",
+        "SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "0",
+        "SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "0",
     })
-    (tmp_path / ".wiggum").mkdir(exist_ok=True)
+    (tmp_path / ".specstride").mkdir(exist_ok=True)
     result = subprocess.run(
         ["bash", str(PROPOSER), "-w", str(tmp_path), "-e", str(evidence),
          "-f", str(prompt), "--backend", "claude", "-n", "1", "-s", "0",

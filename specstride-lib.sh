@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# wiggum-lib.sh — shared helpers sourced by orchestrator.sh, proposer.sh, wiggum.
+# specstride-lib.sh — shared helpers sourced by orchestrator.sh, proposer.sh, specstride.
 #
-# Pure functions only (no side effects at source time). Provides:
+# Pure functions only, with ONE deliberate exception: sourcing this file runs the
+# legacy-name compatibility mapping below (specstride_env_compat), so every script
+# that sources it sees SPECSTRIDE_* names regardless of what the caller exported.
+# Provides:
+#   * the state-dir name (STATE_DIRNAME) and its legacy fallback
+#     (specstride_state_dirname), plus the legacy env-var mapping
+#     (specstride_env_compat) — the single bash home of both compatibility rules;
+#     lib/specstride_env.py mirrors them for the python side.
 #   * spec phase parsing / validation / slicing — thin shims that delegate to
-#     lib/wiggum_spec.py, the SINGLE source of truth for every supported spec
+#     lib/specstride_spec.py, the SINGLE source of truth for every supported spec
 #     format (native SPECS.md + GitHub Spec Kit tasks.md). The grammar used to be
 #     duplicated here in awk and again in lib/critic.py; both now call one parser.
-#   * one structured event stream  (.wiggum/events.jsonl + run.log), the single
+#   * one structured event stream  (.specstride/events.jsonl + run.log), the single
 #     source both the presenter and Loki consume
 #   * small string/JSON helpers
 #
@@ -15,10 +22,65 @@
 # critic/presenter, so the spec shims add no new dependency class.
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Names and legacy compatibility (Specstride was formerly Wiggum)
+# ─────────────────────────────────────────────────────────────────────────────
+# The per-workdir state directory. A fresh workdir gets STATE_DIRNAME; a workdir
+# that only has the legacy directory keeps using it (never moved: live runs commit
+# into it). lib/specstride_env.py holds the python mirror of these constants.
+STATE_DIRNAME=".specstride"
+LEGACY_STATE_DIRNAME=".wiggum"
+# Environment variables: SPECSTRIDE_<X> set wins; else the legacy <prefix><X>;
+# else the script's built-in default.
+LEGACY_ENV_PREFIX="WIGGUM_"
+
+# Set STATE_BASENAME to the state-dir NAME (not path) to use under workdir $1: the
+# legacy name only when .specstride/ is absent and the legacy dir exists. Logs a
+# one-line notice to stderr once per process tree: call it directly (not in $(…))
+# so the exported "shown" flag reaches the child scripts and they stay quiet.
+specstride_resolve_state_dir() {
+  local wd="${1:-$PWD}"
+  if [[ ! -d "$wd/$STATE_DIRNAME" && -d "$wd/$LEGACY_STATE_DIRNAME" ]]; then
+    if [[ -z "${SPECSTRIDE_STATE_NOTICE_SHOWN:-}" ]]; then
+      echo "specstride: using legacy state dir $wd/$LEGACY_STATE_DIRNAME (no $STATE_DIRNAME/ there; it is not moved)" >&2
+      export SPECSTRIDE_STATE_NOTICE_SHOWN=1
+    fi
+    STATE_BASENAME="$LEGACY_STATE_DIRNAME"
+  else
+    STATE_BASENAME="$STATE_DIRNAME"
+  fi
+}
+
+# Echo form of specstride_resolve_state_dir, for one-off use in $(…).
+specstride_state_dirname() {
+  specstride_resolve_state_dir "$@"
+  printf '%s' "$STATE_BASENAME"
+}
+
+# Map every legacy <prefix><X> shell variable to SPECSTRIDE_<X> when the new name
+# is unset, exporting the result. Idempotent: run once at source time and again
+# after a .env is sourced. Prints ONE deprecation line per process when any legacy
+# name was actually used (a set SPECSTRIDE_<X> means the legacy one was ignored).
+specstride_env_compat() {
+  local old suffix new used=()
+  while IFS= read -r old; do
+    suffix="${old#"$LEGACY_ENV_PREFIX"}"
+    new="SPECSTRIDE_$suffix"
+    [[ -n "${!new+x}" ]] && continue
+    export "$new=${!old}"
+    used+=("$old")
+  done < <(compgen -v "$LEGACY_ENV_PREFIX" 2>/dev/null)
+  if (( ${#used[@]} )) && [[ -z "${_SPECSTRIDE_ENV_NOTICE_SHOWN:-}" ]]; then
+    echo "specstride: deprecated ${LEGACY_ENV_PREFIX}* variables read as SPECSTRIDE_*: ${used[*]} (rename them)" >&2
+    _SPECSTRIDE_ENV_NOTICE_SHOWN=1
+  fi
+}
+specstride_env_compat
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  JSON helpers (no jq)
 # ─────────────────────────────────────────────────────────────────────────────
 # Escape a string for embedding inside a JSON double-quoted value.
-wiggum_json_escape() {
+specstride_json_escape() {
   local s="$1"
   s="${s//\\/\\\\}"     # backslash first
   s="${s//\"/\\\"}"     # double quote
@@ -31,80 +93,80 @@ wiggum_json_escape() {
 # ─────────────────────────────────────────────────────────────────────────────
 #  Event stream — ONE structured event, two sinks (presenter + optional Loki).
 #
-#  Requires the caller to have set:  WIGGUM_EVENTS (path to events.jsonl),
-#  WIGGUM_RUN_ID, WIGGUM_TASK, WIGGUM_BACKEND_LABEL.  All optional; missing ones
+#  Requires the caller to have set:  SPECSTRIDE_EVENTS (path to events.jsonl),
+#  SPECSTRIDE_RUN_ID, SPECSTRIDE_TASK, SPECSTRIDE_BACKEND_LABEL.  All optional; missing ones
 #  are simply omitted. Emitting is best-effort and never fails the loop.
 #
-#  Usage:  wiggum_emit <event-name> [key value] [key value] ...
-#    e.g.  wiggum_emit verdict phase 2 result REJECTED attempt 1 reason "no test"
+#  Usage:  specstride_emit <event-name> [key value] [key value] ...
+#    e.g.  specstride_emit verdict phase 2 result REJECTED attempt 1 reason "no test"
 # ─────────────────────────────────────────────────────────────────────────────
-wiggum_emit() {
+specstride_emit() {
   local ev="$1"; shift || true
   local ts; ts="$(date +%s.%N 2>/dev/null || date +%s)"
   local iso; iso="$(date -Is 2>/dev/null || date)"
   local line="{"
-  line+="\"ts\":\"$(wiggum_json_escape "$ts")\""
-  line+=",\"time\":\"$(wiggum_json_escape "$iso")\""
-  line+=",\"event\":\"$(wiggum_json_escape "$ev")\""
-  [[ -n "${WIGGUM_RUN_ID:-}" ]]        && line+=",\"run_id\":\"$(wiggum_json_escape "$WIGGUM_RUN_ID")\""
-  [[ -n "${WIGGUM_TASK:-}" ]]          && line+=",\"task\":\"$(wiggum_json_escape "$WIGGUM_TASK")\""
-  [[ -n "${WIGGUM_BACKEND_LABEL:-}" ]] && line+=",\"backend\":\"$(wiggum_json_escape "$WIGGUM_BACKEND_LABEL")\""
+  line+="\"ts\":\"$(specstride_json_escape "$ts")\""
+  line+=",\"time\":\"$(specstride_json_escape "$iso")\""
+  line+=",\"event\":\"$(specstride_json_escape "$ev")\""
+  [[ -n "${SPECSTRIDE_RUN_ID:-}" ]]        && line+=",\"run_id\":\"$(specstride_json_escape "$SPECSTRIDE_RUN_ID")\""
+  [[ -n "${SPECSTRIDE_TASK:-}" ]]          && line+=",\"task\":\"$(specstride_json_escape "$SPECSTRIDE_TASK")\""
+  [[ -n "${SPECSTRIDE_BACKEND_LABEL:-}" ]] && line+=",\"backend\":\"$(specstride_json_escape "$SPECSTRIDE_BACKEND_LABEL")\""
   # Ambient correlation the orchestrator exports once per run so every lifecycle
   # event carries it without each call site repeating it. `feature` lets remote
   # copies be queried per Prime run (FR-032). `trace_id` is OPTIONAL distributed-
   # trace context (FR-033): emitted only when a trace already exists upstream —
   # never synthesized here, so local recording never depends on trace creation.
-  [[ -n "${WIGGUM_FEATURE:-}" ]]       && line+=",\"feature\":\"$(wiggum_json_escape "$WIGGUM_FEATURE")\""
-  [[ -n "${WIGGUM_TRACE_ID:-}" ]]      && line+=",\"trace_id\":\"$(wiggum_json_escape "$WIGGUM_TRACE_ID")\""
+  [[ -n "${SPECSTRIDE_FEATURE:-}" ]]       && line+=",\"feature\":\"$(specstride_json_escape "$SPECSTRIDE_FEATURE")\""
+  [[ -n "${SPECSTRIDE_TRACE_ID:-}" ]]      && line+=",\"trace_id\":\"$(specstride_json_escape "$SPECSTRIDE_TRACE_ID")\""
   # remaining args are key/value pairs
   while [[ $# -gt 1 ]]; do
     local k="$1" v="$2"; shift 2
-    line+=",\"$(wiggum_json_escape "$k")\":\"$(wiggum_json_escape "$v")\""
+    line+=",\"$(specstride_json_escape "$k")\":\"$(specstride_json_escape "$v")\""
   done
   line+="}"
-  if [[ -n "${WIGGUM_EVENTS:-}" ]]; then
-    printf '%s\n' "$line" >> "$WIGGUM_EVENTS" 2>/dev/null || true
+  if [[ -n "${SPECSTRIDE_EVENTS:-}" ]]; then
+    printf '%s\n' "$line" >> "$SPECSTRIDE_EVENTS" 2>/dev/null || true
   fi
   # Also emit to the optional Loki shipper when telemetry is on. Best-effort.
-  if [[ "${WIGGUM_TELEMETRY:-false}" == "true" && -n "${WIGGUM_SHIP:-}" && -n "${WIGGUM_LOKI_URL:-}" ]]; then
-    printf '%s\n' "$line" | python3 "$WIGGUM_SHIP" event \
-      --loki "$WIGGUM_LOKI_URL" --task "${WIGGUM_TASK:-wiggum}" \
-      --backend "${WIGGUM_BACKEND_LABEL:-wiggum}" --run-id "${WIGGUM_RUN_ID:-}" \
+  if [[ "${SPECSTRIDE_TELEMETRY:-false}" == "true" && -n "${SPECSTRIDE_SHIP:-}" && -n "${SPECSTRIDE_LOKI_URL:-}" ]]; then
+    printf '%s\n' "$line" | python3 "$SPECSTRIDE_SHIP" event \
+      --loki "$SPECSTRIDE_LOKI_URL" --task "${SPECSTRIDE_TASK:-specstride}" \
+      --backend "${SPECSTRIDE_BACKEND_LABEL:-specstride}" --run-id "${SPECSTRIDE_RUN_ID:-}" \
       --event "$ev" --json-stdin >/dev/null 2>&1 || true
   fi
   # Parallel, independent OTEL sink (dual-ship). Best-effort; gated separately so
   # either backend can run alone or together. Reuses the same events.jsonl line.
-  if [[ "${WIGGUM_OTEL_ENABLED:-false}" == "true" && -n "${WIGGUM_OTEL_SHIP:-}" && -n "${WIGGUM_OTEL_URL:-}" ]]; then
-    printf '%s\n' "$line" | python3 "$WIGGUM_OTEL_SHIP" event \
-      --otel "$WIGGUM_OTEL_URL" --task "${WIGGUM_TASK:-wiggum}" \
-      --backend "${WIGGUM_BACKEND_LABEL:-wiggum}" --run-id "${WIGGUM_RUN_ID:-}" \
+  if [[ "${SPECSTRIDE_OTEL_ENABLED:-false}" == "true" && -n "${SPECSTRIDE_OTEL_SHIP:-}" && -n "${SPECSTRIDE_OTEL_URL:-}" ]]; then
+    printf '%s\n' "$line" | python3 "$SPECSTRIDE_OTEL_SHIP" event \
+      --otel "$SPECSTRIDE_OTEL_URL" --task "${SPECSTRIDE_TASK:-specstride}" \
+      --backend "${SPECSTRIDE_BACKEND_LABEL:-specstride}" --run-id "${SPECSTRIDE_RUN_ID:-}" \
       --event "$ev" --json-stdin >/dev/null 2>&1 || true
   fi
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Spec parsing — thin shims over lib/wiggum_spec.py (the single source of truth).
+#  Spec parsing — thin shims over lib/specstride_spec.py (the single source of truth).
 #
 #  A "phase" is the unit the loop gates on. The concrete grammar depends on the
 #  spec format, chosen automatically by the parser (or forced with
-#  WIGGUM_SPEC_FORMAT / the orchestrator's --spec-format):
+#  SPECSTRIDE_SPEC_FORMAT / the orchestrator's --spec-format):
 #    * native        — "## Phase <N>" + "### Acceptance criteria" (the original).
 #    * speckit-tasks — a GitHub Spec Kit tasks.md ("## Phase N:" + "- [ ] T###").
 #    * openspec-change — an OpenSpec change tasks.md ("## N. Title" + "- [ ] N.N").
 #
 #  These shims keep the exact names, arguments, stdout and exit codes the awk had,
-#  so every call site in orchestrator.sh and the wiggum CLI is unchanged. The
-#  parser lives next to this file at lib/wiggum_spec.py; resolve it relative to
+#  so every call site in orchestrator.sh and the specstride CLI is unchanged. The
+#  parser lives next to this file at lib/specstride_spec.py; resolve it relative to
 #  this script so a shim works no matter the caller's CWD.
 # ─────────────────────────────────────────────────────────────────────────────
-_WIGGUM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_WIGGUM_SPEC_PY="$_WIGGUM_LIB_DIR/lib/wiggum_spec.py"
-_WIGGUM_TELEMETRY_PY="$_WIGGUM_LIB_DIR/lib/telemetry_delivery.py"
+_SPECSTRIDE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+_SPECSTRIDE_SPEC_PY="$_SPECSTRIDE_LIB_DIR/lib/specstride_spec.py"
+_SPECSTRIDE_TELEMETRY_PY="$_SPECSTRIDE_LIB_DIR/lib/telemetry_delivery.py"
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Telemetry receiver state — thin shim over lib/telemetry_delivery.py, the SINGLE
 #  source of truth for the four escalating, user-visible states (FR-036). Startup
-#  and `wiggum status` MUST distinguish configured / reachable / request-accepted /
+#  and `specstride status` MUST distinguish configured / reachable / request-accepted /
 #  query-verified and never collapse them into a generic `telemetry: true`.
 #
 #  Prints one `<sink>: <phrase> (<url>)` line, choosing the highest state honestly
@@ -112,84 +174,84 @@ _WIGGUM_TELEMETRY_PY="$_WIGGUM_LIB_DIR/lib/telemetry_delivery.py"
 #  to `request accepted` / `query verified` when an events.jsonl carries delivery
 #  evidence. Pass the events file (optional) so a live run's status can elevate.
 # ─────────────────────────────────────────────────────────────────────────────
-wiggum_telemetry_status_line() {
+specstride_telemetry_status_line() {
   local name="$1" url="$2" events="${3:-}"
   local args=(probe "$name" "$url")
   [[ -n "$events" && -f "$events" ]] && args+=(--events "$events")
-  python3 "$_WIGGUM_TELEMETRY_PY" "${args[@]}" 2>/dev/null \
+  python3 "$_SPECSTRIDE_TELEMETRY_PY" "${args[@]}" 2>/dev/null \
     || printf '%s: export configured (%s)\n' "$name" "$url"
 }
 
-# WIGGUM_SPEC_FORMAT (optional) forces an adapter; empty = auto-detect. Passed
+# SPECSTRIDE_SPEC_FORMAT (optional) forces an adapter; empty = auto-detect. Passed
 # through as --format so an explicit orchestrator choice always wins.
-_wiggum_spec_py() {
+_specstride_spec_py() {
   local fmt_args=()
-  [[ -n "${WIGGUM_SPEC_FORMAT:-}" ]] && fmt_args=(--format "$WIGGUM_SPEC_FORMAT")
-  python3 "$_WIGGUM_SPEC_PY" "$@" "${fmt_args[@]}"
+  [[ -n "${SPECSTRIDE_SPEC_FORMAT:-}" ]] && fmt_args=(--format "$SPECSTRIDE_SPEC_FORMAT")
+  python3 "$_SPECSTRIDE_SPEC_PY" "$@" "${fmt_args[@]}"
 }
 
 # Print phase numbers in file order, one per line.
-wiggum_spec_phase_numbers() {
-  _wiggum_spec_py numbers --specs "$1"
+specstride_spec_phase_numbers() {
+  _specstride_spec_py numbers --specs "$1"
 }
 
 # Print the title of phase N (heading text after the number/separator).
-wiggum_spec_phase_title() {
-  _wiggum_spec_py title "$2" --specs "$1"
+specstride_spec_phase_title() {
+  _specstride_spec_py title "$2" --specs "$1"
 }
 
 # Print the full section text for phase N (heading → next "## " heading or EOF).
 # This whole slice is handed to the critic as the requirements for that phase.
-wiggum_spec_slice() {
-  _wiggum_spec_py slice "$2" --specs "$1"
+specstride_spec_slice() {
+  _specstride_spec_py slice "$2" --specs "$1"
 }
 
 # Validate the spec. Prints errors to stderr and returns non-zero on: zero phases,
 # duplicate/non-contiguous phase numbers, or a phase missing its criteria block
 # (native acceptance criteria, Spec Kit T### tasks, or OpenSpec N.N tasks).
 # On success prints the phase count to stdout and returns 0.
-wiggum_spec_validate() {
+specstride_spec_validate() {
   local specs="$1"
   [[ -f "$specs" ]] || { echo "spec not found: $specs" >&2; return 1; }
-  _wiggum_spec_py validate --specs "$specs"
+  _specstride_spec_py validate --specs "$specs"
 }
 
 # Print the first phase number lacking a GATE<N>-APPROVED marker. This is the
 # resume point (crash-safe derivation); prints nothing if all approved. Resume-truth
-# for both the orchestrator and the `wiggum` CLI.
+# for both the orchestrator and the `specstride` CLI.
 #   $1 specs   $2 workdir   $3 gates dir (optional; feature-scoped state passes an
-#   explicit .wiggum/features/<slug>/gates. Omitted → legacy <workdir>/.wiggum/gates).
-wiggum_spec_first_unapproved() {
+#   explicit .specstride/features/<slug>/gates. Omitted → legacy <workdir>/.specstride/gates).
+specstride_spec_first_unapproved() {
   if [[ -n "${3:-}" ]]; then
-    _wiggum_spec_py first-unapproved --specs "$1" --workdir "$2" --gates-dir "$3"
+    _specstride_spec_py first-unapproved --specs "$1" --workdir "$2" --gates-dir "$3"
   else
-    _wiggum_spec_py first-unapproved --specs "$1" --workdir "$2"
+    _specstride_spec_py first-unapproved --specs "$1" --workdir "$2"
   fi
 }
 
 # Print the feature slug for a spec — the durable-state namespace under
-# .wiggum/features/<slug>/. A spec inside a .specify feature dir yields that dir's
+# .specstride/features/<slug>/. A spec inside a .specify feature dir yields that dir's
 # sanitized basename; everything else (native SPECS.md, root-level spec) → "default".
-wiggum_spec_feature_slug() {
-  _wiggum_spec_py feature-slug --specs "$1"
+specstride_spec_feature_slug() {
+  _specstride_spec_py feature-slug --specs "$1"
 }
 
 # Print the adapter that would be used for a spec.
-wiggum_spec_detect() {
-  _wiggum_spec_py detect --specs "$1"
+specstride_spec_detect() {
+  _specstride_spec_py detect --specs "$1"
 }
 
 # Print "name<TAB>path" for context docs owned by a document-set adapter.
-wiggum_spec_context() {
-  _wiggum_spec_py context --specs "$1"
+specstride_spec_context() {
+  _specstride_spec_py context --specs "$1"
 }
 
 # Print the fully-rendered document-set context block for a spec — every context doc,
 # budget-allocated in descending gating order, line-clean + fence-safe truncated
-# under WIGGUM_CONTEXT_BUDGET. Empty for formats without document context. This is
+# under SPECSTRIDE_CONTEXT_BUDGET. Empty for formats without document context. This is
 # the ready-to-inject block both proposer and critic use (one truncation impl).
-wiggum_spec_render_context() {
-  _wiggum_spec_py render-context --specs "$1"
+specstride_spec_render_context() {
+  _specstride_spec_py render-context --specs "$1"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -218,8 +280,8 @@ wiggum_spec_render_context() {
 #  pass or invocation.
 #
 #  Requires from the caller's scope: LONG_JOB_PHASE, LONG_JOB_CMD, FEATURE_DIR,
-#  WORKDIR, WIGGUM_RUN_ID (exported by the orchestrator; proposer.sh reads it
-#  from the same env var), a `log` function, and `wiggum_emit` (this file).
+#  WORKDIR, SPECSTRIDE_RUN_ID (exported by the orchestrator; proposer.sh reads it
+#  from the same env var), a `log` function, and `specstride_emit` (this file).
 #  LOCK_FD is optional — set only in a caller that itself holds the workdir
 #  flock by that name; harmless/no-op when absent (e.g. in proposer.sh, which
 #  still inherits the SAME open fd number from the orchestrator that spawned
@@ -244,12 +306,12 @@ ensure_long_job() {
   # phase8-attempt1 from ever launching, so the proposer worked from a stale,
   # mid-idempotence-check cycles.run.log left over from a run stopped hours
   # earlier.
-  local base="phase${n}-attempt${attempt}-${WIGGUM_RUN_ID}"
+  local base="phase${n}-attempt${attempt}-${SPECSTRIDE_RUN_ID}"
   local pidfile="$dir/${base}.pid"
   local logfile="$dir/${base}.log"
   local donefile="$dir/${base}.done"
   mkdir -p "$dir"
-  export WIGGUM_LONG_JOB_LOG="$logfile"
+  export SPECSTRIDE_LONG_JOB_LOG="$logfile"
 
   if [[ -f "$donefile" ]]; then
     return 0   # already ran to completion (or was marked ended) THIS run's attempt — never touch it again
@@ -266,7 +328,7 @@ ensure_long_job() {
     [[ "$other" == "$pidfile" ]] && continue
     local other_pid; other_pid="$(cat "$other" 2>/dev/null)"
     if [[ -n "$other_pid" ]] && kill -0 "$other_pid" 2>/dev/null; then
-      export WIGGUM_LONG_JOB_LOG="${other%.pid}.log"
+      export SPECSTRIDE_LONG_JOB_LOG="${other%.pid}.log"
       return 0   # a prior run's instance is still alive — leave it alone
     fi
   done
@@ -281,20 +343,20 @@ ensure_long_job() {
     # any job that truncates its own log on start, silently DESTROY — a
     # completed result. Never auto-restart a job that has already run; record
     # that it ended and let the proposer's own prompt (pointed at the log via
-    # WIGGUM_LONG_JOB_LOG) read the outcome instead of guessing.
+    # SPECSTRIDE_LONG_JOB_LOG) read the outcome instead of guessing.
     log ">>> long-job(phase $n attempt $attempt): process $existing_pid no longer running — treating as ended, NOT auto-restarting. See $logfile"
-    wiggum_emit long_job_ended phase "$n" attempt "$attempt" log "$logfile"
+    specstride_emit long_job_ended phase "$n" attempt "$attempt" log "$logfile"
     : > "$donefile"
     return 0
   fi
 
   log ">>> long-job(phase $n attempt $attempt): launching detached — $LONG_JOB_CMD"
-  wiggum_launch_owned_job "$pidfile" "$logfile" "$WORKDIR" -- bash -c "$LONG_JOB_CMD"
-  wiggum_emit long_job_start phase "$n" attempt "$attempt" cmd "$LONG_JOB_CMD" log "$logfile"
+  specstride_launch_owned_job "$pidfile" "$logfile" "$WORKDIR" -- bash -c "$LONG_JOB_CMD"
+  specstride_emit long_job_start phase "$n" attempt "$attempt" cmd "$LONG_JOB_CMD" log "$logfile"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  wiggum_launch_owned_job — start a job that belongs to WIGGUM, not to a pass
+#  specstride_launch_owned_job — start a job that belongs to SPECSTRIDE, not to a pass
 #
 #  The body ensure_long_job used to carry inline, lifted out so the yield
 #  protocol (proposer.sh) can launch a job on exactly the same terms. That
@@ -304,7 +366,7 @@ ensure_long_job() {
 #  Bash tool lives in that tree and dies with it — which is how one run's first
 #  hard-cap kill also killed the 93-minute measurement it was waiting for.
 #
-#  Usage: wiggum_launch_owned_job <pidfile> <logfile> <cwd> -- <argv...>
+#  Usage: specstride_launch_owned_job <pidfile> <logfile> <cwd> -- <argv...>
 #  Writes the detached pid to <pidfile>; stdout+stderr to <logfile>. The CALLER
 #  owns the marker layout and MUST scope it per run (see ensure_long_job's
 #  base name and the comment above it for why attempt-only scoping is unsafe).
@@ -326,7 +388,7 @@ ensure_long_job() {
 #  backgrounding the job. `eval` is required: `exec $LOCK_FD>&-` is a single
 #  unparsed argument to `exec` without it (verified) — bash only accepts a
 #  literal fd number there.
-wiggum_launch_owned_job() {
+specstride_launch_owned_job() {
   local pidfile="$1" logfile="$2" jobcwd="$3"; shift 3
   [[ "${1:-}" == "--" ]] && shift
   mkdir -p "$(dirname "$pidfile")" "$(dirname "$logfile")" 2>/dev/null || true
@@ -364,14 +426,14 @@ wiggum_launch_owned_job() {
 #  to match however long someone's verification job happens to take.
 #
 #  Requires the same scope as ensure_long_job (LONG_JOB_PHASE, LONG_JOB_CMD,
-#  FEATURE_DIR, WIGGUM_RUN_ID). Prints one prompt-ready block to stdout, or
+#  FEATURE_DIR, SPECSTRIDE_RUN_ID). Prints one prompt-ready block to stdout, or
 #  nothing when no long job is configured for this phase.
 long_job_status_line() {
   local n="$1" attempt="$2"
   [[ "${LONG_JOB_PHASE:-}" == "$n" && -n "${LONG_JOB_CMD:-}" ]] || return 0
 
   local dir="$FEATURE_DIR/long-jobs"
-  local base="phase${n}-attempt${attempt}-${WIGGUM_RUN_ID}"
+  local base="phase${n}-attempt${attempt}-${SPECSTRIDE_RUN_ID}"
   local pidfile="$dir/${base}.pid"
   local logfile="$dir/${base}.log"
   local donefile="$dir/${base}.done"
@@ -429,7 +491,7 @@ EOF2
 }
 
 # ── step 4: gate-owned pre-staged long measurements ──────────────────────────
-# A declared verification command may carry `"stage": "prestage"`. Wiggum then
+# A declared verification command may carry `"stage": "prestage"`. Specstride then
 # runs it ONCE per attempt — here, before the proposer pass — and the phase gate
 # reuses the passing result instead of re-executing a measurement the pass has
 # already paid for (design 02-wiggum-loop-design.md §3; the 002 telemetry counted
@@ -439,11 +501,11 @@ EOF2
 #
 # The report the proposer reads rides on the verification slice the prompt
 # already embeds, so this is the only orchestrator call site the step adds.
-wiggum_prestage_phase() {
+specstride_prestage_phase() {
   local n="$1" attempt="$2"
   [[ "${VERIFICATION:-off}" != "off" ]] || return 0
   [[ -n "${VERIFICATION_JSON:-}" && -f "${VERIFICATION_JSON:-}" ]] || return 0
-  local lib="${LIB_DIR:-$_WIGGUM_LIB_DIR/lib}"
+  local lib="${LIB_DIR:-$_SPECSTRIDE_LIB_DIR/lib}"
   [[ -f "$lib/verification_plan.py" ]] || return 0
 
   # An array, not a ${VAR:+...} expansion: a spec path with a space in it would
@@ -462,6 +524,6 @@ wiggum_prestage_phase() {
   # A failing pre-stage is information for the pass, never a halt: the phase gate
   # is still the authority on whether the phase passes.
   log "----- prestage: phase $n attempt $attempt (rc $rc) — $out -----"
-  wiggum_emit prestage_done phase "$n" attempt "$attempt" rc "$rc" summary "$out"
+  specstride_emit prestage_done phase "$n" attempt "$attempt" rc "$rc" summary "$out"
   return 0
 }

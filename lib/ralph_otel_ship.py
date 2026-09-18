@@ -39,7 +39,7 @@ import sys, os, json, time, argparse, urllib.request, urllib.error
 CONNECT_TIMEOUT = float(os.environ.get("RALPH_OTEL_TIMEOUT", "2.5"))
 MAX_BATCH_BYTES = int(os.environ.get("RALPH_OTEL_MAX_BATCH_BYTES", str(3 * 1024 * 1024)))
 RESULT_PREVIEW  = 300
-SCOPE_NAME      = "wiggum.ralph"
+SCOPE_NAME      = "specstride.ralph"
 # DELTA temporality: each shipper invocation reports its own delta slice.
 AGG_DELTA = 1
 # Histogram bounds for iteration duration, in milliseconds.

@@ -167,7 +167,7 @@ def test_bare_citation_in_gate_subdir_resolves():
     by bare basename MUST resolve — otherwise the critic reports a present file as
     MISSING and rejects a satisfied criterion forever (the phase-4 c6-run bug)."""
     with tempfile.TemporaryDirectory() as d:
-        gates_rel = os.path.join(".wiggum", "features", "default", "gates")
+        gates_rel = os.path.join(".specstride", "features", "default", "gates")
         subdir = os.path.join(d, gates_rel, "c6-run")
         os.makedirs(subdir)
         open(os.path.join(subdir, "proof-c1.txt"), "w").write("qwen3.6-35b-a3b\n")
@@ -188,7 +188,7 @@ def test_nested_subdir_citation_under_proof_root_resolves():
     genuinely-satisfied criterion reads MISSING forever (confirmed live 2026-08-30,
     ainetops-demo phase 8, tests/integration/cycles_runner.sh's proof layout)."""
     with tempfile.TemporaryDirectory() as d:
-        gates_rel = os.path.join(".wiggum", "features", "default", "gates")
+        gates_rel = os.path.join(".specstride", "features", "default", "gates")
         subdir = os.path.join(d, gates_rel, "proofs", "cycles")
         os.makedirs(subdir)
         open(os.path.join(subdir, "provision-1.log"), "w").write("provision exit=1\n")
@@ -205,9 +205,9 @@ def test_snapshot_labels_bare_gate_citation_by_resolved_path():
     evidence write) resolves under the feature's gates/ dir. The snapshot MUST show
     the workdir-relative resolved path, not the bare token — otherwise the critic
     reads it as a ROOT-LEVEL file and rejects "no file outside reversed/" on a file
-    that only exists as expected .wiggum/ run-state (the phantom-gate reject bug)."""
+    that only exists as expected .specstride/ run-state (the phantom-gate reject bug)."""
     with tempfile.TemporaryDirectory() as d:
-        gates_rel = os.path.join(".wiggum", "features", "default", "gates")
+        gates_rel = os.path.join(".specstride", "features", "default", "gates")
         os.makedirs(os.path.join(d, gates_rel))
         open(os.path.join(d, gates_rel, "GATE0-EVIDENCE.md"), "w").write("evidence\n")
         sd = grounding_search_dirs(gates_rel, d)
@@ -241,7 +241,7 @@ def test_extractor_denoises_rpc_and_nonresolving_tokens():
         text = ("The `jobs.run@v1` method calls `events.subscribe`; a `jobs.run` handler "
                 "emits `.d.ts` types. See `config.ts` and `src/missing/gone.ts`.")
         got = set(extract_paths(text, d, grounding_search_dirs(
-            os.path.join(".wiggum", "features", "default", "gates"), d)))
+            os.path.join(".specstride", "features", "default", "gates"), d)))
         for noise in ("jobs.run@v1", "jobs.run", "events.subscribe", ".d.ts",
                       "subscribe", "run"):
             assert noise not in got, "%r should be de-noised, got %r" % (noise, sorted(got))
@@ -340,11 +340,11 @@ def test_proof_slices_are_ordered_first_and_never_elided():
     asked for; cited last among big files it must still be shown in full."""
     with tempfile.TemporaryDirectory() as d:
         open(os.path.join(d, "filler.ts"), "w").write("x = 1\n" * 40000)
-        pdir = os.path.join(d, ".wiggum", "features", "f", "gates", "proofs")
+        pdir = os.path.join(d, ".specstride", "features", "f", "gates", "proofs")
         os.makedirs(pdir)
         open(os.path.join(pdir, "PHASE9-T1-slice.txt"), "w").write(
             "\n".join("%d: line" % i for i in range(30)) + "\nproofMarker_here\n")
-        rel = ".wiggum/features/f/gates/proofs/PHASE9-T1-slice.txt"
+        rel = ".specstride/features/f/gates/proofs/PHASE9-T1-slice.txt"
         snap = grounding_snapshot(["filler.ts", rel], d, total_cap=20000)
         assert "proofMarker_here" in snap, "proof slice content must never be elided"
         assert snap.index("PHASE9-T1-slice.txt") < snap.index("filler.ts")
@@ -891,7 +891,7 @@ def test_w20_search_dirs_cover_proof_subdirs(tmp_path):
     already worked, so the layout looked fine until a nested one was tried.
     """
     work = tmp_path / "repo"
-    gates_rel = os.path.join(".wiggum", "features", "001-demo", "gates")
+    gates_rel = os.path.join(".specstride", "features", "001-demo", "gates")
     proofs = work / gates_rel / "proofs"
     (proofs / "cycles").mkdir(parents=True)
     (proofs / "tests.integration.log").write_text("flat proof\n")
@@ -917,7 +917,7 @@ def test_w20_search_dirs_cover_proof_subdirs(tmp_path):
 def test_w20_search_dirs_survive_a_missing_proofs_dir(tmp_path):
     """W20 must not break a feature that has no gates/proofs/ at all."""
     work = tmp_path / "repo"
-    gates_rel = os.path.join(".wiggum", "features", "001-demo", "gates")
+    gates_rel = os.path.join(".specstride", "features", "001-demo", "gates")
     (work / gates_rel).mkdir(parents=True)
     sd = grounding_search_dirs(gates_rel, str(work))
     assert sd[0] == "" and gates_rel in sd
@@ -981,7 +981,7 @@ def _diagnostician_args(**overrides):
 
 def test_run_diagnostician_writes_hint_file(tmp_path, monkeypatch):
     work = tmp_path / "repo"
-    gates_rel = os.path.join(".wiggum", "features", "001-demo", "gates")
+    gates_rel = os.path.join(".specstride", "features", "001-demo", "gates")
     gates_dir = work / gates_rel
     gates_dir.mkdir(parents=True)
     (work / "acl.go").write_text("package acl\nfunc Allow() bool { return true }\n")
@@ -1007,7 +1007,7 @@ def test_run_diagnostician_writes_hint_file(tmp_path, monkeypatch):
 
 def test_run_diagnostician_never_raises_when_critic_call_fails(tmp_path, monkeypatch):
     work = tmp_path / "repo"
-    gates_rel = os.path.join(".wiggum", "features", "001-demo", "gates")
+    gates_rel = os.path.join(".specstride", "features", "001-demo", "gates")
     gates_dir = work / gates_rel
     gates_dir.mkdir(parents=True)
     feature_dir = os.path.dirname(str(gates_dir))
@@ -1027,18 +1027,18 @@ def test_run_diagnostician_never_raises_when_critic_call_fails(tmp_path, monkeyp
 #  budget for every critic backend regardless of its real context window --
 #  wastes headroom on a bigger window (Claude/GPT-5, both 200k), risks overflow
 #  on a smaller one (an unmapped local model), and was silently blind to the
-#  cases where wiggum already KNOWS the real number (this fleet's own
+#  cases where specstride already KNOWS the real number (this fleet's own
 #  llama-swap/compass-shim/prime/dsh configuration).
 # ─────────────────────────────────────────────────────────────────────────────
 def test_context_tokens_env_override_wins_over_everything(monkeypatch):
-    monkeypatch.setenv("WIGGUM_CRITIC_CONTEXT_TOKENS", "12345")
+    monkeypatch.setenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", "12345")
     assert _critic_context_tokens("claude") == 12345
     assert _critic_context_tokens("dsh:qwen3.8-27b") == 12345
     assert _critic_context_tokens("prime") == 12345
 
 
 def test_context_tokens_invalid_override_falls_back(monkeypatch):
-    monkeypatch.setenv("WIGGUM_CRITIC_CONTEXT_TOKENS", "not-a-number")
+    monkeypatch.setenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", "not-a-number")
     # claude-opus-4-8 (the default model): verified 1,000,000-token window (claude-api
     # skill's current model table) -- NOT the 200,000 an earlier, wrong attempt at this
     # table used (that number was this fleet's own Compass/Prime operational ceiling
@@ -1047,9 +1047,9 @@ def test_context_tokens_invalid_override_falls_back(monkeypatch):
 
 
 def test_context_tokens_claude_and_codex_defaults(monkeypatch):
-    monkeypatch.delenv("WIGGUM_CRITIC_CONTEXT_TOKENS", raising=False)
-    monkeypatch.delenv("WIGGUM_CLAUDE_CRITIC_MODEL", raising=False)
-    monkeypatch.delenv("WIGGUM_CODEX_CRITIC_MODEL", raising=False)
+    monkeypatch.delenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", raising=False)
+    monkeypatch.delenv("SPECSTRIDE_CLAUDE_CRITIC_MODEL", raising=False)
+    monkeypatch.delenv("SPECSTRIDE_CODEX_CRITIC_MODEL", raising=False)
     assert _critic_context_tokens("claude") == 1000000
     # gpt-5 (the default model): verified 400,000 total (272k in + 128k out) from
     # OpenAI's official API model docs -- NOT the 200,000 the fleet's Compass/Prime
@@ -1058,7 +1058,7 @@ def test_context_tokens_claude_and_codex_defaults(monkeypatch):
 
 
 def test_context_tokens_dsh_resolves_the_real_local_window(monkeypatch):
-    monkeypatch.delenv("WIGGUM_CRITIC_CONTEXT_TOKENS", raising=False)
+    monkeypatch.delenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", raising=False)
     # qwen3.8-27b: measured max that loads on this fleet's 3090 (llama-swap config.yaml).
     assert _critic_context_tokens("dsh:qwen3.8-27b") == 229376
     # provider/model form (zai/glm-5.3): the LAST path segment is the model id.
@@ -1079,15 +1079,15 @@ def test_context_tokens_dsh_resolves_the_real_local_window(monkeypatch):
 
 
 def test_context_tokens_bebop_resolves_the_real_local_window(monkeypatch):
-    monkeypatch.delenv("WIGGUM_CRITIC_CONTEXT_TOKENS", raising=False)
-    monkeypatch.setenv("WIGGUM_BEBOP_CRITIC_MODEL", "qwen3.8-27b-q5")
+    monkeypatch.delenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", raising=False)
+    monkeypatch.setenv("SPECSTRIDE_BEBOP_CRITIC_MODEL", "qwen3.8-27b-q5")
     assert _critic_context_tokens("bebop") == 229376
-    monkeypatch.delenv("WIGGUM_BEBOP_CRITIC_MODEL", raising=False)
+    monkeypatch.delenv("SPECSTRIDE_BEBOP_CRITIC_MODEL", raising=False)
     assert _critic_context_tokens("bebop") == _DEFAULT_CONTEXT_TOKENS
 
 
 def test_context_tokens_prime_backing_model_unknown_uses_default(monkeypatch):
-    monkeypatch.delenv("WIGGUM_CRITIC_CONTEXT_TOKENS", raising=False)
+    monkeypatch.delenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", raising=False)
     assert _critic_context_tokens("prime") == _DEFAULT_CONTEXT_TOKENS
     assert _critic_context_tokens("prime:sol") == _DEFAULT_CONTEXT_TOKENS
 
@@ -1113,9 +1113,9 @@ def test_scaled_cap_scales_down_for_a_smaller_window_but_respects_floor():
 
 
 def test_grounding_total_cap_for_uses_the_resolved_provider_window(monkeypatch):
-    monkeypatch.setenv("WIGGUM_CRITIC_CONTEXT_TOKENS", str(REFERENCE_CONTEXT_TOKENS))
+    monkeypatch.setenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", str(REFERENCE_CONTEXT_TOKENS))
     assert grounding_total_cap_for("claude") == GROUNDING_TOTAL_CAP
-    monkeypatch.setenv("WIGGUM_CRITIC_CONTEXT_TOKENS", "229376")
+    monkeypatch.setenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", "229376")
     assert grounding_total_cap_for("dsh:qwen3.8-27b") > GROUNDING_TOTAL_CAP
 
 
@@ -1123,7 +1123,7 @@ def test_grounding_snapshot_respects_a_custom_total_cap(tmp_path):
     """A provider-scaled total_cap must actually reach the degrade-to-anchored path,
     not just be accepted and ignored."""
     work = tmp_path / "repo"
-    gates_rel = os.path.join(".wiggum", "features", "001-demo", "gates")
+    gates_rel = os.path.join(".specstride", "features", "001-demo", "gates")
     (work / gates_rel).mkdir(parents=True)
     # ~10.5 KB: under ANCHOR_MAX_BYTES_CEIL (49152, so it's eligible for whole-file
     # emission) but comfortably over the tiny total_cap used below.
@@ -1237,7 +1237,7 @@ def test_spec_dir_relative_citation_grounds_the_file():
     2026-09-11). With `specs_path` the spec's own directory is searched too; a
     spec outside the workdir adds nothing and a truly-absent file still misses."""
     with tempfile.TemporaryDirectory() as d:
-        gates_rel = os.path.join(".wiggum", "features", "default", "gates")
+        gates_rel = os.path.join(".specstride", "features", "default", "gates")
         os.makedirs(os.path.join(d, gates_rel))
         spec_dir = os.path.join(d, "specs", "002-feature")
         os.makedirs(os.path.join(spec_dir, "contracts"))
@@ -1272,7 +1272,7 @@ def test_brace_shorthand_citation_grounds_each_file():
     Each expansion must be grounded on its own; a member that is truly absent
     still reads MISSING."""
     with tempfile.TemporaryDirectory() as d:
-        gates_rel = os.path.join(".wiggum", "features", "default", "gates")
+        gates_rel = os.path.join(".specstride", "features", "default", "gates")
         os.makedirs(os.path.join(d, gates_rel))
         os.makedirs(os.path.join(d, "runs", "u2"))
         for name in ("sweep-night.json", "sweep-daylight.json", "table-dark.txt"):
@@ -1329,7 +1329,7 @@ def test_ellipsis_prefixed_citation_is_grounded_without_the_prefix():
     with tempfile.TemporaryDirectory() as d:
         os.makedirs(os.path.join(d, "runs", "us8"))
         open(os.path.join(d, "runs", "us8", "offline-routing.json"), "w").write("{}\n")
-        sd = grounding_search_dirs(os.path.join(".wiggum", "features", "default", "gates"), d)
+        sd = grounding_search_dirs(os.path.join(".specstride", "features", "default", "gates"), d)
         got = extract_paths("Records: `…/runs/us8/offline-routing.json` and "
                             "`.../runs/us8/offline-about.json`.", d, sd)
         assert "runs/us8/offline-routing.json" in got, got
@@ -1348,7 +1348,7 @@ def test_previous_needs_grounding_files_are_carried_and_emitted_whole():
     W15 whole-file emission applies to it."""
     from critic import carried_grounding
     with tempfile.TemporaryDirectory() as d:
-        gates_rel = os.path.join(".wiggum", "features", "default", "gates")
+        gates_rel = os.path.join(".specstride", "features", "default", "gates")
         os.makedirs(os.path.join(d, gates_rel))
         os.makedirs(os.path.join(d, "runs", "us10"))
         open(os.path.join(d, "runs", "us10", "chips.json"), "w").write('{"chips": 16}\n')

@@ -1,4 +1,4 @@
-# Wiggum OTEL Collector — bridges the OTLP shipper (lib/ralph_otel_ship.py) to the
+# Specstride OTEL Collector — bridges the OTLP shipper (lib/ralph_otel_ship.py) to the
 # existing bundled backends so the current Grafana dashboard keeps working unchanged:
 #
 #   OTLP/HTTP :4318  ──▶  logs    ──▶  Loki  (existing "Ralph Loops" dashboard reads this)

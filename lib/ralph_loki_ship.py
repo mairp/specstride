@@ -263,7 +263,7 @@ def run_stream(loki, run_id, iteration):
 def run_event(loki, event_name, extra_fields, json_stdin=False):
     fields = {}
     if json_stdin:
-        # Wiggum path: a single JSON event object arrives on stdin (the same line
+        # Specstride path: a single JSON event object arrives on stdin (the same line
         # the loop appends to events.jsonl). Flatten it into logfmt fields.
         raw = sys.stdin.read().strip()
         if raw:

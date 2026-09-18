@@ -1,4 +1,4 @@
-# Running Wiggum against a local model — measured tuning and failure taxonomy
+# Running Specstride against a local model — measured tuning and failure taxonomy
 
 Derived from two loops on `mairp` (2026-09-01/02): `ainetops` spec-001 phase 8 and
 spec-002 phases 1–3, both `dsh:qwen3.8-27b` as proposer AND critic on a single
@@ -9,9 +9,9 @@ was left alone cost hours.
 
     --proposer-timeout 7200                 # real passes exceed the 3600 default
     --critic-timeout   3600                 # scales with maxTokens; see §3
-    WIGGUM_PROPOSER_PROGRESS_TIMEOUT=3600   # but see §2 — the PATH matters more
-    WIGGUM_PROPOSER_IDLE_TIMEOUT=1800
-    WIGGUM_PROPOSER_REPEAT_LIMIT=5
+    SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT=3600   # but see §2 — the PATH matters more
+    SPECSTRIDE_PROPOSER_IDLE_TIMEOUT=1800
+    SPECSTRIDE_PROPOSER_REPEAT_LIMIT=5
     dsh settings.yaml  maxTokens: 49152     # see §3
 
 Changing one in isolation reliably breaks another. Observed sequence: raised the
@@ -21,15 +21,15 @@ which then blew the critic timeout. Four rounds of one-at-a-time fixes.
 
 ## 2. The stall watchdog is blind to `gates/proofs` — the most expensive trap
 
-`proposer.sh` scores progress as file writes under the workdir, pruning wiggum's
+`proposer.sh` scores progress as file writes under the workdir, pruning specstride's
 own state dirs:
 
-    find "$root" \( -name .git -o -name .wiggum -o -name node_modules -o -name .venv \) \
+    find "$root" \( -name .git -o -name .specstride -o -name node_modules -o -name .venv \) \
          -prune -o -newermt "@$since" -print -quit
 
 The prune is deliberate — `runs/`, `events.jsonl` and a detached long job churn on
 their own and would mask a real stall. But an **evidence / qualification phase
-writes its entire work product into `.wiggum/features/<feature>/gates/proofs/`**,
+writes its entire work product into `.specstride/features/<feature>/gates/proofs/`**,
 so the proposer can work flat out and score ZERO progress.
 
 Measured, ainetops 001 phase 8, 09:42–11:00 (passes 7 and 8, both killed
@@ -39,11 +39,11 @@ slices under gates/proofs/". It was doing exactly what the phase asks.
 
 Fix — point the progress roots at `gates`, never the whole feature dir:
 
-    WIGGUM_PROPOSER_PROGRESS_PATHS="<workdir>:<workdir>/.wiggum/features/<feature>/gates"
+    SPECSTRIDE_PROPOSER_PROGRESS_PATHS="<workdir>:<workdir>/.specstride/features/<feature>/gates"
 
 `gates/` is proposer-written; `runs/` and `pass-checkpoints/` are harness-written
 and must stay excluded or the watchdog loses its purpose. The prune matches by
-directory NAME, so a root that lives *inside* `.wiggum` is still traversed.
+directory NAME, so a root that lives *inside* `.specstride` is still traversed.
 
 **Diagnostic tell:** a pass killed `progress_stall` whose dsh session shows many
 responses and many UNIQUE bash calls is not stalled. Check where its writes land
@@ -82,7 +82,7 @@ Four distinct causes seen, each needing a different fix:
 | `critic exit 1` / empty reply | generation hit maxTokens, no verdict line | raise maxTokens |
 | `critic returned empty stdout` | **backend** returned a broken stream | check the model server, not the config |
 
-The last one is not a wiggum problem. Cross-check the server log for
+The last one is not a specstride problem. Cross-check the server log for
 `error processing streaming response: no valid JSON data found in stream` at the
 same timestamp before changing anything.
 
@@ -116,7 +116,7 @@ Prompt composition, phase 3 (353 KB / 112,128 input tokens):
 
     EVIDENCE (incl. grounding snapshot)  281,598 B   77%
     SPEC                                  48,337 B   14%
-    DESIGN CONTEXT                        25,789 B    7%   (WIGGUM_CONTEXT_BUDGET, default 24000)
+    DESIGN CONTEXT                        25,789 B    7%   (SPECSTRIDE_CONTEXT_BUDGET, default 24000)
     PROMPT boilerplate                     2,062 B
 
 Measured ratio **3.18 bytes/token**. Growth **+33k input tokens per phase**
@@ -126,14 +126,14 @@ maximum that fits on a 24 GB card (llama-swap sweep: `-c 229376` = 23,826 MiB,
 
 **Therefore the critic prompt reaches the context wall around phase 6-7 on its own.**
 No timeout or cap prevents this. When a prompt crosses ~150k tokens the options are,
-in order of cost: trim `WIGGUM_CONTEXT_BUDGET` (design context is explicitly
+in order of cost: trim `SPECSTRIDE_CONTEXT_BUDGET` (design context is explicitly
 "background only, never an extra criterion", worth ~5k tokens); split large phases
 in the spec so no gate carries 50+ criteria; or move the critic to a
 larger-context backend.
 
 ## 7. Operational gotchas that each cost real time
 
-- **`.env` is read from wiggum's OWN install dir** (`$SCRIPT_DIR/.env`), NOT the
+- **`.env` is read from specstride's OWN install dir** (`$SCRIPT_DIR/.env`), NOT the
   project workdir, despite the help saying "repo root". A project-local `.env` is
   silently ignored — the banner's `timeouts:` line is the only confirmation it took.
   `IDLE`/`PROGRESS`/`REPEAT` have no CLI flags; pass them as env vars.
