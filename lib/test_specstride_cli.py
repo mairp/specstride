@@ -213,3 +213,40 @@ def test_resume_omits_long_job_when_the_run_had_none(tmp_path):
     out = run("resume", wd)
 
     assert "--long-job" not in out
+
+
+# ── the pre-rename command name (Specstride was formerly Wiggum) ─────────────
+LEGACY_CLI = os.path.join(ROOT, "wiggum")
+SHIM_NOTICE = ("wiggum: this command was renamed to specstride; "
+               "the alias will be removed in a future release")
+
+
+def _clean_env():
+    """The caller's env minus any Specstride/legacy knobs, so stderr is exact."""
+    return {k: v for k, v in os.environ.items()
+            if not k.startswith(("SPECSTRIDE_", "WIGGUM_"))}
+
+
+def test_legacy_command_name_is_a_forwarding_shim(workdir):
+    env = _clean_env()
+    new = subprocess.run(["bash", SPECSTRIDE, "status", "-w", str(workdir)],
+                         capture_output=True, text=True, timeout=20, env=env)
+    old = subprocess.run([LEGACY_CLI, "status", "-w", str(workdir)],
+                         capture_output=True, text=True, timeout=20, env=env)
+    assert new.returncode == old.returncode == 0
+    assert "unknown schema version 9" in ANSI.sub("", new.stdout)   # a real status card
+    assert old.stdout == new.stdout
+    assert old.stderr == SHIM_NOTICE + "\n" + new.stderr
+
+
+def test_legacy_command_name_forwards_arguments_and_exit_code(workdir, tmp_path):
+    env = _clean_env()
+    missing = tmp_path / "nowhere"
+    missing.mkdir()
+    new = subprocess.run(["bash", SPECSTRIDE, "status", "-w", str(missing)],
+                         capture_output=True, text=True, timeout=20, env=env)
+    old = subprocess.run([LEGACY_CLI, "status", "-w", str(missing)],
+                         capture_output=True, text=True, timeout=20, env=env)
+    assert new.returncode == old.returncode != 0
+    assert old.stderr.splitlines()[0] == SHIM_NOTICE
+    assert old.stderr.splitlines()[1:] == new.stderr.splitlines()
