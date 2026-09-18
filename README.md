@@ -1,6 +1,9 @@
-# Wiggum
+# Specstride
 
-**A self-driving, spec-driven Ralph loop with an agent pairing gate and telemetry.**
+**Specstride** (formerly Wiggum). From specs to tested code. An autonomous coding
+orchestrator that drives your agent through implementation, critic review, and
+verification, phase by phase: a self-driving, spec-driven **Ralph loop** with an
+agent pairing gate and telemetry.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Bash](https://img.shields.io/badge/Bash-orchestrator-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)
@@ -18,12 +21,12 @@ you only arbitrate the phases the machines genuinely can't settle.
 
 The deterministic-loop approach — automating software development by running a
 coding agent in a repeating, self-checking loop — is the **"Ralph" technique**
-coined by [Geoffrey Huntley](https://ghuntley.com/). Wiggum is **my own
+coined by [Geoffrey Huntley](https://ghuntley.com/). Specstride is **my own
 implementation and interpretation** of it: I arrived at this shape the hard way,
 by running the loop *painfully by hand* — driving a coding agent phase by phase
 and then sitting in the inner loop myself, eyeballing each phase's evidence and
 hand-approving the gate before letting the next phase start. Doing that approval
-step manually, over and over, is exactly the toil Wiggum removes: it adds an
+step manually, over and over, is exactly the toil Specstride removes: it adds an
 **automated critic gate** in the seat I used to occupy, so nothing advances until
 the work is verified — and I only step back in for the phases the machines
 genuinely can't settle.
@@ -35,34 +38,70 @@ genuinely can't settle.
 > [on-disk contract](./wiki/On-Disk-Contract.md), [hardening](./wiki/Hardening.md),
 > [telemetry](./wiki/Telemetry.md), and [configuration](./wiki/Configuration.md).
 
-## Wiggum is a utility; your project lives elsewhere
+## Migrating from Wiggum
 
-Install Wiggum once (clone it wherever you keep tools); it is *not* the working
+Specstride was called Wiggum until September 2026. Nothing that worked under the
+old name breaks; each old name below still works and prints a one-line
+deprecation notice. The old names will be removed in a future release.
+
+| What | Old name | New name |
+|---|---|---|
+| CLI command | `wiggum` | `specstride` |
+| Shared bash library | `wiggum-lib.sh` | `specstride-lib.sh` |
+| Phase-8 digest script | `wiggum-digest.sh` | `specstride-digest.sh` |
+| Spec parser module | `lib/wiggum_spec.py` | `lib/specstride_spec.py` |
+| Environment variables | `WIGGUM_*` | `SPECSTRIDE_*` |
+| State directory | `<workdir>/.wiggum/` | `<workdir>/.specstride/` |
+| GitHub repository | `mairp/wiggum` | `mairp/specstride` (the old URL redirects) |
+
+The compatibility rules:
+
+1. **Old command names keep working.** `wiggum …` prints the notice to stderr and
+   runs `specstride …` with the same arguments. A script that sources
+   `wiggum-lib.sh` gets `specstride-lib.sh`, and the old `wiggum_<name>` function
+   names still resolve.
+2. **Old environment variables keep working.** For every `WIGGUM_<X>`: if
+   `SPECSTRIDE_<X>` is set it wins; otherwise `WIGGUM_<X>` is used; otherwise the
+   built-in default applies. One deprecation line prints per process when an old
+   name was used. `.env` files go through the same mapping.
+3. **Old state directories keep working.** When `<workdir>/.specstride/` does not
+   exist but `<workdir>/.wiggum/` does, Specstride reads and writes `.wiggum/` in
+   place and logs a one-line notice. It never moves or renames an existing state
+   directory, because a live run commits into it. A fresh workdir gets
+   `.specstride/`. To migrate a quiet workdir by hand, stop the run and
+   `mv .wiggum .specstride`.
+
+Telemetry identity is unchanged: Loki queries and dashboards still key on
+`job=ralph` and `service.name=ralph`.
+
+## Specstride is a utility; your project lives elsewhere
+
+Install Specstride once (clone it wherever you keep tools); it is *not* the working
 directory. Each run points at your project:
 
 - **`-w/--workdir DIR`** — where the proposer works. All generated state lives
-  under `.wiggum/features/<slug>/` (gates, evidence, PROGRESS.md, verdicts), so the
+  under `.specstride/features/<slug>/` (gates, evidence, PROGRESS.md, verdicts), so the
   workdir root holds only your real artifacts. Default: `$PWD`.
 - **`-s/--specs FILE`** — the spec, **any name, any location** (`SPECS.md`,
   `ROADMAP.md`, `plan.md`, …). A relative path resolves against the directory you
   launched from, not the workdir. Default: `<workdir>/SPECS.md` — or, inside a Spec
   Kit project, [auto-discovered](#spec-resolution-zero-flag-start) with no `-s`.
 - **`--feature SLUG`** — the feature namespace for durable state
-  (`.wiggum/features/<slug>/`), for repos with more than one Spec Kit feature. Also
-  `WIGGUM_FEATURE`. Default: the feature dir's basename, or `default`.
+  (`.specstride/features/<slug>/`), for repos with more than one Spec Kit feature. Also
+  `SPECSTRIDE_FEATURE`. Default: the feature dir's basename, or `default`.
 
-So the same installed Wiggum drives any project:
+So the same installed Specstride drives any project:
 
 ```bash
-wiggum run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md
+specstride run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md
 ```
 
-(`wiggum` is the single front-door command — see **Install it permanently**
+(`specstride` is the single front-door command — see **Install it permanently**
 just below.)
 
 ### Pre-loop test automation
 
-Wiggum can derive a Lisa-compatible `VerificationPlan v1` before the first
+Specstride can derive a Lisa-compatible `VerificationPlan v1` before the first
 proposer pass. The canonical JSON is hash-bound to the authoritative
 specification, while `TEST_PLAN.md` is its human-readable projection.
 
@@ -134,7 +173,7 @@ duplicated gate:
 | `stage` | `"gate"` | `"prestage"` runs the command ONCE per attempt, before the proposer pass, and lets that phase's gate reuse the passing result. `"both"` pre-stages it *and* still executes it at the gate. (`"pre"` is accepted as a spelling of `"prestage"`.) |
 | `reportPath` | — | workdir-relative artifact the command produces; named in the block the proposer reads, so the pass writes evidence from a file instead of re-running the measurement |
 | `reusePolicy` | `"per-attempt"` | how far a passing pre-stage may travel: `per-attempt` (this attempt's gate), `per-phase` (any attempt of that phase), `per-run` (any later gate too) |
-| `detached` | `false` | launch it as a job Wiggum owns (its own session, its own log) instead of blocking; its `timeoutSec` becomes a polled **deadline** — an expired deadline is reported with the job left running, never signalled |
+| `detached` | `false` | launch it as a job Specstride owns (its own session, its own log) instead of blocking; its `timeoutSec` becomes a polled **deadline** — an expired deadline is reported with the job left running, never signalled |
 | `cumulative` | `true` | `false` gates the command at its own phase and at release only, instead of at every later phase gate |
 
 The pre-stage report reaches the pass on the verification slice the proposer prompt
@@ -153,7 +192,7 @@ is still running — re-runs the command. Every adopted record carries `reusedFr
 so the gate document never claims an execution it did not perform.
 
 Because a dirty tree refuses reuse, keep the run's own artifacts out of `git status`
-— `.wiggum/` and `testautomation/` in `.gitignore` — or the tree is dirty from the
+— `.specstride/` and `testautomation/` in `.gitignore` — or the tree is dirty from the
 first pass and the gate (correctly) re-runs everything. `cumulative: false` is a real
 weakening of the cumulative-regression property, so it is opt-in per command and is
 reported in the plan's `assumptions` block, never inferred.
@@ -165,8 +204,8 @@ resolve inside the workdir, and not target a final-path symlink. A maximum-obser
 run against Lisa is:
 
 ```bash
-WIGGUM_AGENT_STREAM=true WIGGUM_LIVE_DETAIL=full \
-/home/marlon.lopez/wiggum/wiggum run \
+SPECSTRIDE_AGENT_STREAM=true SPECSTRIDE_LIVE_DETAIL=full \
+/home/marlon.lopez/specstride/specstride run \
   --workdir /home/marlon.lopez/lisa \
   --specs /home/marlon.lopez/lisa/SPECS.md \
   --spec-format native \
@@ -186,38 +225,38 @@ Planning can also be run independently, before any loop:
 
 ```bash
 /usr/bin/python3 \
-  /home/marlon.lopez/wiggum/lib/verification_plan.py create \
+  /home/marlon.lopez/specstride/lib/verification_plan.py create \
   --workdir /home/marlon.lopez/lisa \
   --specs /home/marlon.lopez/lisa/SPECS.md \
   --format native \
   --output /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/TEST_PLAN.md \
-  --json-output /home/marlon.lopez/lisa/.wiggum/verification/verification-plan.json \
+  --json-output /home/marlon.lopez/lisa/.specstride/verification/verification-plan.json \
   --generate-tests /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/generated \
   --required
 ```
 
-The Bash entry points (`orchestrator.sh`, `proposer.sh`, `wiggum`) sit at the top
+The Bash entry points (`orchestrator.sh`, `proposer.sh`, `specstride`) sit at the top
 level; all Python components live under **`lib/`** (`lib/critic.py`,
 `lib/present.py`, `lib/ralph_loki_ship.py`, `lib/ralph_otel_ship.py`).
 
-### Install it permanently (one `wiggum` command)
+### Install it permanently (one `specstride` command)
 
-Typing `/root/wiggum/orchestrator.sh …` every run gets old fast. The **`wiggum`
+Typing `/root/specstride/orchestrator.sh …` every run gets old fast. The **`specstride`
 script is already the single front door for *everything*** — it owns the routing
-itself: `wiggum run …` (or a leading `-w/-s/--flag`) **starts** the loop by
-`exec`ing `orchestrator.sh`, while `wiggum status`, `wiggum watch`, `wiggum stop`,
+itself: `specstride run …` (or a leading `-w/-s/--flag`) **starts** the loop by
+`exec`ing `orchestrator.sh`, while `specstride status`, `specstride watch`, `specstride stop`,
 … run the inspection CLI. So all your shell rc needs is a **thin pointer** at the
 script — no dispatch logic to copy, nothing to keep in sync.
 
 Add this to `~/.bashrc` (or `~/.zshrc`):
 
 ```bash
-# ── Wiggum ─────────────────────────────────────────────────────────────
-export WIGGUM_HOME="/root/wiggum"          # wherever you cloned it — set once
-export WIGGUM_LIVE_DETAIL=full             # richest live view — narrates assistant text + every tool call
+# ── Specstride ─────────────────────────────────────────────────────────────
+export SPECSTRIDE_HOME="/root/specstride"          # wherever you cloned it — set once
+export SPECSTRIDE_LIVE_DETAIL=full             # richest live view — narrates assistant text + every tool call
 
-# `wiggum` owns its own run-vs-inspect routing, so this is just a pointer.
-wiggum() { "$WIGGUM_HOME/wiggum" "$@"; }
+# `specstride` owns its own run-vs-inspect routing, so this is just a pointer.
+specstride() { "$SPECSTRIDE_HOME/specstride" "$@"; }
 # ───────────────────────────────────────────────────────────────────────
 ```
 
@@ -225,32 +264,32 @@ Reload once (`source ~/.bashrc`) and the one command drives every example below,
 from any directory:
 
 ```bash
-wiggum run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md   # START a loop
-wiggum -w ~/projects/foo -s ~/projects/foo/ROADMAP.md       # …same thing, leading flag
-wiggum status -w ~/projects/foo                             # inspect it
-wiggum watch  -w ~/projects/foo                             # live status card
-wiggum stop   -w ~/projects/foo                             # clean halt
+specstride run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md   # START a loop
+specstride -w ~/projects/foo -s ~/projects/foo/ROADMAP.md       # …same thing, leading flag
+specstride status -w ~/projects/foo                             # inspect it
+specstride watch  -w ~/projects/foo                             # live status card
+specstride stop   -w ~/projects/foo                             # clean halt
 ```
 
 The routing lives in the script (see the "single front door" block at the top of
-`wiggum`): `run`/`start` or a leading `-w/-s/--flag` go straight to the
+`specstride`): `run`/`start` or a leading `-w/-s/--flag` go straight to the
 orchestrator; the reserved inspection verbs and `-h/--help` stay in the CLI. Use
-the explicit **`wiggum run …`** form whenever you want to be unambiguous (or in
+the explicit **`specstride run …`** form whenever you want to be unambiguous (or in
 scripts).
 
 > **Why a function and not a `symlink`/PATH shim?** The scripts locate their own
-> `lib/` and `wiggum-lib.sh` via `dirname "${BASH_SOURCE[0]}"`, which does **not**
-> dereference symlinks — a `ln -s … /usr/local/bin/wiggum` would resolve its home
-> to `/usr/local/bin` and fail to find `wiggum-lib.sh`. The function calls the real
-> absolute path under `$WIGGUM_HOME`, so `SCRIPT_DIR` stays correct. (Prefer PATH?
-> `export PATH="$WIGGUM_HOME:$PATH"` also works, and because the script owns its own
-> run-vs-inspect routing, bare `wiggum run …` starts a loop that way too — no
-> function needed. The function is just the tidiest way to pin `$WIGGUM_HOME`.)
+> `lib/` and `specstride-lib.sh` via `dirname "${BASH_SOURCE[0]}"`, which does **not**
+> dereference symlinks — a `ln -s … /usr/local/bin/specstride` would resolve its home
+> to `/usr/local/bin` and fail to find `specstride-lib.sh`. The function calls the real
+> absolute path under `$SPECSTRIDE_HOME`, so `SCRIPT_DIR` stays correct. (Prefer PATH?
+> `export PATH="$SPECSTRIDE_HOME:$PATH"` also works, and because the script owns its own
+> run-vs-inspect routing, bare `specstride run …` starts a loop that way too — no
+> function needed. The function is just the tidiest way to pin `$SPECSTRIDE_HOME`.)
 
-The rest of this README uses the unified **`wiggum`** command — `wiggum run …` (or
-a leading `wiggum -w …`) to start, `wiggum <verb> …` to inspect. Because the
+The rest of this README uses the unified **`specstride`** command — `specstride run …` (or
+a leading `specstride -w …`) to start, `specstride <verb> …` to inspect. Because the
 script owns the routing, you don't even need the function: call
-`"$WIGGUM_HOME"/wiggum …` directly and both `wiggum run …` and the inspection
+`"$SPECSTRIDE_HOME"/specstride …` directly and both `specstride run …` and the inspection
 verbs work the same way.
 
 ## How it works
@@ -259,7 +298,7 @@ verbs work the same way.
 orchestrator.sh   (derives the current phase N from disk; reads SPECS.md)
   │
   ├─(1) PROPOSER — run a headless coding-agent loop for phase N until it writes
-  │       .wiggum/gates/GATE<N>-EVIDENCE.md (written atomically), then the loop exits.
+  │       .specstride/gates/GATE<N>-EVIDENCE.md (written atomically), then the loop exits.
   │       On the attempt right after a NEW diagnostician hint this is the
   │       ACCELERATOR instead: the same proposer.sh, --role accelerator, with a
   │       prompt narrowed to the unmet criteria, the feedback, the hint and the
@@ -269,15 +308,15 @@ orchestrator.sh   (derives the current phase N from disk; reads SPECS.md)
   │       does a read-only grounding pass over the files the evidence cites (byte
   │       budget scaled to the critic backend's real context window), and asks an
   │       LLM for a strict verdict:
-  │           APPROVED → writes an empty .wiggum/gates/GATE<N>-APPROVED marker
-  │           REJECTED → writes .wiggum/gates/GATE<N>-FEEDBACK.md (the specific gaps)
+  │           APPROVED → writes an empty .specstride/gates/GATE<N>-APPROVED marker
+  │           REJECTED → writes .specstride/gates/GATE<N>-FEEDBACK.md (the specific gaps)
   │
   ├─(3a) APPROVED → git-checkpoint the workdir, N := N+1, back to (1).
   └─(3b) REJECTED → compute the phase's UNMET-CRITERIA SIGNATURE (the T### IDs the
            feedback names, or a hash of its prose), then:
              NEW signature  → run the DIAGNOSTICIAN (lib/critic.py --diagnose: the
                               same critic backend, the FULL untruncated files, no
-                              grounding budget) → .wiggum/gates/GATE<N>-HINT.md.
+                              grounding budget) → .specstride/gates/GATE<N>-HINT.md.
                               The next attempt is the ACCELERATOR.
              SAME signature → archive the rejected evidence and re-run the wide
                               PROPOSER with the feedback + hint. If the previous
@@ -290,7 +329,7 @@ orchestrator.sh   (derives the current phase N from disk; reads SPECS.md)
 The same loop as a UML sequence — the five roles (orchestrator, proposer,
 accelerator, critic, diagnostician) each on their own lifeline, the
 approve/reject branch, and the stuck-loop path (new signature → diagnostician →
-accelerator), all mediated by the `.wiggum/gates/` files rather than direct calls:
+accelerator), all mediated by the `.specstride/gates/` files rather than direct calls:
 
 ```mermaid
 sequenceDiagram
@@ -301,7 +340,7 @@ sequenceDiagram
     participant A as proposer.sh --role accelerator<br/>(accelerator · same tools, narrowed prompt)
     participant C as lib/critic.py<br/>(critic · LLM gate)
     participant D as lib/critic.py --diagnose<br/>(diagnostician · same backend, no budget)
-    participant FS as .wiggum/gates/<br/>(on-disk contract)
+    participant FS as .specstride/gates/<br/>(on-disk contract)
 
     Human->>O: run -w WORKDIR -s SPECS.md
     O->>FS: derive phase N from GATE* markers
@@ -364,7 +403,7 @@ sequenceDiagram
 ```
 
 There is **no file-watcher**. Detection is deterministic: the proposer loop's
-gate is a plain `test -f .wiggum/gates/GATE<N>-EVIDENCE.md`, and because that loop has already
+gate is a plain `test -f .specstride/gates/GATE<N>-EVIDENCE.md`, and because that loop has already
 exited when control returns, the orchestrator hands the critic the exact path —
 no race, no half-written file.
 
@@ -379,17 +418,17 @@ learn nothing new.
 
 The orchestrator tracks each phase's unmet-criteria signature (the `T###` IDs a
 rejection names). The FIRST time a new signature appears, it runs `lib/critic.py
---diagnose`: one extra pass, same critic backend (`WIGGUM_CRITIC`), given the
+--diagnose`: one extra pass, same critic backend (`SPECSTRIDE_CRITIC`), given the
 full rejection history and the FULL, untruncated content of the cited files —
 no grounding budget. It classifies the stall as `CASE: GROUNDING` (the code is
 fine, the critic just couldn't see it — and says what to restage) or
 `CASE: REAL-GAP` (a genuine gap — and what to fix), and writes
-`.wiggum/gates/GATE<N>-HINT.md`, which the next proposer prompt reads alongside
+`.specstride/gates/GATE<N>-HINT.md`, which the next proposer prompt reads alongside
 the critic's own feedback.
 
 It never re-fires on an unchanged signature (no point paying for the same
 answer twice), never blocks or replaces the normal retry, and never approves or
-rejects anything itself — it's advisory. Disable with `WIGGUM_DIAGNOSTICIAN=false`.
+rejects anything itself — it's advisory. Disable with `SPECSTRIDE_DIAGNOSTICIAN=false`.
 
 ### Accelerator (acting on the diagnostician's hint)
 
@@ -427,8 +466,8 @@ reject → diagnostician (new signature → GATE<N>-HINT.md)
 An accelerator attempt counts toward `MAX_REJECTS` like any other, and it never
 runs twice in a row. Its prompt is written to `accelerator-prompt.phase<N>.txt`
 next to the proposer's; its invocation artifacts land under `.../accelerator/`.
-Disable with `WIGGUM_ACCELERATOR=false`; point it at a different model with
-`WIGGUM_ACCELERATOR_BACKEND`.
+Disable with `SPECSTRIDE_ACCELERATOR=false`; point it at a different model with
+`SPECSTRIDE_ACCELERATOR_BACKEND`.
 
 ### Grounding budget scales to the actual critic backend's context window
 
@@ -437,7 +476,7 @@ flat number for every provider — each real backend has a different context
 window, and using one number for all of them either wastes headroom on a
 bigger window (this is the SAME starvation failure the diagnostician exists
 for, just from under-sizing instead of an oversized phase) or risks
-overflowing a smaller one. Wiggum resolves the actual window per call — the
+overflowing a smaller one. Specstride resolves the actual window per call — the
 Claude/OpenAI providers call those vendors' APIs directly, so they're keyed
 against the vendors' own published windows (Claude Opus 4.8: 1,000,000; GPT-5:
 400,000), not a local fleet's internal operational settings for an unrelated
@@ -447,7 +486,7 @@ Qwen3.8 at whatever this fleet measured it can actually load (229,376 on the
 reference 24 GB card), GLM-5.3 at its declared 128,000. The byte budget scales
 from whichever of these actually applies, instead of guessing or hardcoding
 one provider's number for all of them.
-Override with `WIGGUM_CRITIC_CONTEXT_TOKENS` for any backend the built-in
+Override with `SPECSTRIDE_CRITIC_CONTEXT_TOKENS` for any backend the built-in
 table doesn't know (in particular Prime, whose backing model isn't visible to
 `critic.py` at all) or to correct a host-specific deployment.
 
@@ -458,17 +497,17 @@ Clone, set your key, alias, run:
 ```bash
 cp .env.example .env          # then edit: set ANTHROPIC_API_KEY
 
-# one-time setup (see "Install it permanently" above): add the thin wiggum()
-# pointer to ~/.bashrc, pointing WIGGUM_HOME at this clone, then reload:
+# one-time setup (see "Install it permanently" above): add the thin specstride()
+# pointer to ~/.bashrc, pointing SPECSTRIDE_HOME at this clone, then reload:
 source ~/.bashrc
 
-mkdir -p /tmp/wiggum-demo && cp SPECS.example.md /tmp/wiggum-demo/SPECS.md
-wiggum run -w /tmp/wiggum-demo
+mkdir -p /tmp/specstride-demo && cp SPECS.example.md /tmp/specstride-demo/SPECS.md
+specstride run -w /tmp/specstride-demo
 ```
 
 (Not set up yet? The one-off equivalent calls the script directly:
-`"$WIGGUM_HOME"/wiggum run -w /tmp/wiggum-demo` — or `./wiggum run -w
-/tmp/wiggum-demo` from inside the clone.)
+`"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo` — or `./specstride run -w
+/tmp/specstride-demo` from inside the clone.)
 
 The proposer defaults to **`dsh`**, using DeepSeek Harness's headless profile and
 its configured default model (SOL through Compass STAGE on this installation).
@@ -481,15 +520,15 @@ Drive the local `image_generator` spec with the most detailed live view, shippin
 telemetry to the host's Grafana:
 
 ```bash
-WIGGUM_LIVE_DETAIL=full wiggum run \
+SPECSTRIDE_LIVE_DETAIL=full specstride run \
     -w /root/image_generator \
     -s /root/image_generator/SPECS.md \
     --telemetry --loki-url http://localhost:3100
 ```
 
-`WIGGUM_LIVE_DETAIL=full` is the most detailed live view (see **Live visibility**);
-the run is resumable with `wiggum resume -w /root/image_generator`. **Telemetry note:**
-wiggum's *bundled* stack (`telemetry/`) defaults to Grafana `:3010` / Loki `:3110`,
+`SPECSTRIDE_LIVE_DETAIL=full` is the most detailed live view (see **Live visibility**);
+the run is resumable with `specstride resume -w /root/image_generator`. **Telemetry note:**
+specstride's *bundled* stack (`telemetry/`) defaults to Grafana `:3010` / Loki `:3110`,
 but this host's *live* observability stack is Grafana **`:3000`** / Loki **`:3100`** —
 so point `--loki-url` at **`:3100`**. Runs then land under `task="image_generator"` in
 `{job="ralph"}`. The **"Ralph Loops (Claude Code)"** dashboard defaults to a `now-6h`
@@ -511,7 +550,7 @@ with **zero containers**. Two views over the same event stream:
   **cost / tokens / duration / turns** each tinted. Whenever the agent goes quiet
   for more than a couple of seconds, an animated **heartbeat** (spinner + pulse
   bar) keeps the current activity and running totals visibly moving. No second
-  terminal, no `wiggum watch`. Color auto-strips when stdout isn't a TTY, or force
+  terminal, no `specstride watch`. Color auto-strips when stdout isn't a TTY, or force
   it off with `--no-color`; force the whole view off with `--no-live` (restores the
   raw tee'd output).
   ```
@@ -522,25 +561,25 @@ with **zero containers**. Two views over the same event stream:
   14:03:03  ✓ evidence → GATE2-EVIDENCE.md  (1 iter)
   14:03:19  ✗ REJECTED phase 2 (attempt 1) — criterion 3: no passing test
   ```
-  **Verbosity** is `WIGGUM_LIVE_DETAIL` (`milestones | tools | full`; default
+  **Verbosity** is `SPECSTRIDE_LIVE_DETAIL` (`milestones | tools | full`; default
   `tools`). Set it in `.env` or inline per run. `full` adds each assistant
   thinking/narration line (`💬`) on top of the tool calls — the most detailed view:
 
   ```bash
-  WIGGUM_LIVE_DETAIL=full wiggum run -w ~/projects/foo --live
+  SPECSTRIDE_LIVE_DETAIL=full specstride run -w ~/projects/foo --live
   ```
 
   (`milestones` is the sparsest — only coarse loop milestones, no per-tool lines.)
 
-- **Live status card:** `wiggum watch` — a compact header (phase progress + current
+- **Live status card:** `specstride watch` — a compact header (phase progress + current
   activity + heartbeat) over a **scrolling recent-activity feed**, so the latest
   message is always visible in place without scrolling. Attach to a backgrounded run.
-  Honors `WIGGUM_LIVE_DETAIL` the same way:
+  Honors `SPECSTRIDE_LIVE_DETAIL` the same way:
   ```bash
-  WIGGUM_LIVE_DETAIL=full wiggum watch -w ~/projects/foo
+  SPECSTRIDE_LIVE_DETAIL=full specstride watch -w ~/projects/foo
   ```
 
-## The `wiggum` inspection CLI
+## The `specstride` inspection CLI
 
 Everything is read-only **except `stop`, `resume`, and `learn --apply|--revert|--off`**
 — those are the only subcommands that mutate anything (`learn`'s writes are
@@ -548,31 +587,31 @@ confined to its own `learning/applied.json` decision log and a `knob_adjusted`
 event; see [Learning](#learning-self-tuning-knobs) below).
 
 All inspection subcommands take `--feature SLUG` and default to the **last run's
-feature** (from `.wiggum/last-run.conf`); `status --all` spans every feature.
+feature** (from `.specstride/last-run.conf`); `status --all` spans every feature.
 
 | Command | Shows / does |
 |---|---|
-| `wiggum status [-w DIR] [-s SPEC] [--feature S] [--all]` | one-screen state: a run-state headline (RUNNING / STOPPED / HALTED / DONE) + current phase + a ✓/✗ table of which contract files exist. `--all` lists every feature with its approved/total phase counts |
-| `wiggum phases [-w DIR] [-s SPEC] [--feature S]` | phases parsed from the spec + each one's state (also lints the spec) |
-| `wiggum tail   [-w DIR] [--feature S]` | `tail -f` the orchestrator `run.log` (the raw log) |
-| `wiggum events [-w DIR] [--feature S] [-f\|--follow] [--json]` | the raw event stream ("RPC view"): every milestone **and** every agent tool call / message as `HH:MM:SS event key=value…` lines. `--follow` streams; `--json` emits the raw JSONL |
-| `wiggum verdicts [-w DIR] [--feature S] [N]` | the critic's full reply(ies): prompt + response + parse decision |
-| `wiggum feedback <N> [-w DIR] [--feature S]` | `GATE<N>-FEEDBACK.md` |
-| `wiggum watch  [-w DIR]` | the live status card (with heartbeat + run totals) |
-| `wiggum stop   [-w DIR] [--now]` | **(mutates)** request a clean stop — writes `stop.flag`; the run finishes its current pass and exits 6. `--now` also kill-trees the in-flight proposer pass so it stops within seconds. Stops the single running run regardless of feature |
-| `wiggum resume [-w DIR] [--feature S] [overrides…]` | **(mutates)** relaunch the orchestrator from the saved config of the last run (`.wiggum/last-run.conf`, or a feature's own with `--feature`); refuses if a run is already active. Extra args override the saved flags (last-wins) |
-| `wiggum learn  [-w DIR] [--feature S] [--show\|--apply\|--revert <run-id>\|--off]` | the self-tuning loop over this feature's telemetry — see [Learning](#learning-self-tuning-knobs). `--show` (default) is read-only; `--apply`/`--revert`/`--off` **mutate** `learning/applied.json` |
+| `specstride status [-w DIR] [-s SPEC] [--feature S] [--all]` | one-screen state: a run-state headline (RUNNING / STOPPED / HALTED / DONE) + current phase + a ✓/✗ table of which contract files exist. `--all` lists every feature with its approved/total phase counts |
+| `specstride phases [-w DIR] [-s SPEC] [--feature S]` | phases parsed from the spec + each one's state (also lints the spec) |
+| `specstride tail   [-w DIR] [--feature S]` | `tail -f` the orchestrator `run.log` (the raw log) |
+| `specstride events [-w DIR] [--feature S] [-f\|--follow] [--json]` | the raw event stream ("RPC view"): every milestone **and** every agent tool call / message as `HH:MM:SS event key=value…` lines. `--follow` streams; `--json` emits the raw JSONL |
+| `specstride verdicts [-w DIR] [--feature S] [N]` | the critic's full reply(ies): prompt + response + parse decision |
+| `specstride feedback <N> [-w DIR] [--feature S]` | `GATE<N>-FEEDBACK.md` |
+| `specstride watch  [-w DIR]` | the live status card (with heartbeat + run totals) |
+| `specstride stop   [-w DIR] [--now]` | **(mutates)** request a clean stop — writes `stop.flag`; the run finishes its current pass and exits 6. `--now` also kill-trees the in-flight proposer pass so it stops within seconds. Stops the single running run regardless of feature |
+| `specstride resume [-w DIR] [--feature S] [overrides…]` | **(mutates)** relaunch the orchestrator from the saved config of the last run (`.specstride/last-run.conf`, or a feature's own with `--feature`); refuses if a run is already active. Extra args override the saved flags (last-wins) |
+| `specstride learn  [-w DIR] [--feature S] [--show\|--apply\|--revert <run-id>\|--off]` | the self-tuning loop over this feature's telemetry — see [Learning](#learning-self-tuning-knobs). `--show` (default) is read-only; `--apply`/`--revert`/`--off` **mutate** `learning/applied.json` |
 
 ## Learning (self-tuning knobs)
 
-Wiggum can suggest — and, opt-in, apply — per-phase knob values derived from what
+Specstride can suggest — and, opt-in, apply — per-phase knob values derived from what
 that phase has actually measured, instead of one global setting sized for the
 worst phase in the project. This is deliberately narrow: **suggest is the
 default, nothing is ever applied silently, and the set of knobs it may ever touch
 is a locked allowlist that can never include anything the critic reads.** Full
 design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
 
-- **Suggest by default.** `wiggum learn --show` (or bare `wiggum learn`) prints a
+- **Suggest by default.** `specstride learn --show` (or bare `specstride learn`) prints a
   suggested value per phase plus the sample count behind it — it writes nothing.
   Every knob needs **at least 3 samples** of the phase evidence it is derived
   from before a value is shown at all; a phase killed for *futility*
@@ -595,7 +634,7 @@ design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
   `proposer_timeout`, `yield_poll_interval`, `inject_yield_hint` — nothing else,
   ever. Grounding caps, the critic's backend/timeout, `--max-rejects`, anything in
   `verification-commands.json`, and every breaker setting
-  (`WIGGUM_PROPOSER_MAX_ERRORS`/`MAX_NOPROGRESS`/`MAX_CAPS`, `REPEAT_LIMIT`) are
+  (`SPECSTRIDE_PROPOSER_MAX_ERRORS`/`MAX_NOPROGRESS`/`MAX_CAPS`, `REPEAT_LIMIT`) are
   permanently out of scope: a breaker must never be able to relax itself, and
   nothing that changes what a verdict means may be tuned. `lib/test_learn.py`
   asserts this set literally, so adding a name to it means deliberately editing a
@@ -604,19 +643,19 @@ design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
   bound (above) and to no more than a ±50% step from whatever value is currently
   in effect — a self-tuner cannot run away in one step even if the telemetry
   that produced the suggestion was noisy.
-- **Applying, and undoing it.** `wiggum learn --apply --knob <knob> --phase N
+- **Applying, and undoing it.** `specstride learn --apply --knob <knob> --phase N
   --default S` (`--default` is unused for `inject_yield_hint` but still required
   by the shared flag) appends one decision to
-  `.wiggum/features/<slug>/learning/applied.json` (a separate, append-only file
+  `.specstride/features/<slug>/learning/applied.json` (a separate, append-only file
   from the plain observations below — decisions and observations are never
   conflated) with full provenance: the run ids the samples came from, the sample
   count, the previous value, and a timestamp; it also emits a `knob_adjusted`
-  event. `wiggum learn --revert <run-id>` undoes exactly that one decision,
+  event. `specstride learn --revert <run-id>` undoes exactly that one decision,
   restoring the value from just before it (refused if a later decision has
   already superseded it — reverting a stale one would silently clobber the newer
-  one). `wiggum learn --off` reverts every currently-applied knob for the
+  one). `specstride learn --off` reverts every currently-applied knob for the
   feature at once. None of this takes effect at run time unless the run itself
-  is launched with `WIGGUM_LEARNING=apply` in its environment — **unset, `off`,
+  is launched with `SPECSTRIDE_LEARNING=apply` in its environment — **unset, `off`,
   or any other value is a total no-op**: the applied log isn't even opened, and
   behaviour is byte-identical to a project that has never used `learn` at all.
 - **The integration point.** The one place a learned value can reach a live run is
@@ -628,7 +667,7 @@ design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
   ```
 
   prints one integer to stdout: the applied value for that phase if
-  `WIGGUM_LEARNING=apply` and one has been applied, else `<S>` unchanged.
+  `SPECSTRIDE_LEARNING=apply` and one has been applied, else `<S>` unchanged.
   `resolve --knob inject_yield_hint` prints `1`/`0` rather than a Python-style
   `True`/`False`, so a shell caller never has to branch on type.
 
@@ -637,10 +676,10 @@ design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
 Separately from the applied-decisions log above, `lib/learn.py observe` writes
 the §5.4 per-phase **observation** document — exactly that phase's entry from
 `summarize`'s metric set, with a schema tag and a generation timestamp — to
-`.wiggum/features/<slug>/learning/phase-<N>.json`. It is the measurement half of
+`.specstride/features/<slug>/learning/phase-<N>.json`. It is the measurement half of
 §5.4's storage table; it never reads or writes `applied.json`, and nothing
 reads it automatically today — it exists so a phase's own cross-run history is
-sitting on disk for a human, `wiggum learn --show`, or a future run of the same
+sitting on disk for a human, `specstride learn --show`, or a future run of the same
 phase to read, instead of being re-derived from every run's raw `events.jsonl`
 each time. It is idempotent: the same input always overwrites `--out` with the
 same `"observation"` content, so it is safe to call unconditionally.
@@ -664,10 +703,10 @@ every run that has ever touched it, the same cross-run view `summarize`'s
 `phases` map already gives `attempts_to_approval` and `runs_seen`. The hook IS wired at
 `phase_done` (see the next section).
 
-- **Observations are written where the phase closes.** With `WIGGUM_LEARNING` set
+- **Observations are written where the phase closes.** With `SPECSTRIDE_LEARNING` set
   to anything but `off`, an approved phase writes one observation of itself —
   `python3 lib/learn.py observe` over that run's `events.jsonl` into
-  `.wiggum/features/<slug>/learning/phase-<N>.json` — and emits one
+  `.specstride/features/<slug>/learning/phase-<N>.json` — and emits one
   `learning_observed` event naming it. Observations and decisions stay separate
   files on purpose (design §5.4). The hook is best-effort in every direction: it
   is skipped when the layer is off, skipped silently when the installed
@@ -678,68 +717,68 @@ every run that has ever touched it, the same cross-run view `summarize`'s
 
 `SPECS.md` (or a Spec Kit `tasks.md`) is the one input you write; it can live
 anywhere (`-s`, or discovered — see [Spec resolution](#spec-resolution-zero-flag-start)).
-Everything else Wiggum generates lives under `.wiggum/`, **namespaced per feature**,
+Everything else Specstride generates lives under `.specstride/`, **namespaced per feature**,
 so the workdir root stays clean — only your real project artifacts sit there.
 
 | File | Written by | Meaning |
 |---|---|---|
 | `SPECS.md` / `tasks.md` | you | Ordered phases + acceptance criteria (the input). |
-| `.wiggum/features/<slug>/PROGRESS.md` | proposer | Durable state; read first each iteration. |
-| `.wiggum/features/<slug>/gates/GATE<N>-EVIDENCE.md` | proposer | Evidence phase N's criteria are met. Written atomically. |
-| `.wiggum/features/<slug>/gates/GATE<N>-APPROVED` | **critic** | Empty marker; unblocks phase N+1. |
-| `.wiggum/features/<slug>/gates/GATE<N>-FEEDBACK.md` | **critic** | Present after a REJECT; the gaps to fix. |
-| `.wiggum/` | orchestrator | State dir (see below). The current phase is **derived** from the `GATE*` markers, never stored. |
+| `.specstride/features/<slug>/PROGRESS.md` | proposer | Durable state; read first each iteration. |
+| `.specstride/features/<slug>/gates/GATE<N>-EVIDENCE.md` | proposer | Evidence phase N's criteria are met. Written atomically. |
+| `.specstride/features/<slug>/gates/GATE<N>-APPROVED` | **critic** | Empty marker; unblocks phase N+1. |
+| `.specstride/features/<slug>/gates/GATE<N>-FEEDBACK.md` | **critic** | Present after a REJECT; the gaps to fix. |
+| `.specstride/` | orchestrator | State dir (see below). The current phase is **derived** from the `GATE*` markers, never stored. |
 
-**Feature-scoped state.** Durable state hangs off `.wiggum/features/<slug>/` so
+**Feature-scoped state.** Durable state hangs off `.specstride/features/<slug>/` so
 multiple Spec Kit features can build into **one** repo without their gates,
 evidence, and verdicts colliding. `<slug>` is the feature-dir basename when the
 spec lives inside a `.specify` project (`001-reverse-engineering-analysis`), and
 `default` otherwise — which is also the back-compat identity of every pre-v2
-`.wiggum/gates/` on disk (a native workdir keeps its state, transparently migrated
+`.specstride/gates/` on disk (a native workdir keeps its state, transparently migrated
 once on the next run).
 
 | Path | Scope | Holds |
 |---|---|---|
-| `.wiggum/features/<slug>/gates/` (+ `gates/proofs/`) | per-feature | all the phase-control files above — where to look for what the loop produced |
-| `.wiggum/features/<slug>/runs/<run-id>/{run.log,events.jsonl}` | per-feature | each run isolated |
-| `.wiggum/features/<slug>/{verdicts,attempts,debug}/` | per-feature | critic transcripts, archived rejected attempts (`attempts/phase<N>/attempt<M>/`), debug dumps |
-| `.wiggum/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/` | per-feature | one reconstructable proposer/critic invocation: `metadata.json` (contract `wiggum-invocation/v1`) + a terminal `result.json` (`wiggum-invocation-result/v1`), and — **only when raw capture is explicitly enabled** — `prompt.txt` / `provider.jsonl` / `events.jsonl` / `response.txt`. Every field is routed through `lib/observability_policy.py` first: secrets redacted, thinking dropped, oversized payloads truncated with `truncated=true`. Raw content expires after 7 days; redacted metadata + terminal result are kept 30 (the summary always outlives the raw it describes) |
-| `.wiggum/features/<slug>/PROGRESS.md`, `last-run.conf` | per-feature | proposer notes; that feature's resume config |
-| `.wiggum/lock`, `.wiggum/stop.flag` | **workdir** | one run per repo, ever — concurrency is per-workdir, **not** per-feature |
-| `.wiggum/run.log`, `.wiggum/events.jsonl` | **workdir** | symlinks retargeted into the **active** feature's newest run, so `wiggum tail`/`watch`/`events` work with no flags |
-| `.wiggum/last-run.conf` | **workdir** | the active-feature pointer + last launch config; what bare `wiggum resume` replays |
-| `.wiggum/features/<slug>/proposer.pid` | per-feature | in-flight proposer pass, so `wiggum stop --now` can kill the tree |
+| `.specstride/features/<slug>/gates/` (+ `gates/proofs/`) | per-feature | all the phase-control files above — where to look for what the loop produced |
+| `.specstride/features/<slug>/runs/<run-id>/{run.log,events.jsonl}` | per-feature | each run isolated |
+| `.specstride/features/<slug>/{verdicts,attempts,debug}/` | per-feature | critic transcripts, archived rejected attempts (`attempts/phase<N>/attempt<M>/`), debug dumps |
+| `.specstride/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/` | per-feature | one reconstructable proposer/critic invocation: `metadata.json` (contract `specstride-invocation/v1`) + a terminal `result.json` (`specstride-invocation-result/v1`), and — **only when raw capture is explicitly enabled** — `prompt.txt` / `provider.jsonl` / `events.jsonl` / `response.txt`. Every field is routed through `lib/observability_policy.py` first: secrets redacted, thinking dropped, oversized payloads truncated with `truncated=true`. Raw content expires after 7 days; redacted metadata + terminal result are kept 30 (the summary always outlives the raw it describes) |
+| `.specstride/features/<slug>/PROGRESS.md`, `last-run.conf` | per-feature | proposer notes; that feature's resume config |
+| `.specstride/lock`, `.specstride/stop.flag` | **workdir** | one run per repo, ever — concurrency is per-workdir, **not** per-feature |
+| `.specstride/run.log`, `.specstride/events.jsonl` | **workdir** | symlinks retargeted into the **active** feature's newest run, so `specstride tail`/`watch`/`events` work with no flags |
+| `.specstride/last-run.conf` | **workdir** | the active-feature pointer + last launch config; what bare `specstride resume` replays |
+| `.specstride/features/<slug>/proposer.pid` | per-feature | in-flight proposer pass, so `specstride stop --now` can kill the tree |
 
-**One run per workdir.** The `lock` stays at the `.wiggum/` root: a second
-`wiggum run` in the same workdir exits `E_LOCK` (5) **even for a different
+**One run per workdir.** The `lock` stays at the `.specstride/` root: a second
+`specstride run` in the same workdir exits `E_LOCK` (5) **even for a different
 feature**, because the workdir *is* the repo and two features mutating one source
 tree concurrently is a corruption, not a feature. Sequence features with the
-operator; `wiggum status --all` makes the sequence visible.
+operator; `specstride status --all` makes the sequence visible.
 
 ### The event stream
 
 Every meaningful step appends one JSON object (one per line) to
-`.wiggum/events.jsonl`; `wiggum events` and the live views render it. Lifecycle
+`.specstride/events.jsonl`; `specstride events` and the live views render it. Lifecycle
 events come from the orchestrator/proposer; the `agent_*` and `evidence_writing`
 events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
-`WIGGUM_AGENT_STREAM`).
+`SPECSTRIDE_AGENT_STREAM`).
 
 | Event | Emitted by | Meaning |
 |---|---|---|
 | `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`) |
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
-| `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `WIGGUM_LEARNING`; best-effort, and never fails the phase |
+| `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `declared` \| `global`). An unsourced budget is what makes budget archaeology expensive six hours in |
-| `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `WIGGUM_PROPOSER_MAX_CAPS`. A budget signal, not an error |
+| `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `SPECSTRIDE_PROPOSER_MAX_CAPS`. A budget signal, not an error |
 | `pass_cost_unknown` | proposer | a killed pass reports NO usage or cost (the kill severs the provider stream); this says "unmeasured", never "cheap" |
 | `pass_yield` | proposer | a pass ended cleanly while a job it depends on runs — `reason`, `predicate_kind`, `deadline_sec`, `job_mode`, `job_log`, `yield_index` |
-| `yield_job_start` | proposer | the job wiggum now owns — `pid`, `argv`, `log`, `sid` (a session of its own: no pass kill can reach it) |
+| `yield_job_start` | proposer | the job specstride now owns — `pid`, `argv`, `log`, `sid` (a session of its own: no pass kill can reach it) |
 | `yield_wait` | proposer | sampled while waiting with no model session open — `elapsed`, `predicate_kind` |
 | `yield_resume` | proposer | the predicate is satisfied — `waited_sec`, `job_rc`, `job_duration_sec`. `waited_sec` is what finally separates "how long the model worked" from "how long the loop was blocked" |
 | `yield_timeout` / `yield_invalid` | proposer | the wait ran out (`deadline` \| `wall_budget`), or the artifact was refused (schema violation, a disabled predicate, an `adopt` pid in the pass's own session, a watchdog-killed pass) |
-| `prompt_block_dropped` | orchestrator | a prompt block did not fit the ASSEMBLED prompt budget (`WIGGUM_PROMPT_MAX_BYTES`) — said out loud, never silently omitted |
+| `prompt_block_dropped` | orchestrator | a prompt block did not fit the ASSEMBLED prompt budget (`SPECSTRIDE_PROMPT_MAX_BYTES`) — said out loud, never silently omitted |
 | `iter_start` / `iter_done` | proposer | one headless proposer iteration |
 | `evidence_written` / `evidence_present` | proposer | `GATE<N>-EVIDENCE.md` was just written / already existed |
 | `attempt_archived` | orchestrator | a rejected evidence file was archived before retry |
@@ -760,10 +799,10 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 
 ### Spec formats
 
-Wiggum parses the spec through a single pluggable layer (`lib/wiggum_spec.py` —
+Specstride parses the spec through a single pluggable layer (`lib/specstride_spec.py` —
 the one source of truth both the bash side and the critic call). Three formats ship;
 the format is **auto-detected**, or forced with `--spec-format` /
-`WIGGUM_SPEC_FORMAT`.
+`SPECSTRIDE_SPEC_FORMAT`.
 
 **`native`** (the default) — each phase is a level-2 heading whose text starts with
 `Phase <N>`, containing an `### Acceptance criteria` block:
@@ -778,7 +817,7 @@ the format is **auto-detected**, or forced with `--spec-format` /
 ```
 
 **`speckit-tasks`** — a [GitHub Spec Kit](https://github.com/github/spec-kit)
-`tasks.md`. Each `## Phase N:` heading becomes a Wiggum phase, and every `- [ ]`
+`tasks.md`. Each `## Phase N:` heading becomes a Specstride phase, and every `- [ ]`
 task line under it becomes a required deliverable the critic gates on (the task's
 cited file paths are exactly what the grounding pass verifies):
 
@@ -789,7 +828,7 @@ cited file paths are exactly what the grounding pass verifies):
 - [ ] T004 [US1] Add a __main__ block to src/greet.py
 ```
 
-Wiggum also accepts Spec Kit implementations that group executable tasks under
+Specstride also accepts Spec Kit implementations that group executable tasks under
 priority headings such as `## P0 — Safety`, `## P1 — Contracts`, and repeated
 `## P1 — Security` sections. Each task-bearing priority section becomes an
 ordered phase with a unique gate id; the priority label remains in the title.
@@ -807,7 +846,7 @@ tail):
 `data-model.md` → `research.md` → `quickstart.md` → every `checklists/*.md`.
 
 Each is optional (included only when present). The **total** injected context
-respects `WIGGUM_CONTEXT_BUDGET` (default ~24000 chars), allocated across docs in
+respects `SPECSTRIDE_CONTEXT_BUDGET` (default ~24000 chars), allocated across docs in
 that priority order with per-doc floors — so a large `plan.md` cannot starve
 `contracts/` — and truncation is line-clean and code-fence-safe (never mid-line,
 never a dangling ```` ``` ````), marked explicitly in the prompt.
@@ -819,14 +858,14 @@ A runnable Spec Kit example lives at
 `examples/speckit-tasks.example.md`:
 
 ```bash
-mkdir -p /tmp/wiggum-speckit && cp examples/speckit-tasks.example.md /tmp/wiggum-speckit/tasks.md
-wiggum run -w /tmp/wiggum-speckit -s /tmp/wiggum-speckit/tasks.md
+mkdir -p /tmp/specstride-speckit && cp examples/speckit-tasks.example.md /tmp/specstride-speckit/tasks.md
+specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md
 ```
 
 **`openspec-change`** — an active
 [OpenSpec](https://github.com/Fission-AI/OpenSpec) change at
 `openspec/changes/<change>/tasks.md`. Each numbered level-2 task group becomes a
-Wiggum phase and its dotted checkbox items become required deliverables:
+Specstride phase and its dotted checkbox items become required deliverables:
 
 ```markdown
 ## 1. Domain contract
@@ -837,10 +876,10 @@ Wiggum phase and its dotted checkbox items become required deliverables:
 - [ ] 2.1 Implement the exporter in `src/audit/export.py`.
 ```
 
-The change name becomes the feature-scoped Wiggum state slug. Wiggum injects the
+The change name becomes the feature-scoped Specstride state slug. Specstride injects the
 change's `proposal.md`, every delta `specs/**/spec.md`, `design.md`, and matching
 current `openspec/specs/**/spec.md` documents into both proposer and critic as
-read-only context. The task list remains the gate; Wiggum does not sync or archive
+read-only context. The task list remains the gate; Specstride does not sync or archive
 the OpenSpec change.
 
 Canonical OpenSpec paths are detected before the generic `tasks.md` filename rule.
@@ -850,7 +889,7 @@ A standalone example is available at `examples/openspec-tasks.example.md`.
 #### Spec resolution (zero-flag start)
 
 Inside a Spec Kit or OpenSpec project you rarely need `-s`. When it is omitted,
-Wiggum resolves the spec in this order (never picking silently between candidates):
+Specstride resolves the spec in this order (never picking silently between candidates):
 
 1. `<workdir>/SPECS.md` — unchanged precedence, so native users are unaffected.
 2. `<workdir>/.specify/feature.json` → its `feature_directory` → `<dir>/tasks.md`.
@@ -860,32 +899,32 @@ Wiggum resolves the spec in this order (never picking silently between candidate
    and `--feature` forms to disambiguate.
 4. none of the above → an error naming every location tried.
 
-So a single-feature project starts with just `wiggum run -w <project>`:
+So a single-feature project starts with just `specstride run -w <project>`:
 
 ```bash
-wiggum run -w ./            # resolves specs/001-.../tasks.md, no -s
+specstride run -w ./            # resolves specs/001-.../tasks.md, no -s
 ```
 
 #### Multiple features in one repo
 
 Spec Kit numbers every feature's `tasks.md` from 1 and builds them all into one
-repo. Wiggum keeps each feature's gates independent under
-`.wiggum/features/<slug>/` (above), selected with `--feature SLUG` (or
-`WIGGUM_FEATURE`) — which also disambiguates step 3 of resolution. The inspection
-CLI is feature-aware: `wiggum status`/`phases`/`verdicts`/`feedback`/`tail`/`events`
-take `--feature` and default to the last run's feature; `wiggum status --all` lists
-every feature with its approved/total phase counts; `wiggum resume --feature X`
+repo. Specstride keeps each feature's gates independent under
+`.specstride/features/<slug>/` (above), selected with `--feature SLUG` (or
+`SPECSTRIDE_FEATURE`) — which also disambiguates step 3 of resolution. The inspection
+CLI is feature-aware: `specstride status`/`phases`/`verdicts`/`feedback`/`tail`/`events`
+take `--feature` and default to the last run's feature; `specstride status --all` lists
+every feature with its approved/total phase counts; `specstride resume --feature X`
 replays that feature's saved config (preserving its `SPEC_FORMAT`).
 
 ```bash
-wiggum run    -w ./ --feature 001-login     # run one feature to completion
-wiggum run    -w ./ --feature 002-billing   # then the next — independent gates
-wiggum status -w ./ --all                    # see both, side by side
+specstride run    -w ./ --feature 001-login     # run one feature to completion
+specstride run    -w ./ --feature 002-billing   # then the next — independent gates
+specstride status -w ./ --all                    # see both, side by side
 ```
 
 #### `SPECS.md` vs `tasks.md`: which is the source of truth?
 
-Never keep both for the same work — gate approvals live in `.wiggum/`, not in
+Never keep both for the same work — gate approvals live in `.specstride/`, not in
 either markdown, so a hand-written `SPECS.md` beside a `tasks.md` becomes a second,
 un-reconciled source of truth and the `tasks.md` checkboxes silently drift.
 
@@ -894,8 +933,8 @@ un-reconciled source of truth and the `tasks.md` checkboxes silently drift.
 - **For non-feature-shaped work → `SPECS.md` (native) is the SoT.** Migrations,
   refactors, ops roadmaps, this repo's own specs — anything not a Spec Kit feature.
 
-Wiggum never writes checkbox state back into `tasks.md`; approvals stay in
-`.wiggum/features/<slug>/gates/`, so there is exactly one source of truth for
+Specstride never writes checkbox state back into `tasks.md`; approvals stay in
+`.specstride/features/<slug>/gates/`, so there is exactly one source of truth for
 "is phase N done".
 
 > **Runtime is bash + python3 stdlib** — no pip, no dependency manager,
@@ -912,11 +951,11 @@ Pick a backend per role — `dsh[:provider/model] | claude | codex | bebop | pri
 - **`dsh`** — DeepSeek Harness's `headless` profile, using the provider/model in
   `$DSH_HOME/settings.yaml` unless a model override is supplied. Use backend
   refs such as `dsh:zai/glm-5.3` or `dsh:qwen3.8-27b`, or set
-  `WIGGUM_DSH_MODEL=zai/glm-5.3`. Bare `glm-*` model ids map to provider `zai`;
+  `SPECSTRIDE_DSH_MODEL=zai/glm-5.3`. Bare `glm-*` model ids map to provider `zai`;
   `qwen3.8-27b` maps to the LiteLLM-backed `local-high/qwen3.8-27b-q5` route. It
   is the default proposer; as critic it runs with model-facing tools disabled.
   The proposer may request persistent profile plugins when
-  `WIGGUM_DSH_PLUGIN_ALLOWLIST` names exact approved `package@semver` specs.
+  `SPECSTRIDE_DSH_PLUGIN_ALLOWLIST` names exact approved `package@semver` specs.
 - **`claude`** — Anthropic. Claude Code CLI (proposer) + Messages API (critic).
 - **`codex`** — OpenAI. Codex CLI (proposer) + Chat Completions (critic).
   Ships, but **UNVERIFIED** (no Codex CLI on the author's host to test against).
@@ -926,10 +965,10 @@ Pick a backend per role — `dsh[:provider/model] | claude | codex | bebop | pri
   `prime <variant>` fleet launcher is installed, select it with `prime:sol`,
   `prime:judge`, etc. Proposer passes are fresh; Prime critics run without tools.
 
-**Allowlisted DSH plugin installation.** Set `WIGGUM_DSH_PLUGIN_ALLOWLIST` to a
+**Allowlisted DSH plugin installation.** Set `SPECSTRIDE_DSH_PLUGIN_ALLOWLIST` to a
 comma-separated list of exact registry `package@semver` specs. When a DSH proposer
 cannot complete a phase with existing tools, it may write the documented
-`wiggum-dsh-plugin-request/v1` artifact and stop. Wiggum validates the request,
+`specstride-dsh-plugin-request/v1` artifact and stop. Specstride validates the request,
 runs `dsh plugin --profile <profile> add --save-exact` without a shell, archives
 an audit receipt, emits `plugin_installed`, and restarts a fresh pass. Unlisted or
 non-pinned specs halt visibly. Installed plugins persist in the DSH profile; the
@@ -955,25 +994,25 @@ event announces `mode=structured` up front. If the schema is unavailable the
 capability **degrades** explicitly (`mode=raw-text`, only `text,result`) rather
 than pretending fine-grained events exist; a schema that parses but then breaks
 mid-stream transitions `structured`→`degraded` (only the terminal `result`
-stays trustworthy). The last-resort escape hatch is `WIGGUM_AGENT_STREAM=false`,
+stays trustworthy). The last-resort escape hatch is `SPECSTRIDE_AGENT_STREAM=false`,
 which turns **off** structured capture entirely and restores the legacy raw
 tee'd output — no per-tool events, and the redaction/payload policy no longer
 applies, so use it only when you accept raw provider text in `run.log`.
 
-Key knobs (see `.env.example` for all of them): `WIGGUM_MAX_REJECTS` (3),
-`WIGGUM_MAX_ITER`, `WIGGUM_PROPOSER_TIMEOUT` (1800s),
-`WIGGUM_CRITIC_TIMEOUT` (300s), `WIGGUM_CRITIC_MALFORMED_LIMIT` (3),
-`WIGGUM_PROPOSER_MAX_ERRORS` (2), `WIGGUM_PROPOSER_MAX_CAPS` (3),
-`WIGGUM_PROPOSER_TIMEOUT_PHASE_<N>` (per-phase pass ceiling; also
+Key knobs (see `.env.example` for all of them): `SPECSTRIDE_MAX_REJECTS` (3),
+`SPECSTRIDE_MAX_ITER`, `SPECSTRIDE_PROPOSER_TIMEOUT` (1800s),
+`SPECSTRIDE_CRITIC_TIMEOUT` (300s), `SPECSTRIDE_CRITIC_MALFORMED_LIMIT` (3),
+`SPECSTRIDE_PROPOSER_MAX_ERRORS` (2), `SPECSTRIDE_PROPOSER_MAX_CAPS` (3),
+`SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_<N>` (per-phase pass ceiling; also
 `--proposer-timeout-phase N=SECONDS` and a `"phaseTimeouts"` map in the
 `--verification-commands` document — first of those three wins, else the global
 value. `--proposer-timeout` and the overrides now round-trip through
-`last-run.conf`, so `wiggum resume` keeps the budget the run was planned for),
-`WIGGUM_YIELD_POLL` (30s), `WIGGUM_YIELD_MAX_PER_ATTEMPT` (4),
-`WIGGUM_YIELD_ALLOW_COMMAND` (false), `WIGGUM_YIELD_COUNTS_AS_ITER` (false),
-`WIGGUM_PROMPT_MAX_BYTES` (180000),
-`WIGGUM_MAX_WALL_MIN` (0 = unlimited),
-`WIGGUM_CRITIC_GROUNDING` (on), `WIGGUM_GIT_COMMITS` (auto).
+`last-run.conf`, so `specstride resume` keeps the budget the run was planned for),
+`SPECSTRIDE_YIELD_POLL` (30s), `SPECSTRIDE_YIELD_MAX_PER_ATTEMPT` (4),
+`SPECSTRIDE_YIELD_ALLOW_COMMAND` (false), `SPECSTRIDE_YIELD_COUNTS_AS_ITER` (false),
+`SPECSTRIDE_PROMPT_MAX_BYTES` (180000),
+`SPECSTRIDE_MAX_WALL_MIN` (0 = unlimited),
+`SPECSTRIDE_CRITIC_GROUNDING` (on), `SPECSTRIDE_GIT_COMMITS` (auto).
 
 ## Hardening
 
@@ -998,13 +1037,13 @@ guarded, all cheap:
   backstop: elapsed time cannot distinguish "still working" from "hung", and a
   bigger number just delays the same failure. Three signals actually end a bad
   pass, and each kill writes a checkpoint (reason, elapsed, the pass's last tool
-  calls and words) to `.wiggum/features/<f>/pass-checkpoints/` that the **next
+  calls and words) to `.specstride/features/<f>/pass-checkpoints/` that the **next
   pass's prompt carries forward**, so a killed hour degrades into a note instead
   of vanishing. A kill is accounted by CLASS, not as one thing: a **futility or
   hang** kill (`repeat_stall`, `progress_stall`, `idle_timeout`) counts as an
   erroring pass and trips the failure breaker; a **budget** kill (`hard_cap`) says
   only that the work did not fit the pass, so it has its own bounded counter
-  (`WIGGUM_PROPOSER_MAX_CAPS`, default 3) and its own halt. Both surface to you
+  (`SPECSTRIDE_PROPOSER_MAX_CAPS`, default 3) and its own halt. Both surface to you
   (exit 4) rather than repeating for hours, with different remedies — see the
   exit-code table. Every `pass_killed` event carries a stable `class` field, and
   a capped pass also emits `pass_cost_unknown`: a kill severs the provider stream,
@@ -1015,15 +1054,15 @@ guarded, all cheap:
 
   | Signal | Fires when | Knob (default) |
   |---|---|---|
-  | idle | no cpu-time growth anywhere in the pass's process tree — a genuinely hung pass, not a slow one (a busy `docker exec` child counts as progress) | `--idle-timeout` / `WIGGUM_PROPOSER_IDLE_TIMEOUT` (900s) |
-  | disk stall | nothing created or modified under the workdir, however busy the tree is (`.git`/`.wiggum`/`node_modules`/`.venv` excluded — the harness and a detached long job write there on their own) | `--progress-timeout` / `WIGGUM_PROPOSER_PROGRESS_TIMEOUT` (1800s, 0 = off) |
-  | repetition | the same tool call (identical tool + target) issued N times in one pass **and still the agent's most recent action** — a retry loop, invisible to any cpu or wall-clock measure. A pass that retried something and moved on is untouched | `--repeat-limit` / `WIGGUM_PROPOSER_REPEAT_LIMIT` (5, 0 = off) |
-  | repetition, process level | the same child **command line** re-spawned N times in one pass — the same detector one level down, so it also covers backends that emit no tool events at all (`dsh`, `codex`). Counted per **agent tool call x command line**: an agent that OCRs twelve screenshots runs one command line twelve times, once per image, from twelve different tool calls, and that is twelve pieces of work, not a retry loop (semantic-router-sovereign 003 phase 14, 2026-09-13 — a pass killed on the twelfth image). The same command line re-spawned under one tool call is still a retry loop and is still killed. `WIGGUM_PROPOSER_REPEAT_IGNORE` is an extended regex of command lines never counted; its default covers the usual test runners, linters and type checkers (`pytest`, `ruff`, `mypy`, `go test`, `make test`, …) plus the per-file batch tools that have one command line and N inputs by construction (`tesseract`, `convert`, `magick`, `compare`, `ffmpeg`, `pdftotext`, `identify`, anchored at the command name). Set it to `` (empty) to count everything except `sleep` | `--repeat-limit` / `WIGGUM_PROPOSER_REPEAT_LIMIT` (5, 0 = off), `WIGGUM_PROPOSER_REPEAT_IGNORE` |
+  | idle | no cpu-time growth anywhere in the pass's process tree — a genuinely hung pass, not a slow one (a busy `docker exec` child counts as progress) | `--idle-timeout` / `SPECSTRIDE_PROPOSER_IDLE_TIMEOUT` (900s) |
+  | disk stall | nothing created or modified under the workdir, however busy the tree is (`.git`/`.specstride`/`node_modules`/`.venv` excluded — the harness and a detached long job write there on their own) | `--progress-timeout` / `SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT` (1800s, 0 = off) |
+  | repetition | the same tool call (identical tool + target) issued N times in one pass **and still the agent's most recent action** — a retry loop, invisible to any cpu or wall-clock measure. A pass that retried something and moved on is untouched | `--repeat-limit` / `SPECSTRIDE_PROPOSER_REPEAT_LIMIT` (5, 0 = off) |
+  | repetition, process level | the same child **command line** re-spawned N times in one pass — the same detector one level down, so it also covers backends that emit no tool events at all (`dsh`, `codex`). Counted per **agent tool call x command line**: an agent that OCRs twelve screenshots runs one command line twelve times, once per image, from twelve different tool calls, and that is twelve pieces of work, not a retry loop (semantic-router-sovereign 003 phase 14, 2026-09-13 — a pass killed on the twelfth image). The same command line re-spawned under one tool call is still a retry loop and is still killed. `SPECSTRIDE_PROPOSER_REPEAT_IGNORE` is an extended regex of command lines never counted; its default covers the usual test runners, linters and type checkers (`pytest`, `ruff`, `mypy`, `go test`, `make test`, …) plus the per-file batch tools that have one command line and N inputs by construction (`tesseract`, `convert`, `magick`, `compare`, `ffmpeg`, `pdftotext`, `identify`, anchored at the command name). Set it to `` (empty) to count everything except `sleep` | `--repeat-limit` / `SPECSTRIDE_PROPOSER_REPEAT_LIMIT` (5, 0 = off), `SPECSTRIDE_PROPOSER_REPEAT_IGNORE` |
 - **Yield/resume — a pass may end cleanly while its job keeps running.** A pass
   boundary and a measurement boundary are independent. When a phase's evidence
   needs a job that cannot finish inside one pass, the proposer writes one JSON
-  artifact (`wiggum-pass-yield/v1`) to `.wiggum/features/<f>/yield/` and exits
-  normally; wiggum launches or adopts the job **in its own session** (so no pass
+  artifact (`specstride-pass-yield/v1`) to `.specstride/features/<f>/yield/` and exits
+  normally; specstride launches or adopts the job **in its own session** (so no pass
   kill can reach it), waits for a declared predicate with **no model session
   open**, and resumes the phase with the job's exit code, duration and a bounded
   head+tail slice of its log in the next prompt. The orchestrator prints the
@@ -1034,33 +1073,33 @@ guarded, all cheap:
 
   | Piece | Value |
   |---|---|
-  | predicates | `exit_code_file` \| `pid` \| `file_exists` \| `file_stable` \| `grep` (+ `command`, **disabled** unless `WIGGUM_YIELD_ALLOW_COMMAND=true`: it is execution with no pass running, and takes fixed argv only) |
+  | predicates | `exit_code_file` \| `pid` \| `file_exists` \| `file_stable` \| `grep` (+ `command`, **disabled** unless `SPECSTRIDE_YIELD_ALLOW_COMMAND=true`: it is execution with no pass running, and takes fixed argv only) |
   | required | `deadline_sec` — the run holds the workdir lock for the whole wait |
-  | bounds | `WIGGUM_YIELD_MAX_PER_ATTEMPT` (4) then exit 9; `WIGGUM_YIELD_POLL` (30s); `WIGGUM_YIELD_COUNTS_AS_ITER` (false) |
-  | during a wait | `stop.flag` is honoured every tick (exit 6, **job left running**); `WIGGUM_MAX_WALL_MIN` is checked in the loop, not only at phase boundaries |
+  | bounds | `SPECSTRIDE_YIELD_MAX_PER_ATTEMPT` (4) then exit 9; `SPECSTRIDE_YIELD_POLL` (30s); `SPECSTRIDE_YIELD_COUNTS_AS_ITER` (false) |
+  | during a wait | `stop.flag` is honoured every tick (exit 6, **job left running**); `SPECSTRIDE_MAX_WALL_MIN` is checked in the loop, not only at phase boundaries |
 - **Crash-safe resume.** The current phase is *derived* from the `GATE*` markers
   on start, not from a stored counter. Kill it anywhere, rerun the same command,
   it continues. `--start-phase N` overrides.
 - **Per-phase git checkpoint.** After each `GATE<N>-APPROVED`, if the workdir is
   a git repo with changes, the orchestrator commits
-  `wiggum: phase <N> approved — <title>`. Never inits, never pushes.
+  `specstride: phase <N> approved — <title>`. Never inits, never pushes.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | `0` | all phases approved |
-| `1` | unexpected/internal error, **and** the **critic-outage breaker**: `WIGGUM_CRITIC_MALFORMED_LIMIT` consecutive `MALFORMED` verdicts (default 3). `MALFORMED` is how the critic fails safe when it times out, is unreachable, or answers without a verdict line — the feedback it writes is contentless, so every further proposer attempt runs blind and the phase can never be approved. Without the breaker the run spends its whole `MAX_REJECTS` budget on a critic that is simply down (`check_oscillation` cannot catch it: it keys on criterion IDs, which a contentless feedback has none of). It emits `run_stop reason=critic_unavailable`; raise `WIGGUM_CRITIC_TIMEOUT`, point `--critic` at a reachable backend, or raise `WIGGUM_CRITIC_MALFORMED_LIMIT`, then `wiggum resume` |
+| `1` | unexpected/internal error, **and** the **critic-outage breaker**: `SPECSTRIDE_CRITIC_MALFORMED_LIMIT` consecutive `MALFORMED` verdicts (default 3). `MALFORMED` is how the critic fails safe when it times out, is unreachable, or answers without a verdict line — the feedback it writes is contentless, so every further proposer attempt runs blind and the phase can never be approved. Without the breaker the run spends its whole `MAX_REJECTS` budget on a critic that is simply down (`check_oscillation` cannot catch it: it keys on criterion IDs, which a contentless feedback has none of). It emits `run_stop reason=critic_unavailable`; raise `SPECSTRIDE_CRITIC_TIMEOUT`, point `--critic` at a reachable backend, or raise `SPECSTRIDE_CRITIC_MALFORMED_LIMIT`, then `specstride resume` |
 | `2` | MAX_REJECTS exceeded — a human needs to arbitrate |
 | `3` | invalid spec/config |
-| `4` | budget exceeded — wall clock, `MAX_ITER` without evidence, or one of the two proposer breakers. The **failure breaker** (`WIGGUM_PROPOSER_MAX_ERRORS` consecutive passes ending in an agent error: crash, timeout, auth/model error, malformed output, no terminal record, or a **futility/hang watchdog kill** — `repeat_stall`, `progress_stall`, `idle_timeout`; default 2) emits `run_stop reason=proposer_consecutive_errors`; raise `--timeout` / `WIGGUM_PROPOSER_MAX_ERRORS` or fix the phase harness, then `wiggum resume`. The **cap breaker** (`WIGGUM_PROPOSER_MAX_CAPS` consecutive passes killed at the absolute pass ceiling, `hard_cap`; default 3) emits `run_stop reason=proposer_cap_exhausted` — that is a budget signal, not a failure: the passes may have been productive the whole time and the phase's work simply does not fit one pass. Make the long step outlive the pass (`--long-job-phase` / `--long-job-cmd`) or split the phase; raise `WIGGUM_PROPOSER_TIMEOUT` only when the work genuinely is one indivisible pass. The **yield budget** (a declared yield's `deadline_sec`, the run's wall clock, or more than `WIGGUM_YIELD_MAX_PER_ATTEMPT` yields in one attempt) emits `run_stop reason=proposer_yield_budget` — the job is left alone, never killed, so read its log under `.wiggum/features/<f>/yield-jobs/` first |
+| `4` | budget exceeded — wall clock, `MAX_ITER` without evidence, or one of the two proposer breakers. The **failure breaker** (`SPECSTRIDE_PROPOSER_MAX_ERRORS` consecutive passes ending in an agent error: crash, timeout, auth/model error, malformed output, no terminal record, or a **futility/hang watchdog kill** — `repeat_stall`, `progress_stall`, `idle_timeout`; default 2) emits `run_stop reason=proposer_consecutive_errors`; raise `--timeout` / `SPECSTRIDE_PROPOSER_MAX_ERRORS` or fix the phase harness, then `specstride resume`. The **cap breaker** (`SPECSTRIDE_PROPOSER_MAX_CAPS` consecutive passes killed at the absolute pass ceiling, `hard_cap`; default 3) emits `run_stop reason=proposer_cap_exhausted` — that is a budget signal, not a failure: the passes may have been productive the whole time and the phase's work simply does not fit one pass. Make the long step outlive the pass (`--long-job-phase` / `--long-job-cmd`) or split the phase; raise `SPECSTRIDE_PROPOSER_TIMEOUT` only when the work genuinely is one indivisible pass. The **yield budget** (a declared yield's `deadline_sec`, the run's wall clock, or more than `SPECSTRIDE_YIELD_MAX_PER_ATTEMPT` yields in one attempt) emits `run_stop reason=proposer_yield_budget` — the job is left alone, never killed, so read its log under `.specstride/features/<f>/yield-jobs/` first |
 | `5` | lock held by another run |
-| `6` | stopped via `stop.flag` (clean; `wiggum resume` or rerun continues). Now also produced when the stop lands **mid-proposer** — `wiggum stop --now` — which earlier versions mislabeled as `4` |
+| `6` | stopped via `stop.flag` (clean; `specstride resume` or rerun continues). Now also produced when the stop lands **mid-proposer** — `specstride stop --now` — which earlier versions mislabeled as `4` |
 
 ## Optional telemetry
 
 Off by default; the loop is fully legible with zero containers. When you want a
-dashboard too, wiggum has **two independent telemetry backends** — enable either or
+dashboard too, specstride has **two independent telemetry backends** — enable either or
 **both at once** (dual-ship):
 
 | Backend | Flag | URL flag (its own — never crossed) | Default | Ships to |
@@ -1077,8 +1116,8 @@ The two are wired separately: `--loki-url` **only** configures the Loki sink and
 `--telemetry` ships the event stream straight to Loki's push API:
 
 ```bash
-(cd "$WIGGUM_HOME/telemetry" && docker compose up -d)   # Grafana :3010, Loki :3110 (both free here)
-wiggum --telemetry --loki-url http://localhost:3110 -w ./myproject
+(cd "$SPECSTRIDE_HOME/telemetry" && docker compose up -d)   # Grafana :3010, Loki :3110 (both free here)
+specstride --telemetry --loki-url http://localhost:3110 -w ./myproject
 # open http://localhost:3010 → the "Ralph Loops" dashboard
 ```
 
@@ -1094,11 +1133,11 @@ unchanged) and turns cost/tokens/duration into first-class **Prometheus** metric
 `--telemetry`, it's stdlib-only — no OTEL SDK, no pip:
 
 ```bash
-(cd "$WIGGUM_HOME/telemetry" && docker compose up -d)   # + otel-collector :4318, Prometheus :9091
-wiggum --otel --otel-url http://localhost:4318 -w ./myproject
+(cd "$SPECSTRIDE_HOME/telemetry" && docker compose up -d)   # + otel-collector :4318, Prometheus :9091
+specstride --otel --otel-url http://localhost:4318 -w ./myproject
 ```
 
-The OTEL sink is driven **only** by `--otel` / `--otel-url` (env `WIGGUM_OTEL_URL`) —
+The OTEL sink is driven **only** by `--otel` / `--otel-url` (env `SPECSTRIDE_OTEL_URL`) —
 never by `--loki-url`. Note `--otel-url` points at the **Collector** on `:4318`, not
 at Loki: the Collector is what fans OTLP out to Loki (logs) and Prometheus (metrics).
 So a `--loki-url` change never affects OTEL, and vice versa.
@@ -1108,8 +1147,8 @@ to dual-ship** (Loki push *and* OTLP in parallel) — handy while migrating. To 
 telemetry over OTEL only, pass `--otel` without `--telemetry`:
 
 ```bash
-wiggum --otel --otel-url http://localhost:4318 -w ./myproject          # OTEL only
-wiggum --telemetry --loki-url http://localhost:3110 \
+specstride --otel --otel-url http://localhost:4318 -w ./myproject          # OTEL only
+specstride --telemetry --loki-url http://localhost:3110 \
        --otel      --otel-url http://localhost:4318 -w ./myproject      # both (dual-ship)
 ```
 

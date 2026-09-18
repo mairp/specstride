@@ -19,7 +19,7 @@ from pathlib import Path
 
 PROPOSER = Path(__file__).parents[1] / "proposer.sh"
 
-CONTRACT = "wiggum-pass-yield/v1"
+CONTRACT = "specstride-pass-yield/v1"
 
 
 def _agent(tmp_path, body):
@@ -75,33 +75,33 @@ def _writes_yield(tmp_path, document, *, times=1, then="exit 0\n"):
 
 def _run(tmp_path, agent, *, max_iter=2, env_extra=None, timeout="120",
          run_timeout=180, phase="1", attempt="1"):
-    evidence = tmp_path / ".wiggum" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("standing prompt")
-    feature_dir = tmp_path / ".wiggum" / "features" / "f"
+    feature_dir = tmp_path / ".specstride" / "features" / "f"
     env = os.environ.copy()
     env.update({
-        "WIGGUM_DSH_BIN": str(agent),
-        "WIGGUM_AGENT_STREAM": "false",
-        "WIGGUM_EVENTS": str(tmp_path / ".wiggum" / "events.jsonl"),
-        "WIGGUM_WATCHDOG_TICK": "1",
+        "SPECSTRIDE_DSH_BIN": str(agent),
+        "SPECSTRIDE_AGENT_STREAM": "false",
+        "SPECSTRIDE_EVENTS": str(tmp_path / ".specstride" / "events.jsonl"),
+        "SPECSTRIDE_WATCHDOG_TICK": "1",
         "PROMPT_LOG": str(tmp_path / "prompts.log"),
         "INVOCATIONS": str(tmp_path / "invocations.log"),
         # The artifact path the fake agent writes to — the real one is handed to a
         # real agent by the orchestrator's yield contract block.
         "YIELD_ARTIFACT": str(
             feature_dir / "yield" / f"phase{phase}-attempt{attempt}-run-yield.json"),
-        "WIGGUM_RUN_ID": "run-yield",
-        "WIGGUM_PROPOSER_IDLE_TIMEOUT": "900",
-        "WIGGUM_PROPOSER_PROGRESS_TIMEOUT": "0",
-        "WIGGUM_PROPOSER_REPEAT_LIMIT": "0",
-        "WIGGUM_PROPOSER_MAX_ERRORS": "9",
-        "WIGGUM_PROPOSER_MAX_NOPROGRESS": "0",
-        "WIGGUM_YIELD_POLL": "1",
-        "WIGGUM_YIELD_WAIT_EVERY": "1",
+        "SPECSTRIDE_RUN_ID": "run-yield",
+        "SPECSTRIDE_PROPOSER_IDLE_TIMEOUT": "900",
+        "SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT": "0",
+        "SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "0",
+        "SPECSTRIDE_PROPOSER_MAX_ERRORS": "9",
+        "SPECSTRIDE_PROPOSER_MAX_NOPROGRESS": "0",
+        "SPECSTRIDE_YIELD_POLL": "1",
+        "SPECSTRIDE_YIELD_WAIT_EVERY": "1",
     })
     env.update(env_extra or {})
-    (tmp_path / ".wiggum").mkdir(exist_ok=True)
+    (tmp_path / ".specstride").mkdir(exist_ok=True)
     result = subprocess.run(
         ["bash", str(PROPOSER), "-w", str(tmp_path), "-e", str(evidence),
          "-f", str(prompt), "--backend", "dsh", "-n", str(max_iter), "-s", "0",
@@ -110,7 +110,7 @@ def _run(tmp_path, agent, *, max_iter=2, env_extra=None, timeout="120",
         text=True, capture_output=True, env=env, timeout=run_timeout,
     )
     events = []
-    events_file = tmp_path / ".wiggum" / "events.jsonl"
+    events_file = tmp_path / ".specstride" / "events.jsonl"
     if events_file.exists():
         for line in events_file.read_text().splitlines():
             try:
@@ -167,7 +167,7 @@ def test_the_yield_events_appear_in_order(tmp_path):
     order = [names.index(n) for n in ("pass_yield", "yield_wait", "yield_resume")]
     assert order == sorted(order), names
     # The job is taken BEFORE pass_yield is announced, because pass_yield reports
-    # the job's log path and wiggum — not the agent — decides that path.
+    # the job's log path and specstride — not the agent — decides that path.
     assert names.index("yield_job_start") < names.index("pass_yield")
 
     yielded = next(e for e in events if e["event"] == "pass_yield")
@@ -175,7 +175,7 @@ def test_the_yield_events_appear_in_order(tmp_path):
     assert yielded["job_mode"] == "launch"
     assert yielded["deadline_sec"] == "60"
     assert yielded["yield_index"] == "1"
-    # The launched job is in wiggum's OWN session, which is the property that
+    # The launched job is in specstride's OWN session, which is the property that
     # makes a pass kill unable to reach it.
     started = next(e for e in events if e["event"] == "yield_job_start")
     assert started["sid"] and started["sid"] != str(os.getsid(0))
@@ -194,7 +194,7 @@ def test_the_resume_prompt_carries_the_exit_code_and_a_bounded_log_slice(tmp_pat
         on_resume="write T404 from runs/live.md, then the evidence")
     result, _events = _run(
         tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)), max_iter=1,
-        env_extra={"WIGGUM_YIELD_LOG_HEAD": "5", "WIGGUM_YIELD_LOG_TAIL": "5"})
+        env_extra={"SPECSTRIDE_YIELD_LOG_HEAD": "5", "SPECSTRIDE_YIELD_LOG_TAIL": "5"})
 
     passes = (tmp_path / "prompts.log").read_text().split("===PASS-END===")
     assert len(passes) >= 2, result.stderr
@@ -216,7 +216,7 @@ def test_the_resume_prompt_carries_the_exit_code_and_a_bounded_log_slice(tmp_pat
 
 
 def test_a_yield_is_not_an_agent_error_and_not_a_stall(tmp_path):
-    """A yielding pass writes only .wiggum, so every futility detector reads it
+    """A yielding pass writes only .specstride, so every futility detector reads it
     as blocked. It is not: it is DECLARED waiting, which is exactly the
     distinction none of the three detectors could make."""
     document = _yield_json(job={"mode": "launch", "argv": ["/bin/true"]})
@@ -224,9 +224,9 @@ def test_a_yield_is_not_an_agent_error_and_not_a_stall(tmp_path):
                          then='echo work >> "$PWD/work.txt"\nexit 0\n')
     result, events = _run(
         tmp_path, _agent(tmp_path, body), max_iter=3,
-        env_extra={"WIGGUM_PROPOSER_MAX_ERRORS": "2",
-                   "WIGGUM_PROPOSER_MAX_NOPROGRESS": "2",
-                   "WIGGUM_YIELD_MAX_PER_ATTEMPT": "9"})
+        env_extra={"SPECSTRIDE_PROPOSER_MAX_ERRORS": "2",
+                   "SPECSTRIDE_PROPOSER_MAX_NOPROGRESS": "2",
+                   "SPECSTRIDE_YIELD_MAX_PER_ATTEMPT": "9"})
 
     # Three yields with an error budget of 2 and a no-progress budget of 2: the
     # loop must reach max-iter, not either breaker.
@@ -276,12 +276,12 @@ def _alive(pid):
 
 
 def test_stop_during_a_yield_exits_six_and_leaves_the_job_running(tmp_path):
-    """`wiggum stop` must not have to wait out a two-hour yield, and must not
+    """`specstride stop` must not have to wait out a two-hour yield, and must not
     destroy the job to be prompt about it."""
     document = _yield_json(
         job={"mode": "launch", "argv": ["/bin/sh", "-c", "sleep 90"]},
         deadline_sec=120)
-    stop_flag = tmp_path / ".wiggum" / "stop.flag"
+    stop_flag = tmp_path / ".specstride" / "stop.flag"
     # The flag lands while the wait is in progress, not at a pass boundary.
     agent = _agent(tmp_path, _writes_yield(
         tmp_path, document,
@@ -293,7 +293,7 @@ def test_stop_during_a_yield_exits_six_and_leaves_the_job_running(tmp_path):
     assert stops and stops[-1]["reason"] == "stop_flag"
     assert stops[-1]["yield"] == "true"
     started = next(e for e in events if e["event"] == "yield_job_start")
-    assert _alive(int(started["pid"])), "the job is wiggum-owned; a stop leaves it alive"
+    assert _alive(int(started["pid"])), "the job is specstride-owned; a stop leaves it alive"
     os.kill(int(started["pid"]), 9)
 
 
@@ -307,7 +307,7 @@ def test_too_many_yields_in_one_attempt_exits_nine(tmp_path):
     document = _yield_json(job={"mode": "launch", "argv": ["/bin/true"]})
     result, events = _run(
         tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document, times=0)),
-        max_iter=20, env_extra={"WIGGUM_YIELD_MAX_PER_ATTEMPT": "2"},
+        max_iter=20, env_extra={"SPECSTRIDE_YIELD_MAX_PER_ATTEMPT": "2"},
         run_timeout=180)
 
     assert result.returncode == 9, result.stderr
@@ -418,7 +418,7 @@ def test_a_watchdog_killed_pass_does_not_get_to_yield(tmp_path):
 def test_evidence_still_wins_over_a_yield(tmp_path):
     """A pass that wrote both is simply done — the gate file ends the phase, as
     it does everywhere else in the loop."""
-    evidence = tmp_path / ".wiggum" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
+    evidence = tmp_path / ".specstride" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
     document = _yield_json(job={"mode": "launch", "argv": ["/bin/sh", "-c", "sleep 60"]})
     body = _writes_yield(
         tmp_path, document,
@@ -439,7 +439,7 @@ def test_the_orchestrator_tells_the_proposer_the_protocol_exists(tmp_path):
     body = source.split("emit_yield_contract() {", 1)[1].split("\n}\n", 1)[0]
     script = (
         "set -uo pipefail\n"
-        f"FEATURE_DIR={tmp_path}\nWORKDIR={tmp_path}\nWIGGUM_RUN_ID=run-yield\n"
+        f"FEATURE_DIR={tmp_path}\nWORKDIR={tmp_path}\nSPECSTRIDE_RUN_ID=run-yield\n"
         "emit_yield_contract() {" + body + "\n}\n"
         "emit_yield_contract 15 2\n"
     )

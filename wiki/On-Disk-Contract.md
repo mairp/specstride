@@ -1,7 +1,7 @@
 # On-Disk Contract
 
 The spec (`SPECS.md` or a Spec Kit `tasks.md`) is the one input **you** write; it can live
-anywhere. Everything else Wiggum generates lives under `.wiggum/`, **namespaced per feature**,
+anywhere. Everything else Specstride generates lives under `.specstride/`, **namespaced per feature**,
 so the workdir root stays clean — only your real project artifacts sit there.
 
 ## The gate files
@@ -9,44 +9,44 @@ so the workdir root stays clean — only your real project artifacts sit there.
 | File | Written by | Meaning |
 |---|---|---|
 | `SPECS.md` / `tasks.md` | you | Ordered phases + acceptance criteria (the input) |
-| `.wiggum/features/<slug>/PROGRESS.md` | proposer | Durable state; read first each iteration |
-| `.wiggum/features/<slug>/gates/GATE<N>-EVIDENCE.md` | proposer | Evidence phase N's criteria are met. Written atomically |
-| `.wiggum/features/<slug>/gates/GATE<N>-APPROVED` | **critic** | Empty marker; unblocks phase N+1 |
-| `.wiggum/features/<slug>/gates/GATE<N>-FEEDBACK.md` | **critic** | Present after a REJECT; the gaps to fix |
+| `.specstride/features/<slug>/PROGRESS.md` | proposer | Durable state; read first each iteration |
+| `.specstride/features/<slug>/gates/GATE<N>-EVIDENCE.md` | proposer | Evidence phase N's criteria are met. Written atomically |
+| `.specstride/features/<slug>/gates/GATE<N>-APPROVED` | **critic** | Empty marker; unblocks phase N+1 |
+| `.specstride/features/<slug>/gates/GATE<N>-FEEDBACK.md` | **critic** | Present after a REJECT; the gaps to fix |
 
 The current phase is **derived** from the `GATE*` markers, never stored.
 
 ## Feature-scoped state
 
-Durable state hangs off `.wiggum/features/<slug>/` so multiple Spec Kit features can build into
+Durable state hangs off `.specstride/features/<slug>/` so multiple Spec Kit features can build into
 **one** repo without their gates, evidence, and verdicts colliding. `<slug>` is the feature-dir
 basename when the spec lives inside a `.specify` project (`001-reverse-engineering-analysis`),
-and `default` otherwise — which is also the back-compat identity of every pre-v2 `.wiggum/gates/`
+and `default` otherwise — which is also the back-compat identity of every pre-v2 `.specstride/gates/`
 on disk (transparently migrated once on the next run).
 
 | Path | Scope | Holds |
 |---|---|---|
-| `.wiggum/features/<slug>/gates/` (+ `gates/proofs/`) | per-feature | all the phase-control files above |
-| `.wiggum/features/<slug>/runs/<run-id>/{run.log,events.jsonl}` | per-feature | each run isolated |
-| `.wiggum/features/<slug>/{verdicts,attempts,debug}/` | per-feature | critic transcripts, archived rejected attempts (`attempts/phase<N>/attempt<M>/`), debug dumps |
-| `.wiggum/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/` | per-feature | one reconstructable proposer/critic invocation — see [Invocation artifacts](#invocation-artifacts) |
-| `.wiggum/features/<slug>/PROGRESS.md`, `last-run.conf` | per-feature | proposer notes; that feature's resume config |
-| `.wiggum/lock`, `.wiggum/stop.flag` | **workdir** | one run per repo, ever — concurrency is per-workdir, **not** per-feature |
-| `.wiggum/run.log`, `.wiggum/events.jsonl` | **workdir** | symlinks retargeted into the active feature's newest run |
-| `.wiggum/last-run.conf` | **workdir** | the active-feature pointer + last launch config |
-| `.wiggum/features/<slug>/proposer.pid` | per-feature | in-flight proposer pass, so `wiggum stop --now` can kill the tree |
+| `.specstride/features/<slug>/gates/` (+ `gates/proofs/`) | per-feature | all the phase-control files above |
+| `.specstride/features/<slug>/runs/<run-id>/{run.log,events.jsonl}` | per-feature | each run isolated |
+| `.specstride/features/<slug>/{verdicts,attempts,debug}/` | per-feature | critic transcripts, archived rejected attempts (`attempts/phase<N>/attempt<M>/`), debug dumps |
+| `.specstride/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/` | per-feature | one reconstructable proposer/critic invocation — see [Invocation artifacts](#invocation-artifacts) |
+| `.specstride/features/<slug>/PROGRESS.md`, `last-run.conf` | per-feature | proposer notes; that feature's resume config |
+| `.specstride/lock`, `.specstride/stop.flag` | **workdir** | one run per repo, ever — concurrency is per-workdir, **not** per-feature |
+| `.specstride/run.log`, `.specstride/events.jsonl` | **workdir** | symlinks retargeted into the active feature's newest run |
+| `.specstride/last-run.conf` | **workdir** | the active-feature pointer + last launch config |
+| `.specstride/features/<slug>/proposer.pid` | per-feature | in-flight proposer pass, so `specstride stop --now` can kill the tree |
 
-**One run per workdir.** The `lock` stays at the `.wiggum/` root: a second `wiggum run` in the
+**One run per workdir.** The `lock` stays at the `.specstride/` root: a second `specstride run` in the
 same workdir exits `E_LOCK` (5) **even for a different feature**, because two features mutating
 one source tree concurrently is a corruption, not a feature. Sequence features with the
-operator; `wiggum status --all` makes the sequence visible.
+operator; `specstride status --all` makes the sequence visible.
 
 ## Invocation artifacts
 
 Each proposer/critic pass reconstructs itself under one leaf directory:
 
 ```
-.wiggum/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/
+.specstride/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/
 ```
 
 The path derives **only** from sanitized identity components ([`lib/invocation_result.py`](../lib/invocation_result.py),
@@ -54,8 +54,8 @@ The path derives **only** from sanitized identity components ([`lib/invocation_r
 
 | Artifact | Contract | Written | Meaning |
 |---|---|---|---|
-| `metadata.json` | `wiggum-invocation/v1` | atomically, when the exclusive dir is created **before** launch | the invocation's identity + capability context |
-| `result.json` | `wiggum-invocation-result/v1` | atomically, exactly once at finalization | the required terminal audit record — `status` + `reason_code` (see below) |
+| `metadata.json` | `specstride-invocation/v1` | atomically, when the exclusive dir is created **before** launch | the invocation's identity + capability context |
+| `result.json` | `specstride-invocation-result/v1` | atomically, exactly once at finalization | the required terminal audit record — `status` + `reason_code` (see below) |
 | `prompt.txt` / `provider.jsonl` / `events.jsonl` / `response.txt` | — | **only when raw capture is explicitly enabled** | raw provider prompt/stream/response; prunable after retention expiry without disturbing the audit record |
 
 Every field routes through [`lib/observability_policy.py`](../lib/observability_policy.py) first:
@@ -93,14 +93,14 @@ which says nothing about WHY. The controller's own observation therefore rides o
 the same record: `kill_reason` (`hard_cap` | `idle_timeout` | `repeat_stall` |
 `progress_stall`) and its stable `kill_class` (`budget` | `hang` | `futility`),
 present only when the pass was killed. The class is what decides the accounting —
-a `budget` kill is charged to `WIGGUM_PROPOSER_MAX_CAPS` (exit 10), never to the
+a `budget` kill is charged to `SPECSTRIDE_PROPOSER_MAX_CAPS` (exit 10), never to the
 error breaker — and it is written here so a consumer never re-derives it from a
 reason string, and so a killed invocation keeps one durable, classified result.
 
 ### Retention
 
 Raw provider capture is **disabled by default**. When enabled, retention is governed by
-`RedactionRetentionPolicy` (`wiggum-retention/v1`), whose version travels with each retained record:
+`RedactionRetentionPolicy` (`specstride-retention/v1`), whose version travels with each retained record:
 
 - **Raw content** (`prompt.txt` / `provider.jsonl` / `events.jsonl` / `response.txt`) expires after
   **7 days** and is pruned by the retention sweep.
@@ -110,27 +110,27 @@ Raw provider capture is **disabled by default**. When enabled, retention is gove
 
 ## The event stream
 
-Every meaningful step appends one JSON object (one per line) to `.wiggum/events.jsonl`;
-`wiggum events` and the live views render it. Lifecycle events come from the
+Every meaningful step appends one JSON object (one per line) to `.specstride/events.jsonl`;
+`specstride events` and the live views render it. Lifecycle events come from the
 orchestrator/proposer; the `agent_*` and `evidence_writing` events come from the proposer's
-stream-json tap ([`lib/agent_stream.py`](../lib/agent_stream.py), gated by `WIGGUM_AGENT_STREAM`).
+stream-json tap ([`lib/agent_stream.py`](../lib/agent_stream.py), gated by `SPECSTRIDE_AGENT_STREAM`).
 
 | Event | Emitted by | Meaning |
 |---|---|---|
 | `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`) |
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
-| `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `WIGGUM_LEARNING`; best-effort, and never fails the phase |
+| `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `declared` \| `global`). An unsourced budget is what makes budget archaeology expensive six hours in |
-| `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `WIGGUM_PROPOSER_MAX_CAPS`. A budget signal, not an error |
+| `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `SPECSTRIDE_PROPOSER_MAX_CAPS`. A budget signal, not an error |
 | `pass_cost_unknown` | proposer | a killed pass reports NO usage or cost (the kill severs the provider stream); this says "unmeasured", never "cheap" |
 | `pass_yield` | proposer | a pass ended cleanly while a job it depends on runs — `reason`, `predicate_kind`, `deadline_sec`, `job_mode`, `job_log`, `yield_index` |
-| `yield_job_start` | proposer | the job wiggum now owns — `pid`, `argv`, `log`, `sid` |
+| `yield_job_start` | proposer | the job specstride now owns — `pid`, `argv`, `log`, `sid` |
 | `yield_wait` | proposer | sampled while waiting with no model session open — `elapsed`, `predicate_kind` |
 | `yield_resume` | proposer | the predicate is satisfied — `waited_sec`, `job_rc`, `job_duration_sec` |
 | `yield_timeout` / `yield_invalid` | proposer | the wait ran out, or the yield artifact was refused |
-| `prompt_block_dropped` | orchestrator | a prompt block did not fit the assembled-prompt budget (`WIGGUM_PROMPT_MAX_BYTES`) |
+| `prompt_block_dropped` | orchestrator | a prompt block did not fit the assembled-prompt budget (`SPECSTRIDE_PROMPT_MAX_BYTES`) |
 | `iter_start` / `iter_done` | proposer | one headless proposer iteration |
 | `evidence_written` / `evidence_present` | proposer | `GATE<N>-EVIDENCE.md` was just written / already existed |
 | `attempt_archived` | orchestrator | a rejected evidence file was archived before retry |

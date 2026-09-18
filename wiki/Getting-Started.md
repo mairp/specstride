@@ -1,6 +1,6 @@
 # Getting Started
 
-Wiggum is a **utility you install once**; your project lives elsewhere. Each run points at
+Specstride is a **utility you install once**; your project lives elsewhere. Each run points at
 your project with `-w/--workdir` and (optionally) `-s/--specs`.
 
 ## Requirements
@@ -15,57 +15,57 @@ your project with `-w/--workdir` and (optionally) `-s/--specs`.
 ```bash
 cp .env.example .env          # then edit: set ANTHROPIC_API_KEY
 
-# one-time: add the thin wiggum() pointer to ~/.bashrc (see below), then:
+# one-time: add the thin specstride() pointer to ~/.bashrc (see below), then:
 source ~/.bashrc
 
-mkdir -p /tmp/wiggum-demo && cp SPECS.example.md /tmp/wiggum-demo/SPECS.md
-wiggum run -w /tmp/wiggum-demo
+mkdir -p /tmp/specstride-demo && cp SPECS.example.md /tmp/specstride-demo/SPECS.md
+specstride run -w /tmp/specstride-demo
 ```
 
 Not set up the alias yet? Call the script directly:
-`"$WIGGUM_HOME"/wiggum run -w /tmp/wiggum-demo`, or `./wiggum run -w /tmp/wiggum-demo` from
+`"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo`, or `./specstride run -w /tmp/specstride-demo` from
 inside the clone.
 
 The bundled `SPECS.example.md` is two trivial, verifiable phases so you can watch the whole
 loop — including a reject-and-fix — end to end.
 
-## Install it permanently (one `wiggum` command)
+## Install it permanently (one `specstride` command)
 
-The `wiggum` script is already the single front door for *everything* — it owns the routing
+The `specstride` script is already the single front door for *everything* — it owns the routing
 itself. So your shell rc only needs a **thin pointer**, no dispatch logic to keep in sync.
 
 Add to `~/.bashrc` (or `~/.zshrc`):
 
 ```bash
-# ── Wiggum ─────────────────────────────────────────────────────────────
-export WIGGUM_HOME="/root/wiggum"          # wherever you cloned it — set once
-export WIGGUM_LIVE_DETAIL=full             # richest live view
+# ── Specstride ─────────────────────────────────────────────────────────────
+export SPECSTRIDE_HOME="/root/specstride"          # wherever you cloned it — set once
+export SPECSTRIDE_LIVE_DETAIL=full             # richest live view
 
-# `wiggum` owns its own run-vs-inspect routing, so this is just a pointer.
-wiggum() { "$WIGGUM_HOME/wiggum" "$@"; }
+# `specstride` owns its own run-vs-inspect routing, so this is just a pointer.
+specstride() { "$SPECSTRIDE_HOME/specstride" "$@"; }
 # ───────────────────────────────────────────────────────────────────────
 ```
 
 Reload once (`source ~/.bashrc`) and the one command drives everything, from any directory:
 
 ```bash
-wiggum run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md   # START a loop
-wiggum -w ~/projects/foo -s ~/projects/foo/ROADMAP.md       # …same, leading flag
-wiggum status -w ~/projects/foo                             # inspect it
-wiggum watch  -w ~/projects/foo                             # live status card
-wiggum stop   -w ~/projects/foo                             # clean halt
+specstride run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md   # START a loop
+specstride -w ~/projects/foo -s ~/projects/foo/ROADMAP.md       # …same, leading flag
+specstride status -w ~/projects/foo                             # inspect it
+specstride watch  -w ~/projects/foo                             # live status card
+specstride stop   -w ~/projects/foo                             # clean halt
 ```
 
 > **Why a function, not a symlink/PATH shim?** The scripts locate their own `lib/` and
-> `wiggum-lib.sh` via `dirname "${BASH_SOURCE[0]}"`, which does **not** dereference symlinks.
-> A `ln -s … /usr/local/bin/wiggum` would resolve its home to `/usr/local/bin` and fail. The
-> function calls the real absolute path under `$WIGGUM_HOME`. (Prefer PATH?
-> `export PATH="$WIGGUM_HOME:$PATH"` also works.)
+> `specstride-lib.sh` via `dirname "${BASH_SOURCE[0]}"`, which does **not** dereference symlinks.
+> A `ln -s … /usr/local/bin/specstride` would resolve its home to `/usr/local/bin` and fail. The
+> function calls the real absolute path under `$SPECSTRIDE_HOME`. (Prefer PATH?
+> `export PATH="$SPECSTRIDE_HOME:$PATH"` also works.)
 
 ## Pointing at your project
 
 - **`-w/--workdir DIR`** — where the proposer works. All generated state lives under
-  `.wiggum/features/<slug>/`, so the workdir root holds only your real artifacts. Default: `$PWD`.
+  `.specstride/features/<slug>/`, so the workdir root holds only your real artifacts. Default: `$PWD`.
 - **`-s/--specs FILE`** — the spec, **any name, any location**. A relative path resolves
   against the directory you launched from, not the workdir. Default: `<workdir>/SPECS.md`, or
   auto-discovered inside a Spec Kit project.
@@ -73,7 +73,7 @@ wiggum stop   -w ~/projects/foo                             # clean halt
   Spec Kit feature. Default: the feature dir's basename, or `default`.
 
 ```bash
-wiggum run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md
+specstride run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md
 ```
 
 ## Live visibility (on by default)
@@ -85,19 +85,19 @@ a presenter renders it in real time, in full color, with zero containers.
   your terminal while the noisy raw output goes to `run.log`. Each tool call gets its own
   color and glyph (Read `◎`, Write `✚`, Edit `✎`, Bash `❯`, …); end-of-pass lines show
   cost / tokens / duration / turns.
-- **Live status card (`wiggum watch`):** a compact header (phase progress + activity +
+- **Live status card (`specstride watch`):** a compact header (phase progress + activity +
   heartbeat) over a scrolling recent-activity feed. Attach to a backgrounded run.
 
-Verbosity is `WIGGUM_LIVE_DETAIL` (`milestones | tools | full`; default `tools`). `full` adds
+Verbosity is `SPECSTRIDE_LIVE_DETAIL` (`milestones | tools | full`; default `tools`). `full` adds
 each assistant thinking/narration line on top of the tool calls:
 
 ```bash
-WIGGUM_LIVE_DETAIL=full wiggum run -w ~/projects/foo --live
+SPECSTRIDE_LIVE_DETAIL=full specstride run -w ~/projects/foo --live
 ```
 
 ## Pre-loop test automation
 
-Wiggum derives and executes a Lisa-compatible `VerificationPlan v1` by default before the
+Specstride derives and executes a Lisa-compatible `VerificationPlan v1` by default before the
 first proposer pass:
 
 - `--verification required` — the default; creates the plan, injects its obligations, runs

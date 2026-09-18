@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────────────
-# DRAFT — phase infra preflight for wiggum orchestrator.sh
+# DRAFT — phase infra preflight for specstride orchestrator.sh
 # ─────────────────────────────────────────────────────────────────────────────
 # Problem it solves (2026-08-01, reusable-platform-sdk phase 8):
 #   Phase 8 ("Operational Readiness & Live Demonstration") requires external infra
@@ -23,11 +23,11 @@
 #      BEFORE the `while (( attempt <= ... ))` loop, add:
 #        if ! phase_infra_preflight "$n"; then
 #          log ">>> phase $n infra preflight FAILED — halting (exit $E_PREFLIGHT)."
-#          log "#   provision the missing infra above, then: wiggum resume -w $WORKDIR"
-#          wiggum_emit run_stop reason infra_preflight phase "$n"
+#          log "#   provision the missing infra above, then: specstride resume -w $WORKDIR"
+#          specstride_emit run_stop reason infra_preflight phase "$n"
 #          exit "$E_PREFLIGHT"
 #        fi
-#   4. Requirements live in .env (or a phase-infra.conf) as WIGGUM_PHASE<N>_REQUIRE
+#   4. Requirements live in .env (or a phase-infra.conf) as SPECSTRIDE_PHASE<N>_REQUIRE
 #      lines — see the examples at the bottom. Absent var => phase has no infra
 #      requirement (100% backward compatible: every existing phase is a no-op).
 # ─────────────────────────────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ _preflight_check_one() {
 # declared), 1 if any requirement is unmet.
 phase_infra_preflight() {
   local n="$1"
-  local var="WIGGUM_PHASE${n}_REQUIRE"
+  local var="SPECSTRIDE_PHASE${n}_REQUIRE"
   local spec="${!var:-}"
   [[ -z "$spec" ]] && return 0   # no requirements declared for this phase → pass
 
@@ -111,7 +111,7 @@ phase_infra_preflight() {
 
 # ── Example requirement declarations (put these in .env) ─────────────────────
 # Phase 8 of reusable-platform-sdk needs the live-demo infra:
-#   WIGGUM_PHASE8_REQUIRE="env:LISA_URL env:LISA_TOKEN env:ANTHROPIC_BASE_URL \
+#   SPECSTRIDE_PHASE8_REQUIRE="env:LISA_URL env:LISA_TOKEN env:ANTHROPIC_BASE_URL \
 #     ws:127.0.0.1:8790 http://127.0.0.1:8088/healthz http://127.0.0.1:4318"
 # (http tokens: drop the leading 'http:' kind prefix ambiguity by writing the full
 #  URL — the check reads kind from the scheme; a bare 'http://…' is treated as http.)

@@ -17,8 +17,12 @@ import json
 import os
 import sys
 
-TAIL_OUT = int(os.environ.get("WIGGUM_VERIFY_TAIL_LINES", "80"))
-TAIL_ERR = int(os.environ.get("WIGGUM_VERIFY_TAIL_ERR_LINES", "40"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
+specstride_env.apply()
+
+TAIL_OUT = int(os.environ.get("SPECSTRIDE_VERIFY_TAIL_LINES", "80"))
+TAIL_ERR = int(os.environ.get("SPECSTRIDE_VERIFY_TAIL_ERR_LINES", "40"))
 MAX_MARKERS = 40
 
 

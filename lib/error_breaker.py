@@ -17,7 +17,7 @@ per-invocation result consumption (data-model ``ConsecutiveErrorState``):
 A watchdog kill is accounted by CLASS, exactly as the legacy tail-scan ladder in
 ``proposer.sh`` accounts it (design §4.2): a ``budget`` kill (``hard_cap``) says
 only that the work did not fit the pass, so it feeds a SECOND bounded counter
-(``cap_count`` / ``WIGGUM_PROPOSER_MAX_CAPS``, exit 10) and leaves the error
+(``cap_count`` / ``SPECSTRIDE_PROPOSER_MAX_CAPS``, exit 10) and leaves the error
 count untouched in both directions — it is neither a failing pass nor a clean
 one. A ``futility``/``hang`` kill is an agent error and counts here as before.
 One invocation is therefore counted by exactly one of the two breakers, never
