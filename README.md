@@ -22,14 +22,28 @@ you only arbitrate the phases the machines genuinely can't settle.
 The deterministic-loop approach — automating software development by running a
 coding agent in a repeating, self-checking loop — is the **"Ralph" technique**
 coined by [Geoffrey Huntley](https://ghuntley.com/). Specstride is **my own
-implementation and interpretation** of it: I arrived at this shape the hard way,
-by running the loop *painfully by hand* — driving a coding agent phase by phase
-and then sitting in the inner loop myself, eyeballing each phase's evidence and
-hand-approving the gate before letting the next phase start. Doing that approval
-step manually, over and over, is exactly the toil Specstride removes: it adds an
-**automated critic gate** in the seat I used to occupy, so nothing advances until
-the work is verified — and I only step back in for the phases the machines
-genuinely can't settle.
+implementation and interpretation** of it, and I built it the hard way. I ran
+the loop *by hand* first: I drove a coding agent phase by phase, then sat in the
+inner loop myself, read each phase's evidence, and approved the gate before the
+next phase could start. Specstride takes over that seat, and it goes further
+than a plain Ralph loop in two ways:
+
+- **An automated critic gate.** An LLM critic checks each phase's evidence
+  against the spec's acceptance criteria and the real code. Nothing advances
+  until the critic approves it.
+- **A diagnose-and-accelerate micro-loop for stuck phases.** A plain Ralph loop
+  retries a rejected phase from scratch, so a stuck phase can burn pass after
+  pass and learn nothing new. When a phase stalls on a new set of unmet
+  criteria, Specstride runs the [diagnostician](#diagnostician-stuck-loop-mitigation).
+  It reads the full rejection history and the untruncated files, then says
+  whether the critic simply couldn't see the code or the gap is real, and what
+  to change. The [accelerator](#accelerator-acting-on-the-diagnosticians-hint)
+  acts on that hint: a narrowed retry that fixes only the failing criteria and
+  leaves approved work untouched. On one real 12-task phase, a full retry had
+  spent 16 minutes re-deriving what turned out to be a two-file fix.
+
+You write the spec; the loop takes it to verified code. You step in only for
+the phases the machines genuinely can't settle.
 
 > 📖 **Full documentation lives in the [`wiki/`](./wiki) folder** — start at
 > [`wiki/Home.md`](./wiki/Home.md). It covers the
