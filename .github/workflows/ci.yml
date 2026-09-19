@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax-check and shellcheck (errors only) every tracked shell script
+        run: |
+          mapfile -t scripts < <(git ls-files -z | xargs -0 file | grep -i 'shell script' | cut -d: -f1)
+          printf 'checking %s\n' "${scripts[@]}"
+          for f in "${scripts[@]}"; do bash -n "$f"; done
+          shellcheck -S error "${scripts[@]}"
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # The runtime is stdlib-only; pytest is the only test-time dependency.
+      - run: python -m pip install pytest
+      - run: python -m pytest lib/ -q
