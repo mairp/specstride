@@ -21,12 +21,9 @@ you only arbitrate the phases the machines genuinely can't settle.
 
 The deterministic-loop approach — automating software development by running a
 coding agent in a repeating, self-checking loop — is the **"Ralph" technique**
-coined by [Geoffrey Huntley](https://ghuntley.com/). Specstride is **my own
-implementation and interpretation** of it, and I built it the hard way. I ran
-the loop *by hand* first: I drove a coding agent phase by phase, then sat in the
-inner loop myself, read each phase's evidence, and approved the gate before the
-next phase could start. Specstride takes over that seat, and it goes further
-than a plain Ralph loop in two ways:
+coined by [Geoffrey Huntley](https://ghuntley.com/). Specstride is **my
+implementation** of that technique, and it goes further than a plain Ralph loop
+in two ways:
 
 - **An automated critic gate.** An LLM critic checks each phase's evidence
   against the spec's acceptance criteria and the real code. Nothing advances
