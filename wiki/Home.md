@@ -10,8 +10,23 @@ can't settle.
 
 Specstride is one author's implementation and interpretation of the **"Ralph" technique** —
 automating software development by running a coding agent in a repeating, self-checking
-loop — coined by [Geoffrey Huntley](https://ghuntley.com/). Specstride is the proposer/critic
-harness built around that loop.
+loop — coined by [Geoffrey Huntley](https://ghuntley.com/). It grew out of running that loop
+by hand: driving the agent phase by phase, reading each phase's evidence, and approving the
+gate before the next phase could start. Specstride takes over that seat, and it goes further
+than a plain Ralph loop in two ways:
+
+- **An automated critic gate.** An LLM critic checks each phase's evidence against the spec's
+  acceptance criteria and the real code. Nothing advances until the critic approves it.
+- **A diagnose-and-accelerate micro-loop for stuck phases.** A plain Ralph loop retries a
+  rejected phase from scratch, so a stuck phase can burn pass after pass and learn nothing
+  new. When a phase stalls on a new set of unmet criteria, the **diagnostician** reads the
+  full rejection history and the untruncated files, then says whether the critic simply
+  couldn't see the code or the gap is real, and what to change. The **accelerator** acts on
+  that hint: a narrowed retry that fixes only the failing criteria and leaves approved work
+  untouched. On one real 12-task phase, a full retry had spent 16 minutes re-deriving what
+  turned out to be a two-file fix. See [Architecture](Architecture#the-roles).
+
+You write the spec; the loop takes it to verified code.
 
 > **Runtime is bash + python3 stdlib** — no pip, no dependency manager, clone-and-run.
 
