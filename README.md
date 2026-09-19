@@ -1,7 +1,7 @@
 # Specstride
 
 **Specstride** (formerly Wiggum). From specs to tested code. An autonomous coding
-orchestrator that drives your agent through implementation, critic review, and
+orchestrator that steers your agent through implementation, critic review, and
 verification, phase by phase: a self-driving, spec-driven **Ralph loop** with an
 agent pairing gate and telemetry.
 
