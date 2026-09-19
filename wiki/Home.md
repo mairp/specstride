@@ -10,10 +10,8 @@ can't settle.
 
 Specstride is one author's implementation and interpretation of the **"Ralph" technique** —
 automating software development by running a coding agent in a repeating, self-checking
-loop — coined by [Geoffrey Huntley](https://ghuntley.com/). It grew out of running that loop
-by hand: driving the agent phase by phase, reading each phase's evidence, and approving the
-gate before the next phase could start. Specstride takes over that seat, and it goes further
-than a plain Ralph loop in two ways:
+loop — coined by [Geoffrey Huntley](https://ghuntley.com/). It goes further than a plain Ralph
+loop in two ways:
 
 - **An automated critic gate.** An LLM critic checks each phase's evidence against the spec's
   acceptance criteria and the real code. Nothing advances until the critic approves it.
