@@ -36,6 +36,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      # The runtime is stdlib-only; pytest is the only test-time dependency.
-      - run: python -m pip install pytest
-      - run: python -m pytest lib/ -q
+      # The runtime is stdlib-only; pytest (+ xdist) is the only test-time
+      # dependency. The suite is sleep/timeout-bound (~32 min serial, ~3 min
+      # CPU), so oversubscribing workers is what keeps it fast.
+      - run: python -m pip install pytest pytest-xdist
+      - run: python -m pytest lib/ -q -n 16 --durations=10
