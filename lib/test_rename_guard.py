@@ -18,18 +18,12 @@ ROOT = os.path.dirname(HERE)
 OLD = re.compile("wiggum", re.IGNORECASE)
 
 # Historical records: never rewritten, so they keep the old name.
+# The one-off run scripts and recorded run state that used to be listed here are
+# no longer tracked (see .gitignore, "One-off operational artifacts").
 HISTORICAL = [
-    "INCIDENT-*.md",                  # incident write-ups
-    "crash_incident",
     "reversed/*",                     # reverse-engineered spec of the pre-rename tree
     "roadmap/*",                      # dated notes, research, prompts, the naming decision
-    "specs/*",                        # the completed 001 feature's Spec Kit record + run scripts
-    ".ralph/*",                       # live loop state (never edited)
-    ".codex-phase13-spec.patch",      # a recorded patch
-    "resume-001.sh",                  # one-off scripts for runs whose state dir predates
-    "swap-002-proposer-to-gpt5.sh",   # the rename (they work via the compatibility layer)
-    "merge-main-into-002.sh",
-    "untrack-specs-wiggum.sh",
+    "specs/*",                        # the completed 001 feature's Spec Kit record
     "lib/fixtures/*",                 # recorded agent transcripts (test data)
 ]
 
@@ -59,6 +53,8 @@ COMPAT_LINES = {
     ".gitignore": [
         r"^(\*\*/)?\.wiggum/$",                     # legacy state dirs stay ignored
         r"^\.wiggum-autonomy-smoke$",
+        r"^untrack-specs-wiggum\.sh$",              # one-off scripts named before
+        r"^roadmap/prompts/rename-wiggum-to-specstride\.md$",   # the rename, now ignored
         r"^# Legacy state dir \(Specstride was formerly Wiggum\)",
     ],
     "README.md": [

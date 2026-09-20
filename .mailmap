@@ -1,0 +1,6 @@
+# Canonical identity. GitHub squash/merge commits are authored with the GitHub
+# profile display name ("Marlon Paz"); map them onto the name used everywhere
+# else so git log/shortlog/blame show one author.
+mairp <oec.valle.art@gmail.com> Marlon Paz <86619221+mairp@users.noreply.github.com>
+mairp <oec.valle.art@gmail.com> mairp <86619221+mairp@users.noreply.github.com>
+mairp <oec.valle.art@gmail.com> mairp <marlon.de.paz@gmail.com>
