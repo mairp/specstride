@@ -41,3 +41,27 @@ __pycache__/
 # stray test-run artifact (accidental gitlink)
 .specstride-autonomy-smoke
 .wiggum-autonomy-smoke
+
+# ── One-off operational artifacts ─────────────────────────────────────────────
+# Scripts and records produced while *operating* Specstride on a particular run
+# or another repo (ainetops, semantic-router-sovereign). They hardcode paths,
+# features and model choices from that one run, so they are working state, not
+# source. Kept on disk, out of the repo.
+resume-001.sh
+swap-002-proposer-to-gpt5.sh
+merge-main-into-002.sh
+merge-002-into-main.sh
+untrack-specs-wiggum.sh
+tls-chain-inspect.sh
+roadmap/prompts/check-run-complete.sh
+roadmap/prompts/rename-wiggum-to-specstride.md
+.codex-phase13-spec.patch
+
+# Recorded loop state and postmortems from individual historical runs.
+.ralph/
+INCIDENT-*.md
+crash_incident
+
+# Launcher scripts for the completed 001 feature (its Spec Kit record stays).
+specs/*/run-ralph.sh
+specs/*/check-done.sh
