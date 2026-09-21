@@ -216,6 +216,14 @@ specstride_spec_validate() {
   _specstride_spec_py validate --specs "$specs"
 }
 
+# Tick phase N's task checkboxes in the spec file (`- [ ]` → `- [x]`), atomically.
+# Prints how many lines were ticked. Called by the orchestrator only after the critic
+# APPROVED the phase, so a tick always means "approved by the gate". A native spec and
+# the Spec Kit `## P<N>` priority form are left untouched (prints 0).
+specstride_spec_tick_phase() {
+  _specstride_spec_py tick "$2" --specs "$1"
+}
+
 # Print the first phase number lacking a GATE<N>-APPROVED marker. This is the
 # resume point (crash-safe derivation); prints nothing if all approved. Resume-truth
 # for both the orchestrator and the `specstride` CLI.
