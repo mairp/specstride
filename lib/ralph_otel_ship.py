@@ -103,7 +103,16 @@ class Otel:
         base = url.rstrip("/")
         self.logs_url = base + "/v1/logs"
         self.metrics_url = base + "/v1/metrics"
+        self.traces_url = base + "/v1/traces"
         self.resource = dict(resource_attrs)     # service.name/task/backend
+        # Trace spans derived from the same events (ralph_otel_spans). Optional:
+        # an import failure only loses spans, never logs/metrics.
+        try:
+            from ralph_otel_spans import SpanTracker
+            self._spans = SpanTracker(self.resource)
+        except Exception as e:  # noqa: BLE001
+            warn("trace spans disabled (%s)" % e)
+            self._spans = None
         self._start = str(time.time_ns())
         self._logs = []                          # [(ts, body, {attrs})]
         # metric accumulators keyed by (name, unit, is_double, frozenset(attrs))
@@ -129,7 +138,13 @@ class Otel:
             for k, v in fields.items():
                 if v is not None and k != "event":
                     rec[k] = v
-        self._logs.append((ts, line, rec))
+        ids = None
+        if self._spans is not None:
+            try:
+                ids = self._spans.on_event(event, fields if fields is not None else rec)
+            except Exception as e:  # noqa: BLE001 — spans are best-effort
+                warn("trace span error: %s" % e)
+        self._logs.append((ts, line, rec, ids))
         self._event_count += 1
         if fields is not None:
             self._accumulate(event, attrs or {}, fields)
@@ -202,8 +217,8 @@ class Otel:
         return {"attributes": _attrs_kv(self.resource)}
 
     def _log_record(self, item, observed):
-        ts, body, rec = item
-        return {
+        ts, body, rec, ids = item
+        record = {
             "timeUnixNano": ts,
             "observedTimeUnixNano": observed,
             "severityNumber": 9,
@@ -211,6 +226,11 @@ class Otel:
             "body": {"stringValue": body},
             "attributes": _attrs_kv(rec),
         }
+        if ids and ids[0]:
+            record["traceId"] = ids[0]
+            if ids[1]:
+                record["spanId"] = ids[1]
+        return record
 
     def _logs_payload(self, logs=None):
         now = str(time.time_ns())
@@ -299,7 +319,8 @@ class Otel:
         persist local telemetry_delivery evidence, or None when nothing was
         buffered. A failure on either signal marks the batch failed. Never
         raises (best-effort)."""
-        if not (self._logs or self._sums or self._hists):
+        spans = self._spans.drain() if self._spans is not None else None
+        if not (self._logs or self._sums or self._hists or spans):
             return None
         event_count = self._event_count
         self._batch_seq += 1
@@ -325,6 +346,10 @@ class Otel:
                     rec["reason_code"] = reason
                     if status is not None:
                         rec["http_status"] = status
+            if spans:
+                # Traces never change the delivery verdict of logs/metrics: a
+                # collector without a traces pipeline must not mark batches failed.
+                self._post(self.traces_url, spans)
         finally:
             self._logs = []
             self._sums = {}
