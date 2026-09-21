@@ -50,6 +50,7 @@ Exit codes (CLI):  0 ok · 3 invalid spec / bad usage.
 """
 import argparse
 import os
+import shutil
 import re
 import sys
 
@@ -739,6 +740,71 @@ def _stem(path):
 #  CLI — one subcommand per legacy awk function, output byte-compatible so the
 #  specstride-lib.sh shims are drop-in. Plus `detect` and `context`.
 # ─────────────────────────────────────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Ticking an APPROVED phase's task checkboxes
+#
+#  A Spec Kit / OpenSpec task list is also the project's progress record: readers
+#  (and `/speckit-implement`) take `- [x]` to mean "done". Nothing used to tick
+#  them — the proposer is never asked to and the approval path never touched the
+#  spec — so a run could approve every phase and leave the list reading 0 done.
+#  The orchestrator ticks a phase's tasks once, and only once, the critic has
+#  APPROVED it: a tick therefore always means "approved by the gate", never
+#  "claimed by the proposer". Checkbox state is normalized out of the plan hash
+#  (verification_plan.spec_projection_hash), so ticking never re-plans a run.
+# ─────────────────────────────────────────────────────────────────────────────
+_UNTICKED = re.compile(r'^([ \t]*-[ \t]*\[)[ ]?(\][ \t]*\S.*)$')
+
+
+def tick_phase(text, n, fmt):
+    """Return (new_text, ticked) with phase N's unticked task lines ticked.
+
+    Only formats whose phases are explicit numbered sections are handled —
+    ``speckit-tasks`` (``## Phase N``) and ``openspec-change`` (``## N. Title``).
+    A native spec's checkboxes are acceptance criteria, not progress, and the
+    Spec Kit ``## P<N>`` priority form shares sections between phases, so both
+    are left untouched (ticked == 0). Line endings and every other byte are
+    preserved.
+    """
+    if fmt == "speckit-tasks":
+        head = _SPECKIT_HEAD
+    elif fmt == "openspec-change":
+        head = _OPENSPEC_HEAD
+    else:
+        return text, 0
+    out, ticked, inside = [], 0, False
+    for ln in text.splitlines(keepends=True):
+        bare = ln.rstrip("\r\n")
+        m = head.match(bare)
+        if m:
+            inside = int(m.group(1)) == int(n)
+        elif _ANY_L2.match(bare):
+            inside = False
+        elif inside:
+            t = _UNTICKED.match(bare)
+            if t:
+                ln = t.group(1) + "x" + t.group(2) + ln[len(bare):]
+                ticked += 1
+        out.append(ln)
+    return "".join(out), ticked
+
+
+def tick_phase_file(path, n, fmt):
+    """Tick phase N in the spec file atomically; return how many lines changed."""
+    with open(path, encoding="utf-8", newline="") as handle:
+        text = handle.read()
+    new_text, ticked = tick_phase(text, n, fmt)
+    if ticked:
+        tmp = "%s.tick.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w", encoding="utf-8", newline="") as handle:
+            handle.write(new_text)
+        try:
+            shutil.copymode(path, tmp)
+        except OSError:
+            pass
+        os.replace(tmp, path)
+    return ticked
+
 def _read(path):
     try:
         with open(path, encoding="utf-8", errors="replace") as fh:
@@ -762,8 +828,8 @@ def main(argv=None):
     ap.add_argument("subcommand",
                     choices=["numbers", "title", "slice", "validate",
                              "first-unapproved", "detect", "context",
-                             "render-context", "feature-slug"])
-    ap.add_argument("n", nargs="?", help="phase number (for title/slice)")
+                             "render-context", "feature-slug", "tick"])
+    ap.add_argument("n", nargs="?", help="phase number (for title/slice/tick)")
     ap.add_argument("--specs", required=True)
     ap.add_argument("--workdir", default=".")
     ap.add_argument("--gates-dir", default=None,
@@ -815,6 +881,13 @@ def main(argv=None):
                 sys.stderr.write(e + "\n")
             sys.exit(3)
         print(count)
+        return 0
+
+    if args.subcommand == "tick":
+        if args.n is None:
+            sys.stderr.write("specstride_spec: tick needs a phase number\n")
+            sys.exit(3)
+        print(tick_phase_file(args.specs, int(args.n), fmt))
         return 0
 
     if args.subcommand == "numbers":
