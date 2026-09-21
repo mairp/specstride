@@ -2380,6 +2380,48 @@ def emit(events_path, event, **fields):
             fh.write(json.dumps(rec) + "\n")
     except OSError:
         pass
+    _ship_remote(rec)
+
+
+def _ship_remote(rec):
+    """Mirror a critic event to the Loki/OTEL sinks the orchestrator enabled, the
+    way specstride_emit does for lifecycle events, so the critic gate (critic_start,
+    verdict, grounding_gap, ...) is visible remotely and in the run's trace.
+    Best-effort: telemetry must never affect the verdict."""
+    env = os.environ
+    loki_on = env.get("SPECSTRIDE_TELEMETRY") == "true" and env.get("SPECSTRIDE_LOKI_URL")
+    otel_on = env.get("SPECSTRIDE_OTEL_ENABLED") == "true" and env.get("SPECSTRIDE_OTEL_URL")
+    if not (loki_on or otel_on):
+        return
+    event = rec.get("event")
+    fields = {k: v for k, v in rec.items() if k not in ("event", "time")}
+    for key, var in (("run_id", "SPECSTRIDE_RUN_ID"), ("task", "SPECSTRIDE_TASK"),
+                     ("feature", "SPECSTRIDE_FEATURE"), ("trace_id", "SPECSTRIDE_TRACE_ID")):
+        if env.get(var) and key not in fields:
+            fields[key] = env[var]
+    task = env.get("SPECSTRIDE_TASK") or "specstride"
+    backend = env.get("SPECSTRIDE_BACKEND_LABEL") or "specstride"
+    lib = os.path.dirname(os.path.abspath(__file__))
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    if loki_on:
+        try:
+            import ralph_loki_ship as loki_ship
+            loki = loki_ship.Loki(env["SPECSTRIDE_LOKI_URL"],
+                                  {"job": "ralph", "task": task, "backend": backend})
+            loki.add(event, loki_ship.logfmt(fields))
+            loki.flush()
+        except Exception:  # noqa: BLE001
+            pass
+    if otel_on:
+        try:
+            import ralph_otel_ship as otel_ship
+            otel = otel_ship.Otel(env["SPECSTRIDE_OTEL_URL"],
+                                  {"service.name": "ralph", "task": task, "backend": backend})
+            otel.add(event, otel_ship.logfmt(fields), fields=fields)
+            otel.flush()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
