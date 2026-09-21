@@ -1885,6 +1885,22 @@ run_phase() {
       fi
       rm -f "$GATES_DIR/.diagnosed-phase${n}" "$GATES_DIR/.accelerated-phase${n}"
       specstride_emit phase_done phase "$n" attempt "$attempt" title "$title"
+      # ── tick the approved phase's task checkboxes ────────────────────────
+      # The task list is the project's progress record, and until now nothing ever
+      # ticked it: a fully approved feature still read "0 done". Ticked HERE — after
+      # the critic's APPROVED, never before and never by the proposer — so a tick
+      # can only mean "this phase passed its gate". Best-effort: a spec that cannot
+      # be written is logged and the approval stands. SPECSTRIDE_TICK_TASKS=false
+      # turns it off. Checkbox state is outside the plan hash, so nothing re-plans.
+      if [[ "${SPECSTRIDE_TICK_TASKS:-true}" != "false" && "$SPEC_FORMAT" != "native" ]]; then
+        local ticked=""
+        if ticked="$(specstride_spec_tick_phase "$SPECS" "$n" 2>>"$LOG")"; then
+          log "      ticked ${ticked:-0} task checkbox(es) of phase $n in $SPECS"
+          specstride_emit tasks_ticked phase "$n" count "${ticked:-0}"
+        else
+          log "      WARN: could not tick phase $n task checkboxes in $SPECS (approval stands)"
+        fi
+      fi
       # ── learning: observe at phase_done ──────────────────────────────────
       # One per-phase observation written from every run of this feature (design §5.4;
       # the learn.py docstring explains why the runs directory, not this run's events:
