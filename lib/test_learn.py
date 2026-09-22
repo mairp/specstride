@@ -378,7 +378,7 @@ def _phase_stats_yield(specs, phase=8):
     return s["phases"][str(phase)]
 
 
-# A third synthetic-events builder for `inject_yield_hint`'s evidence: each
+# A third synthetic-events builder for the §2.2 wait/work evidence: each
 # entry is (wait_calls, tool_calls, kill_reason_or_None) for one pass. Bash
 # targets are either a WAIT_RE-matching "sleep 5" or a plain "pytest -q", in the
 # exact counts needed so the pass's wait_call_share is `wait_calls/tool_calls`.
@@ -427,7 +427,7 @@ def test_knob_allowlist_is_locked_so_a_critic_facing_knob_can_never_be_added():
     # adding a critic-facing or breaker-relaxing name to ADJUSTABLE_KNOBS requires
     # deliberately editing a test whose name says exactly why that must not happen.
     assert learn.ADJUSTABLE_KNOBS == frozenset({
-        "proposer_timeout", "yield_poll_interval", "inject_yield_hint",
+        "proposer_timeout", "yield_poll_interval",
     })
     never_allowed = {
         # critic independence (§5.5) — grounding caps, critic backend/timeout, --max-rejects
@@ -438,6 +438,9 @@ def test_knob_allowlist_is_locked_so_a_critic_facing_knob_can_never_be_added():
         # breakers must not relax themselves (§5.5)
         "SPECSTRIDE_PROPOSER_MAX_ERRORS", "SPECSTRIDE_PROPOSER_MAX_NOPROGRESS", "SPECSTRIDE_PROPOSER_MAX_CAPS",
         "repeat_limit", "repeat_ignore",
+        # removed, not wired: the yield contract is already in every prompt, and the
+        # only change left was to a prompt the critic later judges
+        "inject_yield_hint",
     }
     assert never_allowed.isdisjoint(learn.ADJUSTABLE_KNOBS)
 
@@ -550,48 +553,6 @@ def test_suggest_yield_poll_interval_clamps_to_the_hard_lower_bound_of_10():
     assert adv["value"] == 10   # the hard 10 s floor binds tighter than the 6 s step cap
 
 
-# -- suggestion: inject_yield_hint (evidence floor, the OR of two signals) ---
-def test_suggest_inject_yield_hint_needs_a_three_sample_floor():
-    stats = _phase_stats_wait([(4, 5, None), (4, 5, None)])
-    adv = learn.suggest_inject_yield_hint(stats)
-    assert adv["samples"] == 2
-    assert adv["value"] is None
-    assert "3" in adv["reason"]
-
-
-def test_suggest_inject_yield_hint_never_suggests_for_a_phase_with_no_evidence():
-    adv = learn.suggest_inject_yield_hint({})
-    assert adv["samples"] == 0
-    assert adv["value"] is None
-
-
-def test_suggest_inject_yield_hint_true_from_a_high_median_wait_share():
-    stats = _phase_stats_wait([(4, 5, None), (4, 5, None), (3, 5, None)])   # shares .8, .8, .6
-    adv = learn.suggest_inject_yield_hint(stats)
-    assert adv["samples"] == 3
-    assert adv["wait_share_p50"] == 0.8
-    assert adv["value"] is True
-
-
-def test_suggest_inject_yield_hint_true_from_a_hard_cap_kill_while_a_job_ran():
-    # two clean, low-wait passes plus one hard_cap kill on a pass that WAS busy
-    # waiting: the median wait share alone (0.0) would never trip the threshold,
-    # but the hard_cap-while-waiting signal is decisive on its own.
-    stats = _phase_stats_wait([(0, 5, None), (0, 5, None), (3, 4, "hard_cap")])
-    assert stats["hard_cap_kills_with_wait"] == 1
-    adv = learn.suggest_inject_yield_hint(stats)
-    assert adv["wait_share_p50"] < learn.INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD
-    assert adv["value"] is True
-
-
-def test_suggest_inject_yield_hint_false_when_the_evidence_is_clean():
-    stats = _phase_stats_wait([(0, 5, None), (0, 5, None), (0, 5, None)])
-    adv = learn.suggest_inject_yield_hint(stats)
-    assert adv["samples"] == 3
-    assert adv["hard_cap_kills_with_wait"] == 0
-    assert adv["value"] is False
-
-
 def test_advise_reports_samples_and_reason_for_every_phase():
     summary = learn.summarize(_events_for_phase(4, [80.0, 90.0], futile_count=1))
     rows = learn.advise(summary, "proposer_timeout", None, default=5400)
@@ -600,7 +561,7 @@ def test_advise_reports_samples_and_reason_for_every_phase():
 
 
 def test_advise_rejects_a_knob_with_no_suggestion_engine():
-    # All three ADJUSTABLE_KNOBS have an engine now (SUGGESTION_ENGINES covers the
+    # Every ADJUSTABLE_KNOB has an engine (SUGGESTION_ENGINES covers the
     # allowlist exactly); the CLI's `--knob` choices are the allowlist itself, so
     # the only way `advise` ever sees an unrecognised name is a caller bypassing
     # the CLI — this proves that path still refuses cleanly rather than guessing.
@@ -611,16 +572,22 @@ def test_advise_rejects_a_knob_with_no_suggestion_engine():
         learn.advise(summary, "not_a_real_knob", None, default=30)
 
 
-def test_advise_now_supports_yield_poll_interval_and_inject_yield_hint():
-    # The gap this task closes: both knobs that previously raised now produce
-    # real advice rows through the same `advise` entry point as proposer_timeout.
+def test_advise_supports_yield_poll_interval():
     summary = learn.summarize(_events_for_phase_yield(8, [(100.0, None), (120.0, None), (110.0, None)]))
     rows = learn.advise(summary, "yield_poll_interval", None, default=30)
     assert len(rows) == 1 and rows[0]["phase"] == 8 and rows[0]["value"] == 15
 
-    summary2 = learn.summarize(_events_for_phase_wait(9, [(4, 5, None), (4, 5, None), (3, 5, None)]))
-    rows2 = learn.advise(summary2, "inject_yield_hint", None, default=0)
-    assert len(rows2) == 1 and rows2[0]["phase"] == 9 and rows2[0]["value"] is True
+
+def test_yield_poll_interval_steps_relative_to_its_own_default_not_the_proposer_timeout():
+    # Measured case: a 3000 s median job with 5 samples. Stepped from 30 s (the
+    # poll's own default) the ±50 % window caps it at 45 s; stepped from 1800 s
+    # (what `specstride learn` used to pass for every knob) the window [900, 2700]
+    # misses the [10, 300] bound entirely, the degenerate branch drops the step cap,
+    # and the knob would jump 30 → 300 in one apply.
+    stats = _phase_stats_yield([(3000.0, None)] * 5)
+    assert stats["job_duration_p50"] == 3000.0 and stats["job_duration_samples"] == 5
+    assert learn.suggest_yield_poll_interval(stats, default=30)["value"] == 45
+    assert learn.suggest_yield_poll_interval(stats, default=1800)["value"] == 300
 
 
 # -- apply / revert / resolve (§5.4 storage, §5.5 invariant 3) ----------------
@@ -755,60 +722,17 @@ def test_revert_restores_the_prior_value_for_yield_poll_interval(tmp_path):
     assert learn.effective_value(applied, "yield_poll_interval", 6) == 30
 
 
-# -- apply / revert: inject_yield_hint (boolean value/previous, same shape) --
-def test_apply_inject_yield_hint_writes_applied_json_with_provenance(tmp_path):
-    summary = learn.summarize(_events_for_phase_wait(7, [(4, 5, None), (4, 5, None), (3, 5, None)]))
-    applied, events_file = _applied_paths(tmp_path)
-    entry = learn.apply_inject_yield_hint(summary, 7, applied, events_file=events_file,
-                                           run_id="learn-iy-1")
-    assert entry["knob"] == "inject_yield_hint" and entry["phase"] == 7
-    assert entry["previous"] is False
-    assert entry["value"] is True
-    assert entry["samples"] == 3
-    lines = [json.loads(l) for l in open(applied) if l.strip()]
-    assert len(lines) == 1 and lines[0]["action"] == "apply"
-    ev_lines = [json.loads(l) for l in open(events_file) if l.strip()]
-    assert len(ev_lines) == 1
-    assert ev_lines[0]["event"] == "knob_adjusted" and ev_lines[0]["knob"] == "inject_yield_hint"
-    assert ev_lines[0]["from"] is False and ev_lines[0]["to"] is True
-
-
-def test_apply_inject_yield_hint_refuses_with_no_evidence_and_writes_nothing(tmp_path):
-    summary = learn.summarize(_events_for_phase_wait(7, [(0, 5, None), (0, 5, None)]))
-    applied, events_file = _applied_paths(tmp_path)
-    import pytest
-    with pytest.raises(ValueError):
-        learn.apply_inject_yield_hint(summary, 7, applied, events_file=events_file)
-    assert not os.path.exists(applied)
-    assert not os.path.exists(events_file)
-
-
-def test_revert_restores_the_prior_value_for_inject_yield_hint(tmp_path):
-    summary = learn.summarize(_events_for_phase_wait(7, [(4, 5, None), (4, 5, None), (3, 5, None)]))
-    applied, events_file = _applied_paths(tmp_path)
-    entry = learn.apply_inject_yield_hint(summary, 7, applied, events_file=events_file,
-                                           run_id="learn-iy-2")
-    assert entry["value"] is True
-    rev = learn.revert_run("learn-iy-2", applied, events_file=events_file)
-    assert rev["value"] is False
-    assert learn.effective_value(applied, "inject_yield_hint", 7) is False
-
-
-def test_off_reverts_every_currently_applied_knob_across_all_three_kinds(tmp_path):
+def test_off_reverts_every_currently_applied_knob_across_both_kinds(tmp_path):
     applied, events_file = _applied_paths(tmp_path)
     s_pt = learn.summarize(_events_for_phase(3, [1200.0, 1300.0, 1250.0], run_id="run-A"))
     s_yp = learn.summarize(_events_for_phase_yield(6, [(100.0, None), (120.0, None), (110.0, None)],
                                                     run_id="run-B"))
-    s_iy = learn.summarize(_events_for_phase_wait(7, [(4, 5, None), (4, 5, None), (3, 5, None)],
-                                                   run_id="run-C"))
     learn.apply_proposer_timeout(s_pt, 3, 5400, applied, events_file=events_file, run_id="off-pt")
     learn.apply_yield_poll_interval(s_yp, 6, 30, applied, events_file=events_file, run_id="off-yp")
-    learn.apply_inject_yield_hint(s_iy, 7, applied, events_file=events_file, run_id="off-iy")
     reverted = learn.revert_all(applied, events_file=events_file)
-    assert {e["reverts_run_id"] for e in reverted} == {"off-pt", "off-yp", "off-iy"}
+    assert {e["reverts_run_id"] for e in reverted} == {"off-pt", "off-yp"}
     assert learn.effective_value(applied, "proposer_timeout", 3) == 5400
     assert learn.effective_value(applied, "yield_poll_interval", 6) == 30
-    assert learn.effective_value(applied, "inject_yield_hint", 7) is False
 
 
 # -- the shell-callable integration point: resolve ---------------------------
@@ -869,16 +793,6 @@ def test_resolve_yield_poll_interval_clamps_to_the_hard_bounds(tmp_path):
     assert learn.resolve_knob("yield_poll_interval", 6, 30, applied, env={}) == 30
 
 
-def test_resolve_inject_yield_hint_returns_one_or_zero_never_a_python_bool(tmp_path):
-    applied, _ = _applied_paths(tmp_path)
-    summary = learn.summarize(_events_for_phase_wait(7, [(4, 5, None), (4, 5, None), (3, 5, None)]))
-    learn.apply_inject_yield_hint(summary, 7, applied, run_id="learn-iy-3")
-    on = learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={"SPECSTRIDE_LEARNING": "apply"})
-    assert on == 1 and type(on) is int
-    assert learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={}) == 0
-    assert learn.resolve_knob("inject_yield_hint", 7, 0, applied, env={"SPECSTRIDE_LEARNING": "off"}) == 0
-
-
 # -- CLI: apply now round-trips for both new knobs too -----------------------
 def _write_events(tmp_path, events, name="events.jsonl"):
     path = tmp_path / name
@@ -901,17 +815,61 @@ def test_cli_apply_supports_yield_poll_interval(tmp_path):
     assert learn.effective_value(applied_file, "yield_poll_interval", 6) == 15
 
 
-def test_cli_apply_supports_inject_yield_hint(tmp_path):
-    events = _write_events(tmp_path, _events_for_phase_wait(7, [(4, 5, None), (4, 5, None), (3, 5, None)]))
-    r = subprocess.run(
-        [sys.executable, os.path.join(HERE, "learn.py"), "apply",
-         "--events", events, "--knob", "inject_yield_hint",
-         "--phase", "7", "--default", "0", "--feature-dir", str(tmp_path)],
-        capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert "applied inject_yield_hint[7]" in r.stdout
-    applied_file = str(tmp_path / "learning" / "applied.json")
-    assert learn.effective_value(applied_file, "inject_yield_hint", 7) is True
+# -- `specstride learn`: the dispatcher passes the asked knob's own default ---
+def _cli_workdir(tmp_path, events):
+    wd = tmp_path / "proj"
+    run_dir = wd / ".specstride" / "features" / "tf" / "runs" / "r1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "events.jsonl").write_text("".join(json.dumps(e) + "\n" for e in events))
+    return wd
+
+
+def _specstride_learn(wd, *args, env=None):
+    import specstride_env
+    prefixes = (specstride_env.ENV_PREFIX, specstride_env.LEGACY_ENV_PREFIX)
+    base = {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
+    base.update(env or {})
+    return subprocess.run(["bash", os.path.join(os.path.dirname(HERE), "specstride"), "learn",
+                           "-w", str(wd), "--feature", "tf", *args],
+                          capture_output=True, text=True, env=base, timeout=60)
+
+
+def test_a_bare_show_for_yield_poll_interval_steps_relative_to_30_not_1800(tmp_path):
+    events = [{k: v for k, v in e.items() if k != "_src"}
+              for e in _events_for_phase_yield(8, [(3000.0, None)] * 5)]
+    wd = _cli_workdir(tmp_path, events)
+    r = _specstride_learn(wd, "--show", "--knob", "yield_poll_interval")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "current=30s → suggest 45s" in r.stdout, r.stdout
+    assert "step_cap=[15, 45]" in r.stdout
+    # an operator's SPECSTRIDE_YIELD_POLL is the default it steps from, as at run time
+    r = _specstride_learn(wd, "--show", "--knob=yield_poll_interval", env={"SPECSTRIDE_YIELD_POLL": "20"})
+    assert "current=20s → suggest 30s" in r.stdout, r.stdout
+    # and proposer_timeout still defaults to 1800
+    r = _specstride_learn(wd, "--show")
+    assert "current=1800s" in r.stdout, r.stdout
+
+
+# -- proposer_cap: what each run ran a phase under ---------------------------
+def test_proposer_cap_is_recorded_once_per_run_and_phase():
+    # proposer_cap fires once per ATTEMPT but is resolved once per PHASE, and
+    # every value on it is a JSON string: dedupe on (run, phase) and parse ints.
+    events = []
+    for rid in ("run-1", "run-2"):
+        events.append({"event": "run_start", "run_id": rid, "ts": "1", "_src": rid})
+        events.append({"event": "phase_start", "run_id": rid, "phase": "4", "ts": "2", "_src": rid})
+        for attempt, secs in (("1", "1800"), ("2", "9999")):
+            events.append({"event": "proposer_start", "run_id": rid, "phase": "4", "attempt": attempt,
+                           "ts": "3", "_src": rid})
+            events.append({"event": "proposer_cap", "run_id": rid, "phase": "4", "attempt": attempt,
+                           "role": "proposer", "seconds": secs, "source": "learned",
+                           "yield_poll": "45", "yield_poll_source": "learned", "ts": "3", "_src": rid})
+    caps = learn.summarize(events)["phases"]["4"]["caps"]
+    assert caps == [
+        {"run": "run-1", "seconds": 1800, "source": "learned", "yield_poll": 45, "yield_poll_source": "learned"},
+        {"run": "run-2", "seconds": 1800, "source": "learned", "yield_poll": 45, "yield_poll_source": "learned"},
+    ]
+    assert learn.SCHEMA == "specstride.learn.summary/2"
 
 
 # -- observe: the §5.4 per-phase observation document ------------------------

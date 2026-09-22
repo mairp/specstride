@@ -122,7 +122,7 @@ stream-json tap ([`lib/agent_stream.py`](../lib/agent_stream.py), gated by `SPEC
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
-| `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `declared` \| `global`). An unsourced budget is what makes budget archaeology expensive six hours in |
+| `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. An unsourced budget is what makes budget archaeology expensive six hours in |
 | `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `SPECSTRIDE_PROPOSER_MAX_CAPS`. A budget signal, not an error |
 | `pass_cost_unknown` | proposer | a killed pass reports NO usage or cost (the kill severs the provider stream); this says "unmeasured", never "cheap" |
 | `pass_yield` | proposer | a pass ended cleanly while a job it depends on runs — `reason`, `predicate_kind`, `deadline_sec`, `job_mode`, `job_log`, `yield_index` |

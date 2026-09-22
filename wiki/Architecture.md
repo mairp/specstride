@@ -34,7 +34,7 @@ The loop above is the middle of three nested loops:
 | **Learning loop** (outer, `lib/learn.py`) | across runs | measure every pass, then suggest (and, opt-in, apply) per-phase settings | `learning/phase-<N>.json` observations and the `learning/applied.json` decision log |
 
 The diagnostician and accelerator adapt the next attempt, but nothing they learn outlives the
-run. Only the outer loop carries lessons forward, and only for three allowlisted settings. The
+run. Only the outer loop carries lessons forward, and only for two allowlisted settings. The
 critic is outside its reach by design. See [Learning](Learning).
 
 ## The roles

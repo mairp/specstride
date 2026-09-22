@@ -42,10 +42,11 @@ Outcome taxonomy (per pass, recommendation 2 / design §4.2)
 Step 5 — the learning loop
 ---------------------------
 ``advise``/``apply``/``revert``/``resolve``/``off`` turn the §5.3 metrics into a
-*suggested*, then optionally *applied*, per-phase knob value. All three §5.5
-allowlisted knobs have an engine: ``proposer_timeout`` (§4.1, from measured
-``work_sec``), ``yield_poll_interval`` (§2.1, from measured yield job durations),
-and ``inject_yield_hint`` (§2.2, a boolean, from the wait/work classification).
+*suggested*, then optionally *applied*, per-phase knob value. Both allowlisted
+knobs have an engine: ``proposer_timeout`` (§4.1, from measured ``work_sec``) and
+``yield_poll_interval`` (§2.1, from measured yield job durations). §5.5's third
+knob, ``inject_yield_hint``, was removed: the yield contract is already appended
+to every proposer and accelerator prompt, so the knob had nothing to switch.
 Storage follows §5.4 exactly: an attempt/phase summary is an **observation**
 (``observe``, below); a knob value this module has decided to use is a separate,
 append-only **decision** log (``<feature-dir>/learning/applied.json``, JSON-lines,
@@ -86,8 +87,9 @@ reflect every run that has ever touched it, the same cross-run view
 same ``"observation"`` content (only ``generated_at`` differs run to run) — safe
 to call once per ``phase_done``, and safe to call again by hand.
 
-Output schema (``specstride.learn.summary/1``)
+Output schema (``specstride.learn.summary/2``)
 ------------------------------------------
+``/2`` adds ``phases[*].caps`` (one entry per run from ``proposer_cap``) to ``/1``.
 {
   "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
@@ -118,7 +120,8 @@ Output schema (``specstride.learn.summary/1``)
       "approved_in_run", "attempt_number_reset", "cost_usd",
       "work_sec_p50", "work_sec_p90", "work_sec_samples", "kills_by_reason",
       "job_duration_p50", "job_duration_samples",           # yield_poll_interval's evidence
-      "wait_share_p50", "wait_share_samples", "hard_cap_kills_with_wait" } },  # inject_yield_hint's
+      "wait_share_p50", "wait_share_samples", "hard_cap_kills_with_wait",
+      "caps": [ { "run", "seconds", "source", "yield_poll", "yield_poll_source" } ] } },
   "totals": { "runs", "attempts", "passes", "cost_usd", "unbilled_passes",
               "kills_by_reason", "outcomes", "approved_phases",
               "cost_per_approved_phase", "non_approved_cost_share",
@@ -143,7 +146,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
-SCHEMA = "specstride.learn.summary/1"
+SCHEMA = "specstride.learn.summary/2"
 
 # The wait/poll classifier of 03-002-run-telemetry.md §2, applied to Bash targets.
 WAIT_RE = re.compile(
@@ -399,6 +402,9 @@ class _Run:
         self.cur_attempt: Optional[int] = None
         self.cur_pass: Optional[_Pass] = None
         self.attempts: "OrderedDict[Tuple[str,int,int], _Attempt]" = OrderedDict()
+        # phase → the first proposer_cap of this run for it. The event fires once
+        # per attempt, the values are resolved once per phase: dedupe on (run, phase).
+        self.caps: "OrderedDict[int, dict]" = OrderedDict()
 
     def attempt(self) -> Optional[_Attempt]:
         if self.cur_phase is None or self.cur_attempt is None:
@@ -515,6 +521,15 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
             a = _locate(run, phase, attempt)
             if a is not None and a.end is None:
                 a.end = ts
+        elif name == "proposer_cap":
+            if phase is not None and phase not in run.caps:
+                run.caps[phase] = {
+                    "run": rid,
+                    "seconds": _int(ev.get("seconds")),
+                    "source": ev.get("source"),
+                    "yield_poll": _int(ev.get("yield_poll")),
+                    "yield_poll_source": ev.get("yield_poll_source"),
+                }
         elif name == "run_stop":
             run.stopped = ts
             run.stop_reason = ev.get("reason")
@@ -601,7 +616,11 @@ def _render(runs, run_log_live_invocations: Optional[int]) -> dict:
             "non_approved_cost_share": (round(non_approved / cost, 3) if cost else None),
         }
 
-    phases_out = _phases(attempts_out)
+    caps: Dict[int, List[dict]] = {}
+    for run in runs.values():
+        for ph, cap in run.caps.items():
+            caps.setdefault(ph, []).append(cap)
+    phases_out = _phases(attempts_out, caps)
 
     cost = round(sum(a["cost_usd"] for a in attempts_out), 4)
     non_approved = round(sum(a["cost_usd"] for a in attempts_out if a["verdict"] != "APPROVED"), 4)
@@ -639,7 +658,8 @@ def _render(runs, run_log_live_invocations: Optional[int]) -> dict:
     }
 
 
-def _phases(attempts: List[dict]) -> "OrderedDict[str, dict]":
+def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None) -> "OrderedDict[str, dict]":
+    caps = caps or {}
     by_phase: Dict[int, List[dict]] = {}
     for a in attempts:
         by_phase.setdefault(a["phase"], []).append(a)
@@ -688,12 +708,14 @@ def _phases(attempts: List[dict]) -> "OrderedDict[str, dict]":
             # phase's passes actually yielded on, futility-killed passes excluded.
             "job_duration_p50": percentile(job_durations, 0.5),
             "job_duration_samples": len(job_durations),
-            # `inject_yield_hint`'s evidence (§2.2): how much of a pass's tool calls
-            # were spent waiting, plus whether a hard_cap (budget) kill ever landed
-            # on a pass that was busy waiting rather than working.
+            # §2.2's wait/work evidence: how much of a pass's tool calls were
+            # spent waiting, plus whether a hard_cap (budget) kill ever landed on
+            # a pass that was busy waiting rather than working. Measurement only.
             "wait_share_p50": percentile(wait_shares, 0.5),
             "wait_share_samples": len(wait_shares),
             "hard_cap_kills_with_wait": hard_cap_with_wait,
+            # what each run actually ran this phase under (proposer_cap, per run)
+            "caps": caps.get(ph, []),
         }
     return out
 
@@ -719,10 +741,16 @@ def count_live_invocations(run_log_path: str, pattern: str) -> int:
 # anything in verification-commands.json) or a breaker setting (MAX_ERRORS,
 # MAX_NOPROGRESS, MAX_CAPS, REPEAT_LIMIT/REPEAT_IGNORE) must never be addable here
 # without deliberately editing that test.
+#
+# §5.5 also listed `inject_yield_hint` ("prepend the yield contract to phase N's
+# prompt"). It was removed rather than wired: orchestrator.sh already appends the
+# yield contract, last and unconditionally, to every proposer and accelerator
+# prompt, so there was nothing to switch on; the only change left to make was to
+# the prompt-budget guard, and that is a prompt the critic later judges. Narrowing
+# the allowlist can never weaken the gate.
 ADJUSTABLE_KNOBS = frozenset({
     "proposer_timeout",      # §4.1 per-phase proposer cap — bound [900, 2×default], ±50%/step
     "yield_poll_interval",   # §2.1 wait_for_yield poll cadence — bound [10, 300] s
-    "inject_yield_hint",     # §2.2 "prepend the yield contract to phase N's prompt" — boolean
 })
 
 # Hard bounds per §5.5. `proposer_timeout`'s upper bound is relative to the
@@ -738,12 +766,6 @@ STEP_CAP_FRACTION = 0.5   # "≤ ±50% per step" — every numeric adjustable kn
 # and the ±50%-per-step cap (shared with every numeric knob, above) still apply.
 YIELD_POLL_WASTE_FRACTION = 0.1
 
-# `inject_yield_hint`'s threshold: a phase whose passes spend at least this share
-# of their tool calls on the WAIT_RE idioms (sleep/tail -f/poll loops) is one
-# where the agent is hand-rolling the wait Specstride can do for free (§2.2). A
-# hard_cap kill landing on a pass that was busy waiting is decisive on its own,
-# regardless of the phase's median — see `suggest_inject_yield_hint`.
-INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD = 0.5
 
 LEARN_APPLIED_SCHEMA = "specstride.learn.applied/1"
 OBSERVATION_SCHEMA = "specstride.learn.observation/1"
@@ -887,54 +909,22 @@ def suggest_yield_poll_interval(phase_stats: dict, default: int, current: Option
     }
 
 
-def suggest_inject_yield_hint(phase_stats: dict, current: Optional[bool] = None) -> dict:
-    """§2.2 + §5.5: whether to prepend the yield contract's reminder to phase N's
-    prompt — a boolean knob, so there is no numeric bound to clamp to; the
-    evidence floor (§5.5 invariant 4, applied here at pass granularity via
-    `wait_share_samples`) is the only gate. ON is suggested when either signal
-    from `_phases`' wait/work classification (§5.3) is present: a high median
-    wait-call share across this phase's passes, or at least one `hard_cap`
-    (budget) kill that landed on a pass that was busy waiting (`wait_calls > 0`)
-    rather than working — the latter alone is decisive regardless of the
-    phase's median, since a single such kill is exactly the incident (§1) this
-    knob exists to prevent a repeat of. `current` is accepted for the same call
-    shape as the other suggest_* engines but does not affect a boolean
-    decision. Returns a value of None when the phase has no evidence at all."""
-    samples = _int(phase_stats.get("wait_share_samples")) or 0
-    hard_cap_with_wait = _int(phase_stats.get("hard_cap_kills_with_wait")) or 0
-    if samples < 3:
-        return {
-            "knob": "inject_yield_hint", "samples": samples, "value": None,
-            "reason": f"fewer than 3 non-futility-killed pass samples (have {samples})",
-            "wait_share_p50": phase_stats.get("wait_share_p50"),
-            "hard_cap_kills_with_wait": hard_cap_with_wait,
-        }
-    wait_share = phase_stats.get("wait_share_p50")
-    high_wait = wait_share is not None and wait_share >= INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD
-    value = bool(hard_cap_with_wait > 0 or high_wait)
-    return {
-        "knob": "inject_yield_hint", "samples": samples, "value": value, "reason": None,
-        "wait_share_p50": wait_share, "hard_cap_kills_with_wait": hard_cap_with_wait,
-        "threshold": INJECT_YIELD_HINT_WAIT_SHARE_THRESHOLD,
-    }
 
-
-# One entry per §5.5 allowlisted knob; `advise` and `_cmd_apply` both dispatch
-# through this rather than hand-testing `knob ==` chains, so adding a fourth
+# One entry per allowlisted knob; `advise` and `_cmd_apply` both dispatch
+# through this rather than hand-testing `knob ==` chains, so adding another
 # engine later means adding one entry here (plus, deliberately, editing the
 # locked-allowlist test — see `ADJUSTABLE_KNOBS` above).
 SUGGESTION_ENGINES = {
     "proposer_timeout": lambda stats, default, current: suggest_proposer_timeout(stats, default, current),
     "yield_poll_interval": lambda stats, default, current: suggest_yield_poll_interval(stats, default, current),
-    "inject_yield_hint": lambda stats, default, current: suggest_inject_yield_hint(stats, current),
 }
 
 
 def advise(summary: dict, knob: str, phase: Optional[int], default: int,
            applied_file: Optional[str] = None) -> List[dict]:
     """One advice dict per phase (or just `phase` if given), dispatched to
-    `knob`'s entry in `SUGGESTION_ENGINES`. All three §5.5 allowlisted knobs
-    have an engine; a `knob` outside that map (never reachable through the CLI,
+    `knob`'s entry in `SUGGESTION_ENGINES`. Every allowlisted knob has an
+    engine; a `knob` outside that map (never reachable through the CLI,
     whose `--knob` choices are the allowlist itself) raises ValueError."""
     if knob not in SUGGESTION_ENGINES:
         raise ValueError(f"learn: no suggestion engine yet for knob {knob!r}")
@@ -948,8 +938,7 @@ def advise(summary: dict, knob: str, phase: Optional[int], default: int,
         ph = _int(k)
         current = effective_value(applied_file, knob, ph) if applied_file else None
         adv = SUGGESTION_ENGINES[knob](stats, default, current)
-        display_default = bool(default) if knob == "inject_yield_hint" else default
-        adv.update({"phase": ph, "current": current if current is not None else display_default,
+        adv.update({"phase": ph, "current": current if current is not None else default,
                     "runs_seen": stats.get("runs_seen", [])})
         out.append(adv)
     return out
@@ -1014,38 +1003,8 @@ def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_f
     return entry
 
 
-def apply_inject_yield_hint(summary: dict, phase: int, applied_file: str,
-                             events_file: Optional[str] = None, run_id: Optional[str] = None) -> dict:
-    """`apply_proposer_timeout`'s counterpart for the boolean `inject_yield_hint`
-    knob: no numeric `default` to clamp to (an unset knob's "previous" is simply
-    `False` — the hint is off until evidence says otherwise), same provenance
-    shape and refusal-below-the-floor behaviour otherwise."""
-    stats = summary.get("phases", {}).get(str(phase))
-    if stats is None:
-        raise ValueError(f"no telemetry for phase {phase}")
-    current = effective_value(applied_file, "inject_yield_hint", phase)
-    adv = suggest_inject_yield_hint(stats, current)
-    if adv["value"] is None:
-        raise ValueError(adv["reason"])
-    previous = current if current is not None else False
-    run_id = run_id or _new_run_id()
-    entry = {
-        "schema": LEARN_APPLIED_SCHEMA, "action": "apply", "run_id": run_id,
-        "knob": "inject_yield_hint", "phase": phase, "value": adv["value"], "previous": previous,
-        "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
-        "metric": "wait_share_p50", "applied_at": _now_iso(),
-    }
-    _append_jsonl(applied_file, entry)
-    _append_jsonl(events_file, {
-        "event": "knob_adjusted", "ts": _now_ts(), "knob": "inject_yield_hint", "phase": phase,
-        "from": previous, "to": adv["value"], "reason": "learned_from_wait_share",
-        "metric": "wait_share_p50", "samples": adv["samples"], "run_id": run_id,
-    })
-    return entry
 
-
-# Dispatch table mirroring `SUGGESTION_ENGINES`; `inject_yield_hint` has no
-# numeric `default`, so its lambda drops that argument.
+# Dispatch table mirroring `SUGGESTION_ENGINES`.
 APPLY_ENGINES = {
     "proposer_timeout": lambda summary, phase, default, applied_file, events_file, run_id:
         apply_proposer_timeout(summary, phase, default, applied_file,
@@ -1053,9 +1012,6 @@ APPLY_ENGINES = {
     "yield_poll_interval": lambda summary, phase, default, applied_file, events_file, run_id:
         apply_yield_poll_interval(summary, phase, default, applied_file,
                                    events_file=events_file, run_id=run_id),
-    "inject_yield_hint": lambda summary, phase, default, applied_file, events_file, run_id:
-        apply_inject_yield_hint(summary, phase, applied_file,
-                                 events_file=events_file, run_id=run_id),
 }
 
 
@@ -1120,10 +1076,7 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     default "suggest" mode both zero-behaviour-change (§5.5 invariant 5; the
     migration table in the design doc).
 
-    Every knob resolves to an `int`, so a shell caller never has to branch on
-    type: `inject_yield_hint` (a boolean knob) resolves to `1` (on) or `0` (off),
-    never to Python's `True`/`False` spelling — `default` for it should likewise
-    be passed as `0` or `1` by its caller."""
+    Every knob resolves to an `int`, so a shell caller never has to branch on type."""
     env = os.environ if env is None else env
     if env.get("SPECSTRIDE_LEARNING") != "apply":
         return int(default)
@@ -1132,8 +1085,6 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     value = effective_value(applied_file, knob, phase)
     if value is None:
         return int(default)
-    if knob == "inject_yield_hint":
-        return 1 if _bool(value) else 0
     if knob not in KNOB_HARD_MIN:
         # a numeric-hard-bound-less knob with no apply engine has no clamp to
         # invent — never guess one; this stays defensive dead code unless a
@@ -1145,8 +1096,8 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
 
 
 def _unit_suffix(knob: str) -> str:
-    """"s" for the two second-valued knobs, "" for the boolean `inject_yield_hint`
-    — purely cosmetic, used only in the CLI's human-readable print lines."""
+    """"s" for the second-valued knobs — purely cosmetic, used only in the CLI's
+    human-readable print lines."""
     return "s" if knob in ("proposer_timeout", "yield_poll_interval") else ""
 
 
@@ -1238,17 +1189,11 @@ def _cmd_advise(args: argparse.Namespace) -> int:
                   f"current={r['current']}{unit} → suggest {r['value']}{unit} "
                   f"(bounds={r['bounds']}, step_cap={r['step_cap']}) "
                   f"[not applied — run `specstride learn --apply` to take effect]")
-        elif r["knob"] == "yield_poll_interval":
+        else:   # yield_poll_interval
             print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s), "
                   f"job_duration p50={r.get('job_duration_p50')}s, "
                   f"current={r['current']}{unit} → suggest {r['value']}{unit} "
                   f"(bounds={r['bounds']}, step_cap={r['step_cap']}) "
-                  f"[not applied — run `specstride learn --apply` to take effect]")
-        else:   # inject_yield_hint — boolean, no numeric bounds to print
-            print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s), "
-                  f"wait_share p50={r.get('wait_share_p50')}, "
-                  f"hard_cap_kills_with_wait={r.get('hard_cap_kills_with_wait')}, "
-                  f"current={r['current']} → suggest {r['value']} "
                   f"[not applied — run `specstride learn --apply` to take effect]")
     if args.out:
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
