@@ -5,6 +5,7 @@ over the synthetic fixture lib/fixtures/learn/events.jsonl.
 Run:  python3 -m pytest lib/test_learn.py -q
 """
 import json
+import math
 import os
 import re
 import subprocess
@@ -452,7 +453,7 @@ def test_knob_allowlist_is_locked_so_a_critic_facing_knob_can_never_be_added():
 # The allowlist above locks WHAT the loop may tune; this locks WHERE learn.py can
 # act on a run. Every invocation of it from tracked shell or Python code is
 # listed, with its subcommand and how many call sites use it. The run path may
-# resolve two knobs for the proposer launch and observe a closed phase; the CLI
+# resolve two knobs for the proposer launch and observe/evaluate a closed phase; the CLI
 # dispatcher may advise/apply/revert/off. Nothing in the gate (critic.py,
 # verification_plan.py) may call it at all. Widening this set is a design
 # decision about who may act on learned state, and must be made here, visibly.
@@ -493,9 +494,11 @@ def test_learn_py_is_invoked_only_from_the_proposer_launch_path_never_the_gate()
     assert _learn_invocations(code) == Counter({
         # the run: two knobs resolved per phase before the proposer launches ...
         ("orchestrator.sh", "resolve"): 2,
-        # ... and one observation of a phase that has already closed
+        # ... and, once a phase has closed, one observation and one evaluation of it
         ("orchestrator.sh", "observe --help"): 1,
         ("orchestrator.sh", "observe"): 1,
+        ("orchestrator.sh", "evaluate --help"): 1,
+        ("orchestrator.sh", "evaluate"): 1,
         # the operator's CLI
         ("specstride", "advise"): 1,
         ("specstride", "apply"): 1,
@@ -1024,6 +1027,212 @@ def test_diagnostician_case_is_counted_per_phase():
     s = learn.summarize(events + extra)
     assert s["phases"]["5"]["diagnostician_cases"] == {"grounding": 1, "real_gap": 1, "unknown": 1}
     assert _attempt(s, "run-X", 5, 2)["diagnostician_case"] == "real_gap"
+
+
+# -- evaluate (item 4): baseline, primaries, the MDE rule, the four labels --
+def _episode(run, phase, costs, *, backend="prime:sol", shape="S1", cap=None, futile=0,
+             secs=600.0, t0=1000.0, extra=()):
+    """One run touching one phase: one billed pass per entry of `costs` (each its
+    own attempt, rejected until the last, which is approved), then `futile`
+    futility-killed passes. `cap` = (seconds, source[, arm]) stamps proposer_cap."""
+    events, ts = [], [t0]
+
+    def emit(ev):
+        ev = dict(ev)
+        ev.setdefault("ts", str(ts[0]))
+        ev["_src"] = run
+        events.append(ev)
+        ts[0] += 1
+
+    emit({"event": "run_start", "run_id": run, "backend": backend})
+    emit({"event": "phase_start", "run_id": run, "phase": phase, "title": "T", "shape": shape})
+    attempt = 0
+    for i, cost in enumerate(list(costs) + [None] * futile):
+        attempt += 1
+        emit({"event": "proposer_start", "run_id": run, "phase": phase, "attempt": attempt})
+        if cap:
+            c = {"event": "proposer_cap", "run_id": run, "phase": str(phase), "attempt": str(attempt),
+                 "seconds": str(cap[0]), "source": cap[1]}
+            if len(cap) > 2:
+                c["arm"] = cap[2]
+            emit(c)
+        emit({"event": "iter_start", "run_id": run, "iter": 1})
+        if cost is None:
+            emit({"event": "pass_killed", "run_id": run, "iter": 1, "reason": "repeat_stall", "elapsed": 99})
+            emit({"event": "agent_result", "run_id": run, "is_error": True, "subtype": "missing_terminal"})
+        else:
+            emit({"event": "agent_result", "run_id": run, "is_error": False, "cost_usd": cost,
+                  "duration_ms": int(secs * 1000)})
+            emit({"event": "evidence_written", "run_id": run})
+            emit({"event": "iter_done", "run_id": run, "iter": 1, "evidence": "present"})
+        last = i == len(costs) - 1 and not futile
+        emit({"event": "critic_start", "phase": phase, "attempt": attempt})
+        emit({"event": "verdict", "phase": phase, "attempt": attempt, "result": "APPROVED" if last else "REJECTED"})
+        emit({"event": "attempt_archived", "run_id": run, "phase": phase, "attempt": attempt})
+    for ev in extra:
+        emit(ev)
+    emit({"event": "phase_done", "run_id": run, "phase": phase, "attempt": attempt})
+    return events
+
+
+_BASE_COSTS = [1.0, 1.2, 0.9, 1.1, 1.0, 0.95]
+
+
+def _baseline_events():
+    return (_episode("base-1", 3, _BASE_COSTS[:3], secs=1200.0)
+            + _episode("base-2", 3, _BASE_COSTS[3:], secs=1300.0, t0=2000.0))
+
+
+def _applied_decision(tmp_path):
+    applied, events_file = _applied_paths(tmp_path)
+    summary = learn.summarize(_baseline_events(), phase_shapes={3: "S1"})
+    entry = learn.apply_proposer_timeout(summary, 3, 1800, applied, events_file=events_file,
+                                          run_id="learn-eval", shape="S1")
+    return applied, events_file, entry
+
+
+def _arm(entry, costs, run="app-1", t0=5000.0, **kw):
+    kw.setdefault("secs", 1250.0)
+    return _episode(run, 3, costs, cap=(entry["value"], "learned"), t0=t0, **kw)
+
+
+def test_apply_records_a_baseline_with_backend_shape_and_guardrail_counts(tmp_path):
+    _applied, _events, entry = _applied_decision(tmp_path)
+    base = entry["baseline"]
+    assert base["backend"] == "prime:sol" and base["shape"] == "S1"
+    assert base["runs"] == ["base-1", "base-2"]
+    assert [v for _, v in base["cost"]] == _BASE_COSTS and len(base["wall"]) == 6
+    g = base["guardrails"]
+    assert g["verdicts"] == 6 and g["first_verdicts"] == 2 and g["first_approved"] == 0
+    assert g["episodes"] == 2 and g["malformed"] == 0
+
+
+def test_mde_is_never_mistaken_for_a_detectable_effect_at_three_per_arm():
+    # 3 passes per arm, the corpus's within-phase sd: nothing under ≈ +218 % is visible
+    m = learn.mde(0.506, 3, 3)
+    assert 1.1 < m < 1.2
+    assert math.exp(m) - 1 >= 1.5
+    assert learn.mde(0.1, 6, 6) == learn.mde(0.5, 6, 6)            # s is floored at 0.50
+    assert learn.mde(0.5, 6, 6, mbar=3) > learn.mde(0.5, 6, 6)      # clustering widens it
+
+
+def test_evaluate_labels_a_large_cost_drop_helped(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    arm = _arm(entry, [0.1, 0.12, 0.09]) + _arm(entry, [0.11, 0.1, 0.095], run="app-2", t0=6000.0)
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["label"] == "helped" and result["cost"]["label"] == "helped"
+    assert result["wall"]["label"] == "neutral"
+    assert result["cost"]["r"] < -result["cost"]["mde"]
+    assert result["applied_runs"] == ["app-1", "app-2"]
+
+
+def test_evaluate_labels_a_small_change_neutral_with_its_mde(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    arm = (_arm(entry, [c * 0.8 for c in _BASE_COSTS[:3]])
+           + _arm(entry, [c * 0.8 for c in _BASE_COSTS[3:]], run="app-2", t0=6000.0))
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["label"] == "neutral"
+    assert abs(result["cost"]["r"]) < result["cost"]["mde"]
+    line = learn.format_evaluation(result)
+    assert "neutral" in line and "MDE ±" in line          # the MDE is printed beside the effect
+
+
+def test_evaluate_labels_a_cost_regression_regressed(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    arm = _arm(entry, [10.0, 12.0, 9.0]) + _arm(entry, [11.0, 10.0, 9.5], run="app-2", t0=6000.0)
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["label"] == "regressed"
+
+
+def test_evaluate_is_insufficient_below_six_per_arm_and_does_nothing_else(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    arm = _arm(entry, [0.1, 0.1, 0.1]) + _arm(entry, [0.1, 0.1], run="app-2", t0=6000.0)
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["label"] == "insufficient"
+    assert result["cost"]["n_a"] == 5 and result["cost"]["r"] is None
+
+
+def test_futility_killed_passes_are_excluded_from_both_arms_alike(tmp_path):
+    applied, _ev = _applied_paths(tmp_path)
+    base = (_episode("base-1", 3, _BASE_COSTS[:3], secs=1200.0, futile=2)
+            + _episode("base-2", 3, _BASE_COSTS[3:], secs=1300.0, t0=2000.0))
+    entry = learn.apply_proposer_timeout(learn.summarize(base, phase_shapes={3: "S1"}), 3, 1800, applied,
+                                          run_id="learn-fut", shape="S1")
+    assert len(entry["baseline"]["cost"]) == 6
+    arm = _arm(entry, [1.0] * 3, futile=3) + _arm(entry, [1.0] * 3, run="app-2", t0=6000.0)
+    result = learn.evaluate_decision(learn.summarize(base + arm), entry, "S1")
+    assert (result["cost"]["n_a"], result["cost"]["n_b"]) == (6, 6)
+
+
+def test_a_backend_change_resets_the_baseline(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    arm = (_arm(entry, [0.1] * 3) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0)
+           + _arm(entry, [0.1] * 3, run="app-3", t0=7000.0, backend="claude"))
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["label"] == "insufficient" and result["reset"] == "backend"
+    assert result["cost"]["n_a"] == 0
+
+
+def test_a_shape_change_resets_the_baseline(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    arm = _arm(entry, [0.1] * 3, shape="S2") + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0, shape="S2")
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S2")
+    assert result["label"] == "insufficient" and result["reset"] == "shape"
+    # and under the old shape the edited phase's runs are not its samples either
+    same = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert same["cost"]["n_a"] == 0
+
+
+def test_a_decision_without_a_baseline_is_insufficient(tmp_path):
+    decision = {"knob": "proposer_timeout", "phase": 3, "shape": "S1", "run_id": "old",
+                "value": 2400, "previous": 1800, "action": "apply"}
+    result = learn.evaluate_decision(learn.summarize(_baseline_events()), decision, "S1")
+    assert result["label"] == "insufficient" and "no baseline" in result["reason"]
+
+
+def test_counterfactuals_from_logs_are_wall_only_for_a_shorter_cap_and_absent_for_a_longer_one():
+    base = {"wall": [["r1", 1000.0], ["r2", 2000.0]] * 3, "cost": []}
+    shorter = learn.counterfactual({"knob": "proposer_timeout", "value": 900, "previous": 1800, "baseline": base})
+    assert shorter["kind"] == "shorter_cap_wall_only" and "cost" not in shorter
+    assert shorter["wall"]["r"] < 0
+    longer = learn.counterfactual({"knob": "proposer_timeout", "value": 2700, "previous": 1800, "baseline": base})
+    assert longer["kind"] == "censored" and "wall" not in longer
+
+
+def test_evaluate_entries_never_move_a_value_and_are_written_only_on_change(tmp_path):
+    applied, events_file, entry = _applied_decision(tmp_path)
+    arm = _arm(entry, [0.1] * 3) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0)
+    summary = learn.summarize(_baseline_events() + arm)
+    result = learn.evaluate_decision(summary, entry, "S1")
+    assert learn.record_evaluation(result, applied, events_file) is not None
+    assert learn.record_evaluation(learn.evaluate_decision(summary, entry, "S1"), applied, events_file) is None
+    assert learn.effective_value(applied, "proposer_timeout", 3, "S1") == entry["value"]
+    assert [e["action"] for e in learn._read_jsonl(applied)] == ["apply", "evaluate"]
+    assert learn._read_jsonl(applied)[0] == entry                    # the apply entry is untouched
+    evs = [e for e in learn._read_jsonl(events_file) if e["event"] == "knob_evaluated"]
+    assert len(evs) == 1 and evs[0]["label"] == "helped"
+    learn.revert_run("learn-eval", applied)                         # an evaluate entry is not a decision
+    assert learn.active_decisions(applied) == []
+
+
+def test_cli_evaluate_over_a_runs_tree(tmp_path):
+    applied, _ev, entry = _applied_decision(tmp_path)
+    runs = tmp_path / "runs"
+    arm = _arm(entry, [0.1] * 3) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0)
+    for run, evs in (("r1", _baseline_events()), ("r2", arm)):
+        (runs / run).mkdir(parents=True)
+        (runs / run / "events.jsonl").write_text(
+            "".join(json.dumps({k: v for k, v in e.items() if k != "_src"}) + "\n" for e in evs))
+    cmd = [sys.executable, os.path.join(HERE, "learn.py"), "evaluate", "--events", str(runs),
+           "--feature-dir", str(tmp_path), "--phase", "3", "--phase-shape", "S1"]
+    dry = subprocess.run(cmd + ["--dry-run"], capture_output=True, text=True)
+    assert dry.returncode == 0, dry.stderr
+    assert "helped" in dry.stdout and len(learn._read_jsonl(applied)) == 1
+    real = subprocess.run(cmd, capture_output=True, text=True)
+    assert real.returncode == 0 and learn._read_jsonl(applied)[-1]["action"] == "evaluate"
+    report = subprocess.run([sys.executable, os.path.join(HERE, "learn.py"), "evaluate", "--report",
+                             "--feature-dir", str(tmp_path)], capture_output=True, text=True)
+    assert "helped" in report.stdout and "MDE ±" in report.stdout
 
 
 # -- observe: the §5.4 per-phase observation document ------------------------

@@ -517,7 +517,10 @@ for o in keep[-5:]:
     need_state
     MODE="${EXTRA[0]:---show}"
     PASSTHRU=("${EXTRA[@]:1}")
-    EV="$(feature_events)"
+    # Every run of the feature, as the run's own observe/evaluate hooks read it —
+    # not only the newest run's stream (feature_events): the 3-sample floor is a
+    # cross-run count. Falls back to the newest stream for an old flat layout.
+    if [[ -d "$FEATURE_DIR/runs" ]]; then EV="$FEATURE_DIR/runs"; else EV="$(feature_events)"; fi
     args=( --feature-dir "$FEATURE_DIR" )
     # Key every phase on its current shape (lib/specstride_spec.py), so samples and
     # decisions of an edited phase are left out, exactly as a run leaves them out.
@@ -550,12 +553,12 @@ for o in keep[-5:]:
     case "$MODE" in
       --show)
         add_default
-        [[ -n "$EV" && -f "$EV" ]] && args+=( --events "$EV" )
+        [[ -n "$EV" && -e "$EV" ]] && args+=( --events "$EV" )
         exec python3 "$LIB_DIR/learn.py" advise "${args[@]}" "${shape_args[@]}" "${PASSTHRU[@]}"
         ;;
       --apply)
         add_default
-        [[ -n "$EV" && -f "$EV" ]] && args+=( --events "$EV" )
+        [[ -n "$EV" && -e "$EV" ]] && args+=( --events "$EV" )
         exec python3 "$LIB_DIR/learn.py" apply "${args[@]}" "${shape_args[@]}" "${PASSTHRU[@]}"
         ;;
       --revert)

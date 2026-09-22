@@ -51,7 +51,7 @@ in three ways:
 |---|---|---|---|
 | **Ralph loop** (inner) | one phase attempt | a fresh, stateless agent session per pass, until the phase's evidence file exists | only what is on disk |
 | **Gated phase loop** (middle) | one run | proposer → critic → approve or retry; a stuck phase gets the diagnostician and a narrowed accelerator retry | the feedback and hint files, within the run |
-| **Learning loop** (outer) | across runs | measure every pass, then suggest (and, opt-in, apply) per-phase settings | a per-phase observation and an append-only decision log |
+| **Learning loop** (outer) | across runs | measure every pass, suggest (and, opt-in, apply) per-phase settings, then evaluate each applied one against the baseline it was learned from | a per-phase observation and an append-only log of decisions, their baselines and their evaluations |
 
 The agents never improve; they stay stateless workers. What improves is how the
 loop drives them. The learning loop is deliberately narrow: it can tune two
@@ -785,6 +785,43 @@ every run that has ever touched it, the same cross-run view `summarize`'s
   `learn.py` has no `observe` subcommand, and a failure is logged to the run log
   and dropped. Measuring an approved phase may never un-approve it.
 
+### Evaluation (`learn.py evaluate`)
+
+An applied decision is checked, not trusted. `specstride learn --apply` records a
+**baseline** beside the decision: the per-pass cost and wall-clock of exactly the samples
+that produced it, the phase shape, the backend label of the most recent source run
+(`run_start.backend`, e.g. `prime:sol`; no event records a model version, so the label is
+the reset key), and the counts the guardrails need. At every `phase_done`, beside
+`observe` and under the same discipline (layer on, `evaluate --help` probe, a failure is
+logged and never costs the phase), `learn.py evaluate` reads every run of the feature and
+labels each active decision for the phase:
+
+- The sample unit is the **billed, non-futility pass**, clustered by phase episode (one
+  run's window on the phase). A futility-killed or unbilled pass counts in neither arm.
+  The applied arm is the runs whose `proposer_cap` says they ran under the decision.
+- Below **6 samples per arm** the label is `insufficient` and nothing else happens.
+- Otherwise, for log cost and log wall-clock per pass: `r` = the difference of means
+  (applied − baseline), and the minimum detectable effect is
+  `MDE = 2.80 · s · sqrt(1/n_a + 1/n_b) · sqrt(1 + (m̄ − 1)·0.5)`, with `s` the pooled sd
+  of the logs floored at 0.50 and `m̄` the passes per episode. `r ≤ −MDE` is `helped`,
+  `r ≥ +MDE` is `regressed`, anything between is `neutral`; `regressed` on either primary
+  is `regressed`. There is no significance test: at Specstride's run counts none is
+  attainable. The effect is always printed **with its MDE beside it** — `neutral` means
+  "nothing this large could be seen", and at 6 passes per arm that is roughly a factor of
+  two to three in cost.
+- A changed phase shape or backend label resets the comparison (`reset: shape|backend`,
+  label `insufficient`); a decision applied before baselines existed is `insufficient`.
+- For a *shorter* `proposer_timeout` the entry also records a wall-clock-only
+  counterfactual from the recorded pass durations (never cost: a truncated pass's cost is
+  unobserved); a *longer* one is marked `censored`, since a killed pass does not show how
+  long it would have run.
+
+Each result that differs from the last one for the same decision appends an `evaluate`
+entry to `applied.json` (the apply entry is never mutated, and replay ignores evaluate
+entries) and emits `knob_evaluated`. `learn.py evaluate --dry-run` prints without writing;
+`--report` prints the last recorded evaluation of every active decision. Design:
+`roadmap/research/self-improvement-loops/05-evaluate-design.md`.
+
 ## The on-disk contract
 
 `SPECS.md` (or a Spec Kit `tasks.md`) is the one input you write; it can live
@@ -813,6 +850,8 @@ once on the next run).
 |---|---|---|
 | `.specstride/features/<slug>/gates/` (+ `gates/proofs/`) | per-feature | all the phase-control files above — where to look for what the loop produced |
 | `.specstride/features/<slug>/runs/<run-id>/{run.log,events.jsonl}` | per-feature | each run isolated |
+| `.specstride/features/<slug>/learning/phase-<N>.json` | per-feature | the phase's latest observation ([Learning](#learning-self-tuning-knobs)) |
+| `.specstride/features/<slug>/learning/applied.json` | per-feature | the append-only decision log: `apply` entries (value, shape, provenance, `baseline`), `revert` entries, and `evaluate` entries (label, `r`/`MDE`/`n` per primary). Design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5 and `05-evaluate-design.md` |
 | `.specstride/features/<slug>/{verdicts,attempts,debug}/` | per-feature | critic transcripts, archived rejected attempts (`attempts/phase<N>/attempt<M>/`), debug dumps |
 | `.specstride/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/` | per-feature | one reconstructable proposer/critic invocation: `metadata.json` (contract `specstride-invocation/v1`) + a terminal `result.json` (`specstride-invocation-result/v1`), and — **only when raw capture is explicitly enabled** — `prompt.txt` / `provider.jsonl` / `events.jsonl` / `response.txt`. Every field is routed through `lib/observability_policy.py` first: secrets redacted, thinking dropped, oversized payloads truncated with `truncated=true`. Raw content expires after 7 days; redacted metadata + terminal result are kept 30 (the summary always outlives the raw it describes) |
 | `.specstride/features/<slug>/PROGRESS.md`, `last-run.conf` | per-feature | proposer notes; that feature's resume config |
@@ -841,6 +880,7 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved. `phase_start` carries `shape`, the phase-shape digest learned state is keyed on |
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
+| `knob_evaluated` | learn.py (at `phase_done`) | an active decision was labelled — `knob`, `phase`, `label` (`helped` \| `neutral` \| `regressed` \| `insufficient`), `cost_r`/`cost_mde`, `wall_r`/`wall_mde`, `n_applied`/`n_baseline`, `reset`, `evaluates_run_id`. Emitted only when the result changed |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. An unsourced budget is what makes budget archaeology expensive six hours in |
 | `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `SPECSTRIDE_PROPOSER_MAX_CAPS`. A budget signal, not an error |
