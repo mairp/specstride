@@ -57,17 +57,11 @@ COMPAT_LINES = {
         r"^roadmap/prompts/rename-wiggum-to-specstride\.md$",   # the rename, now ignored
         r"^# Legacy state dir \(Specstride was formerly Wiggum\)",
     ],
-    "README.md": [
-        r"\(formerly Wiggum\)\. From specs to tested code\.",
-    ],
     "telemetry/docker-compose.yml": [
         r"^name: wiggum-telemetry$",               # compose project name keys the volumes
         r'"\$\{SPECSTRIDE_[A-Z_]+_PORT:-\$\{WIGGUM_[A-Z_]+_PORT:-\d+\}\}:\d+"',
     ],
 }
-
-# README section that documents the migration (lines until the next "## ").
-README_MIGRATION_HEADING = "## Migrating from Wiggum"
 
 # Allowed anywhere: the character the Ralph loop is named after, and the path of
 # a historical design doc that living files cite.
@@ -87,23 +81,12 @@ def is_historical(path):
     return any(fnmatch.fnmatch(path, pat) for pat in HISTORICAL)
 
 
-def readme_migration_lines(lines):
-    allowed, inside = set(), False
-    for i, line in enumerate(lines):
-        if line.startswith("## "):
-            inside = line.strip() == README_MIGRATION_HEADING
-        if inside:
-            allowed.add(i)
-    return allowed
-
-
 def offending_lines(path, text):
     lines = text.splitlines()
     per_file = [re.compile(p) for p in COMPAT_LINES.get(path, [])]
-    section = readme_migration_lines(lines) if path == "README.md" else set()
     bad = []
     for i, line in enumerate(lines):
-        if not OLD.search(line) or i in section:
+        if not OLD.search(line):
             continue
         rest = line
         for rx in GLOBAL_OK:
@@ -149,8 +132,6 @@ def test_every_allowlist_entry_still_matches_something():
         text = open(os.path.join(ROOT, path)).read().splitlines()
         for p in patterns:
             assert any(re.search(p, line) for line in text), (path, p)
-    readme = open(os.path.join(ROOT, "README.md")).read()
-    assert README_MIGRATION_HEADING + "\n" in readme
 
 
 @pytest.mark.parametrize("line,ok", [
