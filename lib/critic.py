@@ -1661,6 +1661,21 @@ Write your diagnosis now. Start with "CASE: GROUNDING" or "CASE: REAL-GAP" on th
 first line."""
 
 
+_DIAGNOSTICIAN_CASE = re.compile(r"^[\s*_#>`]*CASE\s*:\s*(GROUNDING|REAL[-_ ]GAP)\b", re.I)
+
+
+def diagnostician_case(reply):
+    """The CASE the diagnostician declared on its first line (its prompt asks for
+    "CASE: GROUNDING" or "CASE: REAL-GAP"), as `grounding`, `real_gap` or
+    `unknown`. Recorded on diagnostician_done as a read-only metric; nothing in
+    the gate reads it."""
+    first = next((line for line in (reply or "").splitlines() if line.strip()), "")
+    m = _DIAGNOSTICIAN_CASE.match(first)
+    if not m:
+        return "unknown"
+    return "grounding" if m.group(1).upper() == "GROUNDING" else "real_gap"
+
+
 def run_diagnostician(args, workdir, n, feature_dir, gates_dir, gates_rel, section,
                       evidence, events_path):
     """Stuck-loop mitigation. Triggered by orchestrator.sh the first time a phase's
@@ -1743,7 +1758,7 @@ def run_diagnostician(args, workdir, n, feature_dir, gates_dir, gates_rel, secti
         warn("could not write hint %s: %s" % (hint_path, e))
         return
     emit(events_path, "diagnostician_done", phase=n, attempt=args.attempt,
-         bytes=len(reply or ""))
+         bytes=len(reply or ""), case=diagnostician_case(reply))
     print("HINT-WRITTEN")
 
 
