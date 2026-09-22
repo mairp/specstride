@@ -97,7 +97,8 @@ Output schema (``specstride.learn.summary/2``)
 ``/2`` adds ``phases[*].caps`` (one entry per run from ``proposer_cap``) to ``/1``;
 ``/3`` adds ``attempts[*].shape`` and ``phases[*].shape``/``other_shape_attempts``;
 ``/4`` adds ``attempts[*].diagnostician_case`` and ``phases[*].diagnostician_cases``;
-``/5`` adds ``phases[*].episodes`` and ``phases[*].pass_samples`` (item 4's primaries).
+``/5`` adds ``phases[*].episodes`` and ``phases[*].pass_samples`` (item 4's primaries);
+``/6`` adds ``attempts[*].critic_prompt_bytes`` (with ``--verdicts-dir``).
 {
   "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
@@ -118,6 +119,7 @@ Output schema (``specstride.learn.summary/2``)
       "sleep_sec_declared", "work_sec_estimate",
       "kills_by_reason", "outcomes", "evidence_written",
       "grounding_gap_paths", "critic_sec", "diagnostician_case",
+      "critic_prompt_bytes",                          # with --verdicts-dir
       "gate_duration_ms", "gate_live_share",          # with --verification-dir
       "passes_detail": [ { "iter", "outcome", "kill_reason", "kill_class",
                            "elapsed_sec", "cost_usd", "billed", "tool_calls",
@@ -159,7 +161,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
-SCHEMA = "specstride.learn.summary/5"
+SCHEMA = "specstride.learn.summary/6"
 
 # The wait/poll classifier of 03-002-run-telemetry.md §2, applied to Bash targets.
 WAIT_RE = re.compile(
@@ -351,6 +353,7 @@ class _Attempt:
         self.gate_duration_ms: Optional[int] = None
         self.gate_live_share: Optional[float] = None
         self.diagnostician_case: Optional[str] = None
+        self.critic_prompt_bytes: Optional[int] = None   # from --verdicts-dir
 
     def key(self) -> Tuple[str, int, int]:
         return (self.run, self.phase, self.attempt)
@@ -401,6 +404,7 @@ class _Attempt:
             "gate_duration_ms": self.gate_duration_ms,
             "gate_live_share": self.gate_live_share,
             "diagnostician_case": self.diagnostician_case,
+            "critic_prompt_bytes": self.critic_prompt_bytes,
             "passes_detail": passes,
         }
 
@@ -437,7 +441,8 @@ class _Run:
 
 def summarize(events: List[dict], verification_dir: Optional[str] = None,
               run_log_live_invocations: Optional[int] = None,
-              phase_shapes: Optional[Dict[int, str]] = None) -> dict:
+              phase_shapes: Optional[Dict[int, str]] = None,
+              verdicts_dir: Optional[str] = None) -> dict:
     """The pure summariser: a list of parsed events in → the summary dict out.
 
     ``phase_shapes`` ({phase: shape digest}) restricts a phase's entry in
@@ -570,6 +575,8 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
 
     if verification_dir:
         _attach_gate_figures(runs, verification_dir)
+    if verdicts_dir:
+        _attach_critic_prompt_sizes(runs, verdicts_dir)
 
     return _render(runs, run_log_live_invocations, phase_shapes)
 
@@ -611,6 +618,55 @@ def _attach_gate_figures(runs, verification_dir: str) -> None:
             a = run.attempts.get((run.run_id, ph, at))
             if a is not None:
                 a.gate_duration_ms, a.gate_live_share = total, share
+
+
+_TRANSCRIPT = re.compile(r"^phase(\d+)\.attempt(\d+)\.(\d{8}-\d{6})\.txt$")
+_PROMPT_START = "═══════════ PROMPT ═══════════\n"
+_REPLY_START = "\n\n═══════════ REPLY ═══════════\n"
+TRANSCRIPT_MATCH_SEC = 900   # a transcript belongs to the attempt whose verdict is this close
+
+
+def critic_prompt_bytes(path: str) -> Optional[int]:
+    """Size of the PROMPT section of one verdict transcript (critic.py's
+    _write_transcript format): the critic-input-size guardrail, read-only. No
+    event carries it, and adding one would be a second change to critic.py."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    start = text.find(_PROMPT_START)
+    if start < 0:
+        return None
+    start += len(_PROMPT_START)
+    end = text.find(_REPLY_START, start)
+    return len(text[start:end if end >= 0 else len(text)].encode("utf-8"))
+
+
+def _attach_critic_prompt_sizes(runs, verdicts_dir: str) -> None:
+    """Transcripts are named phase<N>.attempt<A>.<local ts>; attempt numbers reset
+    per run, so each is matched to the (phase, attempt) whose verdict is nearest
+    in time, within TRANSCRIPT_MATCH_SEC."""
+    try:
+        names = os.listdir(verdicts_dir)
+    except OSError:
+        return
+    for name in names:
+        m = _TRANSCRIPT.match(name)
+        if not m:
+            continue
+        ph, at = int(m.group(1)), int(m.group(2))
+        try:
+            when = time.mktime(time.strptime(m.group(3), "%Y%m%d-%H%M%S"))
+        except ValueError:
+            continue
+        best, gap = None, TRANSCRIPT_MATCH_SEC
+        for run in runs.values():
+            a = run.attempts.get((run.run_id, ph, at))
+            if a is not None and a.end is not None and abs(a.end - when) <= gap:
+                best, gap = a, abs(a.end - when)
+        if best is not None:
+            best.critic_prompt_bytes = critic_prompt_bytes(os.path.join(verdicts_dir, name))
 
 
 def _render(runs, run_log_live_invocations: Optional[int],
@@ -1071,7 +1127,7 @@ def advise(summary: dict, knob: str, phase: Optional[int], default: int,
 
 def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file: str,
                             events_file: Optional[str] = None, run_id: Optional[str] = None,
-                            shape: Optional[str] = None) -> dict:
+                            shape: Optional[str] = None, force: bool = False) -> dict:
     """Compute the suggestion for `phase` and, if it clears the evidence floor,
     append one decision to `applied_file` and one `knob_adjusted` event to
     `events_file`. Raises ValueError (never writes) when the floor isn't met or
@@ -1084,14 +1140,25 @@ def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file
     if adv["value"] is None:
         raise ValueError(adv["reason"])
     previous = current if current is not None else default
+    baseline = record_baseline(summary, phase, shape, stats.get("runs_seen", []))
+    blocked = quarantine_block(applied_file, summary, "proposer_timeout", phase, shape, baseline["backend"], adv["value"])
+    if blocked is not None and not force:
+        raise QuarantinedError(
+            f"{adv['value']} is within ±{int(QUARANTINE_BAND * 100)}% of {blocked['quarantined_value']}, "
+            f"auto-reverted by {blocked['run_id']} (reverting {blocked['reverts_run_id']}, guardrail "
+            f"{','.join(blocked.get('guardrail') or [])}); {blocked['fresh_samples']} of {QUARANTINE_SAMPLES} new "
+            f"samples since — pass --force to apply anyway")
     run_id = run_id or _new_run_id()
     entry = {
         "schema": LEARN_APPLIED_SCHEMA, "action": "apply", "run_id": run_id,
         "knob": "proposer_timeout", "phase": phase, "shape": shape, "value": adv["value"], "previous": previous,
         "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
         "metric": "work_sec_p90", "applied_at": _now_iso(),
-        "baseline": record_baseline(summary, phase, shape, stats.get("runs_seen", [])),
+        "baseline": baseline,
     }
+    if blocked is not None:
+        entry["force"] = True
+        entry["forced_over"] = blocked["run_id"]
     _append_jsonl(applied_file, entry)
     _append_jsonl(events_file, {
         "event": "knob_adjusted", "ts": _now_ts(), "knob": "proposer_timeout", "phase": phase,
@@ -1103,7 +1170,7 @@ def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file
 
 def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_file: str,
                                events_file: Optional[str] = None, run_id: Optional[str] = None,
-                               shape: Optional[str] = None) -> dict:
+                               shape: Optional[str] = None, force: bool = False) -> dict:
     """`apply_proposer_timeout`'s counterpart for `yield_poll_interval`: same
     provenance shape, same append-only `applied_file`/`events_file`, same
     ValueError-and-write-nothing refusal below the evidence floor."""
@@ -1115,14 +1182,25 @@ def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_f
     if adv["value"] is None:
         raise ValueError(adv["reason"])
     previous = current if current is not None else default
+    baseline = record_baseline(summary, phase, shape, stats.get("runs_seen", []))
+    blocked = quarantine_block(applied_file, summary, "yield_poll_interval", phase, shape, baseline["backend"], adv["value"])
+    if blocked is not None and not force:
+        raise QuarantinedError(
+            f"{adv['value']} is within ±{int(QUARANTINE_BAND * 100)}% of {blocked['quarantined_value']}, "
+            f"auto-reverted by {blocked['run_id']} (reverting {blocked['reverts_run_id']}, guardrail "
+            f"{','.join(blocked.get('guardrail') or [])}); {blocked['fresh_samples']} of {QUARANTINE_SAMPLES} new "
+            f"samples since — pass --force to apply anyway")
     run_id = run_id or _new_run_id()
     entry = {
         "schema": LEARN_APPLIED_SCHEMA, "action": "apply", "run_id": run_id,
         "knob": "yield_poll_interval", "phase": phase, "shape": shape, "value": adv["value"], "previous": previous,
         "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
         "metric": "job_duration_p50", "applied_at": _now_iso(),
-        "baseline": record_baseline(summary, phase, shape, stats.get("runs_seen", [])),
+        "baseline": baseline,
     }
+    if blocked is not None:
+        entry["force"] = True
+        entry["forced_over"] = blocked["run_id"]
     _append_jsonl(applied_file, entry)
     _append_jsonl(events_file, {
         "event": "knob_adjusted", "ts": _now_ts(), "knob": "yield_poll_interval", "phase": phase,
@@ -1135,16 +1213,17 @@ def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_f
 
 # Dispatch table mirroring `SUGGESTION_ENGINES`.
 APPLY_ENGINES = {
-    "proposer_timeout": lambda summary, phase, default, applied_file, events_file, run_id, shape:
+    "proposer_timeout": lambda summary, phase, default, applied_file, events_file, run_id, shape, force:
         apply_proposer_timeout(summary, phase, default, applied_file,
-                                events_file=events_file, run_id=run_id, shape=shape),
-    "yield_poll_interval": lambda summary, phase, default, applied_file, events_file, run_id, shape:
+                                events_file=events_file, run_id=run_id, shape=shape, force=force),
+    "yield_poll_interval": lambda summary, phase, default, applied_file, events_file, run_id, shape, force:
         apply_yield_poll_interval(summary, phase, default, applied_file,
-                                   events_file=events_file, run_id=run_id, shape=shape),
+                                   events_file=events_file, run_id=run_id, shape=shape, force=force),
 }
 
 
-def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None) -> dict:
+def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None,
+               extra: Optional[dict] = None, reason: str = "revert") -> dict:
     """§5.5 invariant 3: undo exactly one prior `apply`, restoring the value that
     was current before it. Raises ValueError if `run_id` names no apply entry, or
     if it is not the *currently active* decision for its (knob, phase) — reverting
@@ -1171,10 +1250,11 @@ def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None
         "reverts_run_id": run_id, "knob": orig["knob"], "phase": orig["phase"], "shape": _entry_shape(orig),
         "value": orig["previous"], "previous": orig["value"], "applied_at": _now_iso(),
     }
+    entry.update(extra or {})
     _append_jsonl(applied_file, entry)
     _append_jsonl(events_file, {
         "event": "knob_adjusted", "ts": _now_ts(), "knob": orig["knob"], "phase": orig["phase"],
-        "from": orig["value"], "to": orig["previous"], "reason": "revert",
+        "from": orig["value"], "to": orig["previous"], "reason": reason,
         "samples": None, "metric": None, "run_id": entry["run_id"], "reverts_run_id": run_id,
     })
     return entry
@@ -1431,9 +1511,163 @@ def evaluate_decision(summary: dict, decision: dict, current_shape: Optional[str
     cost_a, wall_a = _samples(atts)
     cost = compare_arms(cost_a, [tuple(x) for x in base.get("cost") or []], "cost")
     wall = compare_arms(wall_a, [tuple(x) for x in base.get("wall") or []], "wall")
-    result.update(cost=cost, wall=wall, label=_combine(cost, wall),
-                  applied_guardrails=guardrail_counts(atts, runs_meta, phase))
+    applied_counts = guardrail_counts(atts, runs_meta, phase)
+    result.update(cost=cost, wall=wall, label=_combine(cost, wall), applied_guardrails=applied_counts,
+                  guardrails=evaluate_guardrails(base.get("guardrails") or guardrail_counts([], {}, phase),
+                                                 applied_counts))
     return result
+
+
+# ── guardrails (item 4b; 05-evaluate-design.md §2.6) ──────────────────────────
+# A guardrail vetoes a decision even when a primary improved, and a breach reverts
+# it. Rate guardrails use an exact one-sided binomial tail against the baseline
+# rate; below its minimum n a guardrail is "unknown", never "ok".
+GUARD_P = 0.01
+GUARD_MIN_N = 10          # rate guardrails: applied-arm trials
+GUARD_MIN_SIZE_N = 6      # critic input size: samples per arm
+QUARANTINE_BAND = 0.10    # ±10 % of a quarantined value
+QUARANTINE_SAMPLES = 6    # new non-futility samples before a quarantined value may return
+
+
+def binom_upper(k: int, n: int, p: float) -> float:
+    """P(X ≥ k) for X ~ Binomial(n, p), exactly (math.comb)."""
+    return min(1.0, sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(k, n + 1)))
+
+
+def binom_lower(k: int, n: int, p: float) -> float:
+    """P(X ≤ k) for X ~ Binomial(n, p), exactly."""
+    return min(1.0, sum(math.comb(n, i) * p ** i * (1 - p) ** (n - i) for i in range(0, k + 1)))
+
+
+def _base_rate(k: int, n: int) -> float:
+    # shrunk by half a trial, so a baseline of 0/6 is not a certainty that turns
+    # the first applied-arm event into p = 0
+    return (k + 0.5) / (n + 1.0)
+
+
+def _rate_guard(k_a: int, n_a: int, k_b: int, n_b: int, both: bool = False) -> dict:
+    out = {"k_applied": k_a, "n_applied": n_a, "k_baseline": k_b, "n_baseline": n_b, "p": None}
+    if n_a < GUARD_MIN_N or n_b < 1:
+        return dict(out, state="unknown")
+    rate = _base_rate(k_b, n_b)
+    p_up = binom_upper(k_a, n_a, rate)
+    p = min(p_up, binom_lower(k_a, n_a, rate)) if both else p_up
+    return dict(out, p=round(p, 6), state="breach" if p < GUARD_P else "ok")
+
+
+def _size_guard(sizes_a: List[int], sizes_b: List[int]) -> dict:
+    """Exact rank test: K = how many applied-arm prompts are larger than every
+    baseline prompt; P(K ≥ k) = C(n_a,k)/C(n_a+n_b,k) under exchangeability (K ≥ k
+    exactly when the k largest prompts of both arms pooled are all applied)."""
+    n_a, n_b = len(sizes_a), len(sizes_b)
+    out = {"n_applied": n_a, "n_baseline": n_b, "p": None}
+    if n_a < GUARD_MIN_SIZE_N or n_b < GUARD_MIN_SIZE_N:
+        return dict(out, state="unknown")
+    top = max(sizes_b)
+    k = sum(1 for v in sizes_a if v > top)
+    p = math.comb(n_a, k) / math.comb(n_a + n_b, k) if k else 1.0
+    return dict(out, k=k, p=round(p, 6), state="breach" if p < GUARD_P else "ok")
+
+
+def evaluate_guardrails(base: dict, applied: dict) -> "OrderedDict[str, dict]":
+    """One state per guardrail: ok | breach | unknown. `base`/`applied` are
+    `guardrail_counts` for the two arms."""
+    g: "OrderedDict[str, dict]" = OrderedDict()
+    g["grounding_gap_rate"] = _rate_guard(applied["grounding_gap"], applied["verdicts"],
+                                          base["grounding_gap"], base["verdicts"])
+    g["malformed_rate"] = _rate_guard(applied["malformed"], applied["verdicts"],
+                                      base["malformed"], base["verdicts"])
+    if applied["attempts"] == 0:
+        g["verification"] = {"state": "unknown", "applied_failed": 0,
+                             "baseline_failed": base["verification_failed"]}
+    else:
+        # any failure where the baseline had none is a breach, at any n
+        breach = applied["verification_failed"] > 0 and base["verification_failed"] == 0
+        g["verification"] = {"state": "breach" if breach else "ok",
+                             "applied_failed": applied["verification_failed"],
+                             "baseline_failed": base["verification_failed"]}
+    g["diagnostician_grounding_share"] = _rate_guard(applied["diagnostician_grounding"],
+                                                     applied["diagnostician_cases"],
+                                                     base["diagnostician_grounding"],
+                                                     base["diagnostician_cases"])
+    g["critic_input_size"] = _size_guard(applied.get("critic_prompt_bytes") or [],
+                                         base.get("critic_prompt_bytes") or [])
+    # a PROXY: no event records human arbitration, only the stops that hand a phase back
+    g["arbitration_proxy"] = _rate_guard(applied["arbitration"], applied["episodes"],
+                                         base["arbitration"], base["episodes"])
+    # an alarm in BOTH directions, never a reward and never a label term
+    g["first_attempt_approval"] = _rate_guard(applied["first_approved"], applied["first_verdicts"],
+                                              base["first_approved"], base["first_verdicts"], both=True)
+    return g
+
+
+def breaches(result: dict) -> List[str]:
+    return [name for name, g in (result.get("guardrails") or {}).items() if g.get("state") == "breach"]
+
+
+def act_on_evaluation(result: dict, applied_file: str, events_file: Optional[str]) -> Optional[dict]:
+    """Record the evaluation and, on a guardrail breach, revert the decision: the
+    only automatic write to a decision the loop may make, since a revert only ever
+    moves a knob back toward its default. The log is re-read first. If a manual
+    apply overtook the evaluated decision the revert is skipped, recorded as
+    skipped_superseded, and never retried against the new top of the stack; after
+    `--off` or a manual revert there is nothing to do."""
+    names = breaches(result)
+    if not names:
+        return record_evaluation(result, applied_file, events_file)
+    decision_id = result["evaluates_run_id"]
+    decision = next((d for d in active_decisions(applied_file, result["phase"])
+                     if d["run_id"] == decision_id), None)
+    if decision is None:
+        latest = None
+        for e in _decisions(applied_file, result["knob"], result["phase"], result.get("shape")):
+            latest = e
+        if latest is None or latest.get("action") == "revert":
+            return None                            # --off or a manual revert: a silent no-op
+        return record_evaluation(dict(result, action_taken="skipped_superseded"), applied_file, events_file)
+    entry = record_evaluation(dict(result, action_taken="auto_reverted"), applied_file, events_file)
+    revert = revert_run(decision_id, applied_file, events_file, extra={
+        "auto": True, "guardrail": names, "evaluated_from": entry["run_id"] if entry else None,
+        "quarantined_value": decision.get("value"), "backend": result.get("backend"),
+        "reverted_ts": time.time(),
+    }, reason="auto_revert")
+    _append_jsonl(events_file, {
+        "event": "knob_auto_reverted", "ts": _now_ts(), "knob": result["knob"], "phase": result["phase"],
+        "guardrail": ",".join(names), "from": decision.get("value"), "to": decision.get("previous"),
+        "run_id": revert["run_id"], "reverts_run_id": decision_id,
+    })
+    return revert
+
+
+def quarantine_block(applied_file: Optional[str], summary: dict, knob: str, phase: int,
+                     shape: Optional[str], backend: Optional[str], value) -> Optional[dict]:
+    """The auto-revert that quarantines `value` for (knob, phase, shape, backend),
+    or None. A value within ±10 % of a quarantined one stays refused until
+    QUARANTINE_SAMPLES new non-futility samples of the phase accrued after the
+    revert; a shape or backend change is a different key, so it clears."""
+    v = _float(value)
+    if v is None:
+        return None
+    runs_meta = summary.get("runs", {})
+    for e in reversed(_read_jsonl(applied_file)):
+        if not (e.get("action") == "revert" and e.get("auto") and e.get("knob") == knob
+                and _int(e.get("phase")) == phase and _entry_shape(e) == (shape or None)
+                and e.get("backend") == backend):
+            continue
+        q = _float(e.get("quarantined_value"))
+        if q is None or abs(v - q) > QUARANTINE_BAND * abs(q):
+            continue
+        after = _float(e.get("reverted_ts")) or 0.0
+        fresh = [r for r, meta in runs_meta.items()
+                 if (meta.get("started") or 0) > after and meta.get("backend") == backend]
+        cost, _ = _samples(_phase_attempts(summary, phase, shape, fresh))
+        if len(cost) < QUARANTINE_SAMPLES:
+            return dict(e, fresh_samples=len(cost))
+    return None
+
+
+class QuarantinedError(ValueError):
+    pass
 
 
 def active_decisions(applied_file: Optional[str], phase: Optional[int] = None) -> List[dict]:
@@ -1494,7 +1728,17 @@ def format_evaluation(result: dict) -> str:
             f"{result.get('value')}{unit} [{result['evaluates_run_id']}]: {result['label']}")
     if result.get("reset"):
         head += f" (baseline reset: {result['reset']})"
+    elif result.get("reason"):
+        head += f" ({result['reason']})"
     tail = f" — {_fmt_primary('cost', result['cost'])}; {_fmt_primary('wall', result['wall'])}"
+    guards = result.get("guardrails") or {}
+    if guards:
+        bad = [n for n, g in guards.items() if g.get("state") == "breach"]
+        unknown = sum(1 for g in guards.values() if g.get("state") == "unknown")
+        tail += (f"; guardrails: BREACH {','.join(bad)}" if bad
+                 else f"; guardrails ok ({unknown} unknown below their minimum n)")
+    if result.get("action_taken"):
+        tail += f" [{result['action_taken']}]"
     return head + tail
 
 
@@ -1514,7 +1758,8 @@ def _cmd_summarize(args: argparse.Namespace) -> int:
     for f in files:
         events.extend(read_events(f))
     live = count_live_invocations(args.run_log, args.live_regex) if args.run_log else None
-    summary = summarize(events, verification_dir=args.verification_dir, run_log_live_invocations=live)
+    summary = summarize(events, verification_dir=args.verification_dir, run_log_live_invocations=live,
+                        verdicts_dir=args.verdicts_dir)
     summary["inputs"] = files
     text = json.dumps(summary, indent=2 if args.pretty else None, sort_keys=False)
     if args.out:
@@ -1586,6 +1831,17 @@ def _restrict(summary: dict, shapes: Dict[int, str]) -> dict:
     return out
 
 
+def _verdicts_dir(args: argparse.Namespace) -> Optional[str]:
+    """--verdicts-dir, else <feature-dir>/verdicts when it exists (critic input size)."""
+    explicit = getattr(args, "verdicts_dir", None)
+    if explicit:
+        return explicit
+    feature_dir = getattr(args, "feature_dir", None)
+    if feature_dir and os.path.isdir(os.path.join(feature_dir, "verdicts")):
+        return os.path.join(feature_dir, "verdicts")
+    return None
+
+
 def _load_summary(args: argparse.Namespace) -> Optional[dict]:
     """advise/apply accept either --summary (a `summarize --out` document, so a
     caller can decouple measuring from advising) or --events (computed fresh);
@@ -1603,7 +1859,7 @@ def _load_summary(args: argparse.Namespace) -> Optional[dict]:
         events: List[dict] = []
         for f in files:
             events.extend(read_events(f))
-        return summarize(events, phase_shapes=shapes or None)
+        return summarize(events, phase_shapes=shapes or None, verdicts_dir=_verdicts_dir(args))
     print("learn: one of --events or --summary is required", file=sys.stderr)
     return None
 
@@ -1628,6 +1884,15 @@ def _cmd_advise(args: argparse.Namespace) -> int:
         notice = unshaped_notice(applied_file, r["knob"], r["phase"], r.get("shape"))
         if notice:
             print(notice, file=sys.stderr)
+        blocked = (quarantine_block(applied_file, summary, r["knob"], r["phase"], r.get("shape"),
+                                    record_baseline(summary, r["phase"], r.get("shape"),
+                                                    r.get("runs_seen") or [])["backend"], r["value"])
+                   if applied_file and r["value"] is not None else None)
+        if blocked is not None:
+            print(f"learn: phase {r['phase']} {r['knob']}: suggestion {r['value']} is QUARANTINED — "
+                  f"auto-reverted by {blocked['run_id']} ({','.join(blocked.get('guardrail') or [])}); "
+                  f"{blocked['fresh_samples']}/{QUARANTINE_SAMPLES} new samples since; --apply refuses "
+                  f"without --force")
         if r["value"] is None:
             print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s) — {r['reason']}; "
                   f"no suggestion (need {'>=3'})")
@@ -1671,7 +1936,10 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         print(notice, file=sys.stderr)
     try:
         entry = APPLY_ENGINES[args.knob](summary, args.phase, args.default, applied_file,
-                                          events_file, args.run_id, shape)
+                                          events_file, args.run_id, shape, args.force)
+    except QuarantinedError as e:
+        print(f"learn: refusing to apply — quarantined: {e}", file=sys.stderr)
+        return 4
     except ValueError as e:
         print(f"learn: refusing to apply — {e}", file=sys.stderr)
         return 3
@@ -1778,7 +2046,7 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
     events: List[dict] = []
     for f in files:
         events.extend(read_events(f))
-    summary = summarize(events)
+    summary = summarize(events, verdicts_dir=_verdicts_dir(args))
     shapes = _phase_shapes(args)
     for d in decisions:
         ph = _int(d["phase"])
@@ -1786,7 +2054,10 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
         result = evaluate_decision(summary, d, current)
         print(format_evaluation(result))
         if not args.dry_run:
-            record_evaluation(result, applied_file, events_file)
+            reverted = act_on_evaluation(result, applied_file, events_file)
+            if reverted is not None and reverted.get("auto"):
+                print(f"learn: auto-reverted {d['run_id']} — guardrail {','.join(reverted['guardrail'])}; "
+                      f"{d['knob']}[{ph}] back to {reverted['value']}{_unit_suffix(d['knob'])}")
     return 0
 
 
@@ -1800,6 +2071,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     s.add_argument("--live-regex", default=r"runners/live",
                    help="what a proposer 'live' invocation looks like in run.log (default: runners/live)")
     s.add_argument("--verification-dir", help="a run's verification/ dir, for gate durations")
+    s.add_argument("--verdicts-dir", help="a feature's verdicts/ dir, for the critic prompt size per attempt")
     s.add_argument("--out", help="write JSON here (default: stdout)")
     s.add_argument("--pretty", action="store_true")
     s.set_defaults(func=_cmd_summarize)
@@ -1809,6 +2081,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                               "samples and decisions of another shape are left out")
         p.add_argument("--specs", help="the spec, to key every phase on its current shape")
         p.add_argument("--spec-format", help="native|speckit-tasks|openspec-change (else auto-detect)")
+        p.add_argument("--verdicts-dir", help="the feature's verdicts/ dir (default <feature-dir>/verdicts)")
 
     def _events_or_summary(p):
         p.add_argument("--events", action="append", help="events.jsonl, a run dir, or a dir of run dirs (repeatable)")
@@ -1835,6 +2108,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap_.add_argument("--applied-file", help="<feature-dir>/learning/applied.json by default")
     ap_.add_argument("--events-file", help="<feature-dir>/events.jsonl by default; the knob_adjusted event goes here")
     ap_.add_argument("--run-id", help="override the generated run id (mainly for tests)")
+    ap_.add_argument("--force", action="store_true",
+                     help="apply a value an auto-revert quarantined anyway (recorded as force: true)")
     _shape_args(ap_)
     ap_.set_defaults(func=_cmd_apply)
 
