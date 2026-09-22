@@ -658,6 +658,10 @@ write_last_run_conf() {
     # gates on, with nothing in the log saying so.
     printf 'LONG_JOB_PHASE=%q\n'   "$LONG_JOB_PHASE"
     printf 'LONG_JOB_CMD=%q\n'     "$LONG_JOB_CMD"
+    # Env-only (no flag), so nothing else carries it across a resume: a run
+    # launched with checkpoints off (a reverse run reads a repo it must never
+    # commit into) would silently get them back.
+    printf 'GIT_COMMITS=%q\n'      "$GIT_COMMITS"
     printf 'ORCHESTRATOR=%q\n'     "$SCRIPT_DIR/orchestrator.sh"
   } > "$dest" 2>/dev/null || true
 }

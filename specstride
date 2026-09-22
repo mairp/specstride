@@ -502,6 +502,9 @@ for o in keep[-5:]:
     # phase's evidence depends on.
     [[ -n "${LONG_JOB_PHASE:-}" && -n "${LONG_JOB_CMD:-}" ]] && \
       args+=( --long-job-phase "$LONG_JOB_PHASE" --long-job-cmd "$LONG_JOB_CMD" )
+    # Git checkpoints are env-only, so the saved value travels as the env var
+    # (older confs won't carry it; the caller's env and .env then decide, as today).
+    [[ -n "${GIT_COMMITS:-}" ]] && export SPECSTRIDE_GIT_COMMITS="$GIT_COMMITS"
     # anything extra passed to `specstride resume` overrides the saved config
     # (orchestrator parses flags last-wins).
     args+=( "${EXTRA[@]}" )

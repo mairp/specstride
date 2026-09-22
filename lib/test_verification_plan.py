@@ -1307,3 +1307,119 @@ def test_a_detached_prestage_is_launched_and_adopted_when_it_finishes(tmp_path):
     reused = next(c for c in evidence["commands"] if c.get("declaredId") == "p1-live")
     assert reused["reusedFrom"]["attempt"] == 1
     assert witness.read_text().count("ran") == 1
+
+
+# ── "discovery": "none" (a declared document that switches discovery off) ────
+# A reverse-engineering run's workdir is a repo it must read and never execute,
+# yet discover_project registers that repo's own pytest/npm/cargo/go command in
+# every phase gate. The one switch is a top-level key in the declared document.
+
+PYTEST_PROJECT = '[project]\nname = "demo"\n\n[tool.pytest.ini_options]\naddopts = "-q"\n'
+
+
+def pytest_project(tmp_path):
+    workdir = tmp_path / "repo"
+    workdir.mkdir()
+    (workdir / "pyproject.toml").write_text(PYTEST_PROJECT)
+    specs = tmp_path / "SPECS.md"
+    specs.write_text(SPEC)
+    return str(workdir), str(specs)
+
+
+def discovery_document(tmp_path, workdir, **top):
+    path = tmp_path / "verification-commands.json"
+    document = {
+        "schema_version": "1.0.0",
+        "commands": [
+            declared_entry(tmp_path, id="p1-check", phase=1, cwd=workdir),
+            declared_entry(tmp_path, id="p2-check", phase=2, cwd=workdir),
+        ],
+    }
+    document.update(top)
+    path.write_text(json.dumps(document))
+    return str(path)
+
+
+def test_discovery_none_drops_discovered_commands_from_every_gate(tmp_path):
+    workdir, specs = pytest_project(tmp_path)
+    with_discovery = verification_plan.create_plan(
+        workdir, specs, commands_path=discovery_document(tmp_path, workdir)
+    )
+    assert any(c.get("source") != "declared" and "pytest" in c["args"]
+               for c in with_discovery["commands"])
+
+    document = discovery_document(tmp_path, workdir, discovery="none")
+    plan = verification_plan.create_plan(
+        workdir, specs, required=True, commands_path=document
+    )
+    assert [c["declaredId"] for c in plan["commands"]] == ["p1-check", "p2-check"]
+    by_id = {c["id"]: c for c in plan["commands"]}
+    for suite in plan["suites"]:
+        assert all(by_id[r].get("source") == "declared" for r in suite["commandRefs"])
+    # Fingerprint and frameworks stay on record; the switch is named.
+    assert plan["project"]["frameworks"] == with_discovery["project"]["frameworks"]
+    assert "pytest" in plan["project"]["frameworks"]
+    assert plan["project"]["fingerprint"] == with_discovery["project"]["fingerprint"]
+    assert any('"discovery": "none"' in a for a in plan["assumptions"])
+    assert plan["declaredCommands"]["discovery"] == "none"
+    assert plan["ambiguities"] == []
+    evidence = verification_plan.run_gate(plan, 2)
+    assert [c["declaredId"] for c in evidence["commands"]] == ["p1-check", "p2-check"]
+
+
+def test_discovery_none_still_names_a_phase_with_no_declared_command(tmp_path):
+    workdir, specs = pytest_project(tmp_path)
+    path = tmp_path / "verification-commands.json"
+    path.write_text(json.dumps({
+        "discovery": "none",
+        "commands": [declared_entry(tmp_path, phase=1, cwd=workdir)],
+    }))
+    plan = verification_plan.create_plan(
+        workdir, specs, required=True, commands_path=str(path)
+    )
+    assert any("Phase(s) 2 have neither a discovered nor a declared" in a
+               for a in plan["ambiguities"])
+
+
+def test_discovery_accepts_only_none(tmp_path):
+    workdir, specs = pytest_project(tmp_path)
+    document = discovery_document(tmp_path, workdir, discovery="off")
+    with pytest.raises(verification_plan.VerificationError, match="discovery"):
+        verification_plan.load_declared_commands(document)
+
+
+def _normalized_plan(plan, tmp_path, python3):
+    """The plan's canonical JSON with every machine-dependent value replaced by a
+    stable token: the tmp path, the python paths, and each hash-derived id (they
+    are seeded on those paths) by its order of first appearance."""
+    import re as _re
+
+    text = verification_plan.canonical_json(plan)
+    text = text.replace(str(tmp_path), "<TMP>")
+    # Longest first, so a path that prefixes the other is not split.
+    for path in sorted({python3, sys.executable}, key=len, reverse=True):
+        text = text.replace(path, "<PY>")
+    seen = {}
+
+    def token(match):
+        return seen.setdefault(match.group(0), "<ID%d>" % len(seen))
+
+    return _re.sub(r"[A-Za-z]+-[0-9a-f]{20}|[0-9a-f]{64}|\b[0-9A-HJKMNP-TV-Z]{26}\b",
+                   token, text)
+
+
+# sha256 of _normalized_plan() for the document without the key, produced by the
+# module as it was before the key existed (origin/main 3d939a6). Without the key
+# the plan must stay byte-identical to that.
+PRE_DISCOVERY_KEY_PLAN_SHA256 = "3a83d2aafef22efca3e5dd5b945b2f04cfa53afa7d6326fdec0a59266b93129f"
+
+
+def test_without_the_discovery_key_the_plan_is_unchanged(tmp_path):
+    workdir, specs = pytest_project(tmp_path)
+    document = discovery_document(tmp_path, workdir)
+    assert "discovery" not in verification_plan.load_declared_commands(document)
+    plan = verification_plan.create_plan(workdir, specs, commands_path=document)
+    assert "discovery" not in plan["declaredCommands"]
+    python3 = [c["executable"] for c in plan["commands"] if "pytest" in c["args"]][0]
+    normalized = _normalized_plan(plan, tmp_path, python3)
+    assert verification_plan.sha256_text(normalized) == PRE_DISCOVERY_KEY_PLAN_SHA256
