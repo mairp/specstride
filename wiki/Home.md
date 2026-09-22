@@ -1,6 +1,7 @@
 # Specstride Wiki
 
-**A self-driving, spec-driven Ralph loop with an agent pairing gate and telemetry.**
+**A spec-driven Ralph loop with a critic gate, wrapped in an outer loop that tunes its own
+budgets from its telemetry.**
 
 You hand Specstride a spec — an ordered set of phases, each with acceptance criteria — and it
 drives a coding agent phase by phase. *Nothing advances until a critic approves it.* The
@@ -11,7 +12,7 @@ can't settle.
 Specstride is one author's implementation and interpretation of the **"Ralph" technique** —
 automating software development by running a coding agent in a repeating, self-checking
 loop — coined by [Geoffrey Huntley](https://ghuntley.com/). It goes further than a plain Ralph
-loop in two ways:
+loop in three ways:
 
 - **An automated critic gate.** An LLM critic checks each phase's evidence against the spec's
   acceptance criteria and the real code. Nothing advances until the critic approves it.
@@ -23,6 +24,15 @@ loop in two ways:
   that hint: a narrowed retry that fixes only the failing criteria and leaves approved work
   untouched. On one real 12-task phase, a full retry had spent 16 minutes re-deriving what
   turned out to be a two-file fix. See [Architecture](Architecture#the-roles).
+- **An opt-in learning loop over its own runs.** `specstride learn` reads the recorded history
+  of every pass and suggests per-phase settings sized to what each phase actually measured.
+  You apply a suggestion explicitly, it is bounded, and you can revert it. It can never touch
+  anything the critic reads. See [Learning](Learning).
+
+So is it still a Ralph loop, or a self-improving one? Both, at different layers. The inner loop
+is plain Ralph: a fresh, stateless agent per pass, with all state on disk. The agents never
+improve. What improves, narrowly and only when you opt in, is how the loop drives them. See
+[Architecture: three loops](Architecture#three-loops).
 
 You write the spec; the loop takes it to verified code.
 
@@ -47,6 +57,7 @@ Literal role names are used everywhere — code, files, flags, env vars. The
 | [Spec Formats](Spec-Formats) | `native`, `speckit-tasks`, `openspec-change`; auto-detection and resolution |
 | [On-Disk Contract](On-Disk-Contract) | `.specstride/` layout, feature-scoped state, the event stream |
 | [Hardening](Hardening) | Nonce-bound verdicts, grounded critic, stale-evidence rule, exit codes |
+| [Learning](Learning) | The opt-in outer loop: observations, suggestions, applied decisions, what can never be tuned |
 | [Telemetry](Telemetry) | Optional Loki and OpenTelemetry backends (dual-ship) |
 | [Configuration](Configuration) | `.env` precedence, backends, key knobs, branches |
 

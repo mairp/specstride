@@ -2,8 +2,8 @@
 
 **Specstride** (formerly Wiggum). From specs to tested code. An autonomous coding
 orchestrator that steers your agent through implementation, critic review, and
-verification, phase by phase: a self-driving, spec-driven **Ralph loop** with an
-agent pairing gate and telemetry.
+verification, phase by phase: a spec-driven **Ralph loop** with a critic gate,
+wrapped in an outer loop that tunes its own budgets from its telemetry.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Bash](https://img.shields.io/badge/Bash-orchestrator-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)
@@ -23,7 +23,7 @@ The deterministic-loop approach — automating software development by running a
 coding agent in a repeating, self-checking loop — is the **"Ralph" technique**
 coined by [Geoffrey Huntley](https://ghuntley.com/). Specstride is **my
 implementation** of that technique, and it goes further than a plain Ralph loop
-in two ways:
+in three ways:
 
 - **An automated critic gate.** An LLM critic checks each phase's evidence
   against the spec's acceptance criteria and the real code. Nothing advances
@@ -38,6 +38,26 @@ in two ways:
   acts on that hint: a narrowed retry that fixes only the failing criteria and
   leaves approved work untouched. On one real 12-task phase, a full retry had
   spent 16 minutes re-deriving what turned out to be a two-file fix.
+- **An opt-in learning loop over its own runs.** Every pass is recorded in
+  `events.jsonl`. `specstride learn` reads that history and suggests per-phase
+  settings sized to what each phase actually measured, instead of one global
+  setting sized for the worst phase. You apply a suggestion explicitly, it is
+  bounded, and you can revert it. It can never touch anything the critic reads.
+  See [Learning](#learning-self-tuning-knobs).
+
+### Three loops, one of them self-tuning
+
+| Loop | Scope | What repeats | What carries over |
+|---|---|---|---|
+| **Ralph loop** (inner) | one phase attempt | a fresh, stateless agent session per pass, until the phase's evidence file exists | only what is on disk |
+| **Gated phase loop** (middle) | one run | proposer → critic → approve or retry; a stuck phase gets the diagnostician and a narrowed accelerator retry | the feedback and hint files, within the run |
+| **Learning loop** (outer) | across runs | measure every pass, then suggest (and, opt-in, apply) per-phase settings | a per-phase observation and an append-only decision log |
+
+The agents never improve; they stay stateless workers. What improves is how the
+loop drives them. The learning loop is deliberately narrow: it can tune three
+allowlisted settings, it is off unless you turn it on, and the critic's
+independence is locked by a test. A loop that could tune its own judge would
+drift toward approving its own work.
 
 You write the spec; the loop takes it to verified code. You step in only for
 the phases the machines genuinely can't settle.
@@ -622,6 +642,26 @@ default, nothing is ever applied silently, and the set of knobs it may ever touc
 is a locked allowlist that can never include anything the critic reads.** Full
 design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
 
+In practice:
+
+```bash
+# 1. Let runs record per-phase observations (measurement only, changes nothing)
+SPECSTRIDE_LEARNING=suggest specstride run ...
+
+# 2. After a few runs, see what the loop would change and the evidence behind it
+specstride learn --show
+
+# 3. Apply one decision you agree with (append-only, with provenance)
+specstride learn --apply --knob proposer_timeout --phase 8 --default 1800
+
+# 4. Launch runs that read applied values
+SPECSTRIDE_LEARNING=apply specstride run ...
+
+# Undo one decision, or all of them
+specstride learn --revert <run-id>
+specstride learn --off
+```
+
 - **Suggest by default.** `specstride learn --show` (or bare `specstride learn`) prints a
   suggested value per phase plus the sample count behind it — it writes nothing.
   Every knob needs **at least 3 samples** of the phase evidence it is derived
@@ -669,6 +709,12 @@ design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
   is launched with `SPECSTRIDE_LEARNING=apply` in its environment — **unset, `off`,
   or any other value is a total no-op**: the applied log isn't even opened, and
   behaviour is byte-identical to a project that has never used `learn` at all.
+- **What a live run reads today.** All three knobs can be suggested and applied,
+  but only `proposer_timeout` is read back by a run (`orchestrator.sh`, the
+  `learned` source of `resolve_proposer_timeout`). A value applied for
+  `yield_poll_interval` or `inject_yield_hint` is recorded in the decision log
+  and shown by `--show`; no run acts on it yet. The yield poll interval a run
+  uses is still `SPECSTRIDE_YIELD_POLL` (default 30 s).
 - **The integration point.** The one place a learned value can reach a live run is
   `lib/learn.py resolve`, a small shell-callable entry point — not a change to
   `orchestrator.sh` itself:
