@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """reverse.py — `specstride --reverse`: a codebase reverse-engineered into Spec Kit.
 
-The deterministic checks of a reverse run, both stdlib, neither calling an LLM:
+Three subcommands, all stdlib, none of which calls an LLM:
 
+    python3 lib/reverse.py plan  <SRC> [--out DIR] [--name SLUG] [--tasks done|open]
     python3 lib/reverse.py lint  <FEATURE_DIR> [--src SRC] [--baseline INV] [--upto N]
                                  [--claims FILE] [--json]
     python3 lib/reverse.py guard <SRC> --baseline <inventory.json> --out <DIR>
 
+``plan`` writes the deterministic inventory (lib/reverse_inventory.py), a native
+driver spec whose phases write the artifacts one gate at a time, and the
+``--verification-commands`` document whose per-phase commands are this file's
+``lint`` and ``guard``. It prints every path as JSON; the `specstride reverse`
+verb launches orchestrator.sh with them.
+
 ``lint`` is the deterministic Spec Kit linter each gate runs. Required headings
 come from the Spec Kit templates at runtime (``<SRC>/.specify/templates/`` first,
-else Specstride's own), never from a list in this file. ``guard`` re-walks the
+else the copy vendored in lib/speckit_templates/), never from a list in this file. ``guard`` re-walks the
 source and fails when anything outside the output dir and the state dir changed,
-git history included; its baseline is lib/reverse_inventory.py's inventory.
+git history included.
 
 Exit codes: 0 ok, 3 findings or invalid input, 2 usage (argparse).
 """
@@ -20,6 +27,7 @@ import io
 import json
 import os
 import re
+import shlex
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -147,6 +155,429 @@ def load_inventory(path):
     if not isinstance(data, dict) or "fingerprint" not in data or "files" not in data:
         raise ReverseError("not an inventory: %s" % path)
     return data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  plan: output dir, inventory, driver spec, verification commands
+# ─────────────────────────────────────────────────────────────────────────────
+
+SLUG_MAX = 40
+
+# ── the investigation policy (Lisa's, ported) ───────────────────────────────
+POLICY = """\
+- Mode: source-aware. Treat source, configuration, tests, schemas, documentation,
+  dependency manifests and Git history as read-only evidence.
+- No network access, no dependency install, no services, containers or daemons.
+- Do not execute the product, its tests, builds, generators, migrations, linters or
+  formatters. Read-only discovery (`ls`, `cat`, `grep`, `find`, `wc`) and
+  `git log`/`git show`/`git blame` are allowed.
+- The only permitted writes are the output directory `{out_rel}/` and the state
+  directory `{state_rel}/`. Never touch `.specify/`, never write
+  `.specify/feature.json`, never create a git branch or commit.
+- Describe current behavior only. Never present desired or recommended behavior as
+  current behavior: no To-Be design, no remediation or enhancement backlog.
+- Evidence precedence when sources disagree: executable source, schemas and
+  configuration > tests > templates and command definitions > user docs > comments
+  and git history. A disagreement lowers confidence and is recorded in
+  `contradicts=`; it is never silently resolved.
+- Every claim that the linter checks (each `FR-###`, each `SC-###`, each research
+  **Decision**, each data-model entity `###` heading) carries, on the line directly
+  after it, one evidence comment:
+  `<!-- evidence: path:START-END | kind=observed | confidence=0.90 | contradicts=none | validation=verified -->`
+  `kind` is observed, inferred or declared (never `desired`); paths are
+  `{src_name}`-relative; ranges must exist in the file. At most 3
+  `[NEEDS CLARIFICATION` markers in spec.md; every other unknown is written as an
+  explicit unknown under *Assumptions* with `validation=unverified`."""
+
+
+def slugify(value):
+    """Kebab-case in the feature-slug alphabet, at most SLUG_MAX characters."""
+    slug = re.sub(r'[^a-z0-9]+', '-', (value or "").lower()).strip("-")[:SLUG_MAX].strip("-")
+    return slug or "project"
+
+
+def default_out(src, slug):
+    numbers = reverse_inventory.existing_spec_numbers(src)
+    return os.path.join(src, "specs", "%03d-as-is-%s" % ((max(numbers) + 1) if numbers else 1,
+                                                          slug))
+
+
+def validate_out(src, out, state_base):
+    """Refuse an output dir the run must not write (Lisa's validation, extended)."""
+    src_r, out_r = _real(src), _real(out)
+    if out_r == src_r:
+        raise ReverseError("--out cannot be the source root itself; choose a dedicated "
+                           "output folder: %s" % out)
+    if not _is_within(out_r, src_r):
+        raise ReverseError("--out must be inside the source tree %s (got %s)" % (src, out))
+    rel = os.path.relpath(out_r, src_r).replace(os.sep, "/")
+    first = rel.split("/", 1)[0]
+    if first == ".git":
+        raise ReverseError("--out cannot be inside the project's .git directory: %s" % out)
+    if first in (state_base,) + reverse_inventory.STATE_DIRS:
+        raise ReverseError("--out cannot be inside the state directory %s/: %s"
+                           % (first, out))
+    if first == ".specify":
+        raise ReverseError("--out cannot be inside .specify/ (the run never touches it): %s"
+                           % out)
+    if os.path.exists(out_r) and not os.path.isdir(out_r):
+        raise ReverseError("--out exists and is not a directory: %s" % out)
+    if os.path.isdir(out_r) and os.listdir(out_r):
+        raise ReverseError("--out already exists and is not empty: %s (resume an existing "
+                           "reverse run with `specstride resume --feature reverse-<slug>`)"
+                           % out)
+    return out_r, rel
+
+
+def driver_phases(inventory, tasks_mode, constitution_needed):
+    """The driver's phases as dicts: n, title, level, kind, unit (oversize only)."""
+    phases = []
+    if inventory["oversize"]:
+        for unit in inventory["units"]:
+            phases.append({"kind": "unit", "unit": unit["path"], "level": 0,
+                           "title": "Investigate unit %s (1%s)"
+                           % (unit["path"], _letter(len(phases)))})
+        phases.append({"kind": "spec", "level": 1,
+                       "title": "Synthesis — constitution and specification"
+                       if constitution_needed else "Synthesis — specification"})
+    else:
+        phases.append({"kind": "spec", "level": 1,
+                       "title": "Constitution and specification"
+                       if constitution_needed else "Specification"})
+    phases += [
+        {"kind": "plan", "level": 2, "title": "Plan and research"},
+        {"kind": "design", "level": 3, "title": "Design artifacts"},
+        {"kind": "tasks", "level": 4, "title": "Tasks (%s)" % tasks_mode},
+        {"kind": "analysis", "level": 5, "title": "Cross-artifact analysis and sign-off"},
+    ]
+    for n, phase in enumerate(phases, 1):
+        phase["n"] = n
+    return phases
+
+
+def _letter(index):
+    letters = "abcdefghijklmnopqrstuvwxyz"
+    return letters[index] if index < len(letters) else "-%d" % (index + 1)
+
+
+def unit_key(unit_path):
+    return "root" if unit_path == "." else re.sub(r'[^A-Za-z0-9._-]+', '-', unit_path)
+
+
+def render_driver(ctx, phases):
+    src = ctx["src"]
+    out_rel = ctx["out_rel"]
+    state_rel = ctx["state_rel"]
+    rs = ctx["run_state_rel"]
+    policy = POLICY.format(out_rel=out_rel, state_rel=state_rel,
+                           src_name=os.path.basename(src))
+    templates = ctx["templates_note"]
+    lines = [
+        "# Reverse-engineer `%s` into Spec Kit (as-is)" % os.path.basename(src),
+        "",
+        "Generated by `specstride reverse`. A native Specstride driver: each phase below",
+        "writes part of the Spec Kit feature directory `%s/` and is one gate." % out_rel,
+        "The gate runs the deterministic linter and the source-untouched guard; the",
+        "critic judges the evidence file.",
+        "",
+        "## Run boundaries",
+        "",
+        "- Target repository: `%s`" % src,
+        "- Output (Spec Kit feature directory): `%s/`" % out_rel,
+        "- Run state: `%s/`" % rs,
+        "- Tasks mode: `%s`" % ctx["tasks_mode"],
+        policy,
+        "",
+    ]
+    for phase in phases:
+        n = phase["n"]
+        level = phase["level"]
+        lint = ctx["lint_cmd"](phase)
+        guard = ctx["guard_cmd"]
+        lines += [
+            "## Phase %d: %s" % (n, phase["title"]),
+            "",
+            "Ground truth for **what exists**: `%s/INVENTORY.md` (full record: "
+            "`%s/inventory.json`). Treat it as the file list, languages, manifests,"
+            " entry points and workspaces of the target; do not re-derive them."
+            % (rs, rs),
+            "",
+            "### Policy",
+            "",
+            policy,
+            "",
+            "### Work",
+            "",
+        ]
+        lines += _phase_work(phase, ctx, templates)
+        lines += [
+            "",
+            "### Gate",
+            "",
+            "The gate runs exactly these (run them yourself first, and fix every error"
+            " before writing evidence):",
+            "",
+            "```bash",
+            lint,
+            guard,
+            "```",
+            "",
+            "Write `GATE%d-EVIDENCE.md` short (the critic's grounding budget is 32 KB):"
+            " paste the linter's `--json` output, and cite each artifact you wrote by its"
+            " workdir-relative path (e.g. `%s/spec.md`)." % (n, out_rel),
+            "",
+            "### Acceptance criteria",
+            "",
+        ]
+        lines += ["- [ ] %s" % c for c in _phase_criteria(phase, ctx, lint, guard)]
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _phase_work(phase, ctx, templates):
+    out = ctx["out_rel"]
+    rs = ctx["run_state_rel"]
+    kind = phase["kind"]
+    if kind == "unit":
+        return [
+            "Investigate only unit `%s` of the inventory (an oversize repository is split"
+            " by top-level unit so each phase fits one context)." % phase["unit"],
+            "Append every material claim about it, each followed by its evidence comment,"
+            " to the scratch file `%s/claims-%s.md`. Claims are one per line, as"
+            " `- <claim>`. Do not write anything under `%s/` in this phase."
+            % (rs, unit_key(phase["unit"]), out),
+        ]
+    if kind == "spec":
+        work = []
+        if ctx["oversize"]:
+            work.append("Synthesize from the scratch claims files `%s/claims-*.md` (and "
+                        "the source where a claim needs checking)." % rs)
+        if ctx["constitution_needed"]:
+            work.append("The target has no `.specify/memory/constitution.md`: write "
+                        "`%s/memory/constitution.md` from `%s/constitution-template.md`,"
+                        " with principles *recovered from evidence* (lint config, CI "
+                        "gates, test conventions, AGENTS.md/CONTRIBUTING)."
+                        % (out, templates))
+        else:
+            work.append("Read the existing `.specify/memory/constitution.md`; do not copy"
+                        " it into the output.")
+        work += [
+            "Write `%s/spec.md` from `%s/spec-template.md`: prioritised user stories"
+            " (`### User Story <n> - <title> (Priority: P<n>)`, numbered from 1), each"
+            " with **Why this priority**, **Independent Test** and at least one"
+            " `**Given** … **When** … **Then** …` scenario; edge cases; `- **FR-###**:`"
+            " functional requirements and `- **SC-###**:` success criteria, each followed"
+            " by its evidence comment; key entities; assumptions." % (out, templates),
+            "Write `%s/checklists/requirements.md` with the specification quality"
+            " checklist items of Spec Kit's `/speckit.specify` (Content Quality,"
+            " Requirement Completeness, Feature Readiness, Notes), every item evaluated:"
+            " `[x]`, or `[ ]` followed by an indented `Fails:` line carrying an evidence"
+            " comment." % out,
+            "Leave no template placeholder, sample text or template HTML comment behind.",
+        ]
+        return work
+    if kind == "plan":
+        return [
+            "Write `%s/plan.md` from `%s/plan-template.md` with the *real* Technical"
+            " Context, the Constitution Check against the constitution, and the actual"
+            " project structure tree; delete the unused `[REMOVE IF UNUSED]` options and"
+            " keep *Complexity Tracking* as a heading with \"None\" when nothing violates"
+            " the constitution." % (out, ctx["templates_note"]),
+            "Write `%s/research.md` as a list of decisions, each `- **Decision**: …`"
+            " followed by its evidence comment, then `**Rationale**` and"
+            " `**Alternatives**`. A rationale that cannot be recovered is written"
+            " `unknown`, never invented." % out,
+        ]
+    if kind == "design":
+        return [
+            "Write `%s/data-model.md`: one `### <Entity>` heading per entity found in"
+            " code, each followed by its evidence comment, then its fields,"
+            " relationships and state transitions." % out,
+            "Write `%s/contracts/*.md`, one file per external surface that exists (CLI,"
+            " HTTP API, events, files on disk, config/env)." % out,
+            "Write `%s/quickstart.md`. Commands come from manifests and docs, and every"
+            " one is labelled *not executed by the reverse run*." % out,
+        ]
+    if kind == "tasks":
+        box = "[x]" if ctx["tasks_mode"] == "done" else "[ ]"
+        meaning = ("describes work the evidence shows already exists (a baseline that"
+                   " `/speckit.converge` or a later run can extend)"
+                   if ctx["tasks_mode"] == "done" else
+                   "is a rebuild step for the same system")
+        return [
+            "Write `%s/tasks.md` from `%s/tasks-template.md` (keep its YAML front"
+            " matter) and the rules of Spec Kit's `/speckit.tasks`:" % (out, ctx["templates_note"]),
+            "- `## Phase 1: Setup …`, `## Phase 2: Foundational …`, one"
+            " `## Phase <n>: User Story <k> - <title> (Priority: P<k>)` per user story in"
+            " priority order, then a numbered final `## Phase <n>: Polish …`.",
+            "- Every task is `- %s T### [P]? [USn]? description with exact file path`."
+            " `[USn]` only in its own story's phase; `[P]` only on tasks touching"
+            " different files with no unmet dependency." % box,
+            "- Every task box is `%s`: every task %s." % (box, meaning),
+            "- Mention each `FR-###` in at least one task description, e.g."
+            " `(FR-003)`.",
+            "- Fill in *Dependencies & Execution Order* and *Parallel Example*.",
+            "- Keep the marker comment `<!-- specstride-reverse: tasks=%s -->` on its own"
+            " line right after the front matter." % ctx["tasks_mode"],
+        ]
+    return [
+        "Do a `/speckit.analyze`-style pass over every artifact: every FR is covered by"
+        " at least one task, every `[USn]` exists in the spec, no terminology drift,"
+        " duplicates or contradictions. Fix every finding in place.",
+        "Write the analysis report to `%s/ANALYSIS.md` (not into the output dir), in"
+        " the report shape of `/speckit.analyze` (findings table: ID, Category, Severity,"
+        " Location(s), Summary, Recommendation; coverage summary; metrics)." % rs,
+    ]
+
+
+def _phase_criteria(phase, ctx, lint, guard):
+    out = ctx["out_rel"]
+    rs = ctx["run_state_rel"]
+    common = ["`%s` exits 0." % lint, "`%s` exits 0." % guard]
+    kind = phase["kind"]
+    if kind == "unit":
+        return ["`%s/claims-%s.md` exists and every claim in it carries an evidence"
+                " comment that resolves into the source." % (rs, unit_key(phase["unit"]))] \
+            + common
+    if kind == "spec":
+        crit = ["`%s/spec.md` and `%s/checklists/requirements.md` exist, and every"
+                " requirement and success criterion is evidence-backed." % (out, out),
+                "No desired behavior is represented as current behavior."]
+        if ctx["constitution_needed"]:
+            crit.append("`%s/memory/constitution.md` records principles recovered from"
+                        " evidence only." % out)
+        return crit + common
+    if kind == "plan":
+        return ["`%s/plan.md` holds the actual repository structure and no unused"
+                " template options." % out,
+                "`%s/research.md` separates evidenced decisions from unknown rationale."
+                % out] + common
+    if kind == "design":
+        return ["`%s/data-model.md`, `%s/quickstart.md` and at least one"
+                " `%s/contracts/*.md` exist, and cover only surfaces the evidence shows."
+                % (out, out, out),
+                "Every quickstart command is labelled not executed."] + common
+    if kind == "tasks":
+        return ["`%s/tasks.md` passes `python3 %s/lib/specstride_spec.py validate"
+                " --specs %s/tasks.md --format speckit-tasks`."
+                % (out, ROOT, ctx["out_abs"]),
+                "Every task box is `%s`." % ("[x]" if ctx["tasks_mode"] == "done" else "[ ]")] \
+            + common
+    return ["`%s/ANALYSIS.md` exists and lists every finding with its resolution."
+            % rs, "The linter reports zero errors at `--upto 5`."] + common
+
+
+def plan(src, out=None, name=None, tasks_mode="done", environ=None):
+    environ = dict(os.environ if environ is None else environ)
+    if not os.path.isdir(src):
+        raise ReverseError("source is not a directory: %s" % src)
+    src = _real(src)
+    if tasks_mode not in TASK_MODES:
+        raise ReverseError("--tasks must be done or open (got %r)" % tasks_mode)
+    slug = slugify(name if name else os.path.basename(src))
+    state_base = state_basename(src)
+    state_dir = os.path.join(src, state_base)
+    feature = "reverse-%s" % slug
+    feature_state = os.path.join(state_dir, "features", feature)
+    if os.path.isdir(os.path.join(feature_state, "gates")) and \
+            os.listdir(os.path.join(feature_state, "gates")):
+        raise ReverseError("a reverse run for '%s' already has gate state in %s; resume it"
+                           " with `specstride resume -w %s --feature %s`, or pass --name"
+                           % (slug, feature_state, src, feature))
+    out = os.path.abspath(out) if out else default_out(src, slug)
+    out, out_rel = validate_out(src, out, state_base)
+    run_state = os.path.join(state_dir, "reverse", slug)
+    os.makedirs(run_state, exist_ok=True)
+
+    inventory_path = os.path.join(run_state, "inventory.json")
+    inventory_md = os.path.join(run_state, "INVENTORY.md")
+    inventory = reverse_inventory.build(src, excludes=[out_rel], environ=environ)
+    reverse_inventory.write_atomic(inventory_path, reverse_inventory.dumps(inventory))
+    budget = reverse_inventory._env_int("SPECSTRIDE_CONTEXT_BUDGET",
+                                        reverse_inventory.DEFAULT_MD_BUDGET, environ)
+    reverse_inventory.write_atomic(inventory_md, reverse_inventory.render_md(
+        inventory, inventory_path, budget))
+
+    constitution_needed = not inventory["specify"]["constitution"]
+    phases = driver_phases(inventory, tasks_mode, constitution_needed)
+    reverse_py = os.path.join(HERE, "reverse.py")
+    driver_path = os.path.join(run_state, "DRIVER.md")
+    commands_path = os.path.join(run_state, "verification-commands.json")
+
+    def lint_args(phase):
+        args = [reverse_py, "lint", out, "--src", src, "--baseline", inventory_path,
+                "--upto", str(phase["level"])]
+        if phase["kind"] == "unit":
+            args += ["--claims", os.path.join(run_state, "claims-%s.md"
+                                              % unit_key(phase["unit"]))]
+        return args
+
+    guard_args = [reverse_py, "guard", src, "--baseline", inventory_path, "--out", out]
+    ctx = {
+        "src": src, "out_abs": out, "out_rel": out_rel, "state_rel": state_base,
+        "run_state_rel": os.path.relpath(run_state, src).replace(os.sep, "/"),
+        "tasks_mode": tasks_mode, "oversize": inventory["oversize"],
+        "constitution_needed": constitution_needed,
+        "templates_note": template_dir_note(src),
+        "lint_cmd": lambda p: " ".join(shlex.quote(a) for a in
+                                       ["python3"] + lint_args(p)),
+        "guard_cmd": " ".join(shlex.quote(a) for a in ["python3"] + guard_args),
+    }
+    driver = render_driver(ctx, phases)
+    ok, count, errors = specstride_spec.validate(driver, "native")
+    if not ok:  # a generator bug, never an input problem
+        raise ReverseError("generated driver is not a valid native spec: %s"
+                           % "; ".join(errors))
+    reverse_inventory.write_atomic(driver_path, driver)
+
+    commands = []
+    for phase in phases:
+        commands.append({"id": "lint-%d" % phase["n"], "phase": phase["n"],
+                         "executable": sys.executable, "cwd": src,
+                         "args": lint_args(phase), "timeoutSec": 120})
+        commands.append({"id": "guard-%d" % phase["n"], "phase": phase["n"],
+                         "executable": sys.executable, "cwd": src,
+                         "args": guard_args, "timeoutSec": 300})
+    timeouts = {str(p["n"]): 3600 for p in phases if p["level"] <= 1}
+    document = {"schema_version": "1.0.0", "discovery": "none", "commands": commands,
+                "phaseTimeouts": timeouts}
+    reverse_inventory.write_atomic(commands_path,
+                                   json.dumps(document, indent=1, sort_keys=True) + "\n")
+    return {
+        "src": src,
+        "slug": slug,
+        "feature": feature,
+        "out": out,
+        "state_dir": state_dir,
+        "run_state": run_state,
+        "inventory": inventory_path,
+        "inventory_md": inventory_md,
+        "driver": driver_path,
+        "verification_commands": commands_path,
+        "test_plan": os.path.join(run_state, "TEST_PLAN.md"),
+        "generate_tests": os.path.join(run_state, "generated"),
+        "analysis": os.path.join(run_state, "ANALYSIS.md"),
+        "tasks_mode": tasks_mode,
+        "oversize": inventory["oversize"],
+        "phases": [{"n": p["n"], "title": p["title"], "lint_level": p["level"]}
+                   for p in phases],
+        "summary": {
+            "files": inventory["totals"]["files"],
+            "skipped": inventory["totals"]["skipped"],
+            "text_bytes": inventory["totals"]["text_bytes"],
+            "walk": inventory["walk"],
+            "git_head": inventory["git_head"],
+            "languages": inventory["project"]["languages"],
+            "frameworks": inventory["project"]["frameworks"],
+            "units": len(inventory["units"]),
+            "constitution": "existing" if not constitution_needed else "to be written",
+        },
+    }
+
+
+def template_dir_note(src):
+    local = os.path.join(src, ".specify", "templates")
+    return local if os.path.isdir(local) else SPECSTRIDE_TEMPLATES
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -921,6 +1352,11 @@ def _print_findings(result, as_json):
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="reverse.py", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("plan", help="write the inventory, driver and verification commands")
+    p.add_argument("src")
+    p.add_argument("--out")
+    p.add_argument("--name")
+    p.add_argument("--tasks", default=None, choices=TASK_MODES)
     l = sub.add_parser("lint", help="the deterministic Spec Kit linter")  # noqa: E741
     l.add_argument("feature_dir")
     l.add_argument("--src")
@@ -934,6 +1370,15 @@ def main(argv=None):
     g.add_argument("--out", required=True)
     args = ap.parse_args(argv)
     try:
+        if args.cmd == "plan":
+            tasks = args.tasks or specstride_env.get("SPECSTRIDE_REVERSE_TASKS", "done") \
+                or "done"
+            if tasks not in TASK_MODES:
+                raise ReverseError("SPECSTRIDE_REVERSE_TASKS must be done or open (got %r)"
+                                   % tasks)
+            print(json.dumps(plan(args.src, args.out, args.name, tasks), indent=1,
+                             sort_keys=True))
+            return 0
         if args.cmd == "lint":
             findings = lint(args.feature_dir, args.src, args.baseline, args.upto, args.claims)
             result = findings.as_dict()

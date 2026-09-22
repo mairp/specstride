@@ -1,4 +1,4 @@
-"""`specstride --reverse` (lib/reverse.py): the linter and the guard.
+"""`specstride --reverse` (lib/reverse.py): the linter, the guard and the plan.
 
 The lint fixtures are generated: every failing case is `good/` with ONE mutation
 (the MUTATIONS table), made in tmp_path, so the fixture count stays honest and a
@@ -16,6 +16,7 @@ import pytest
 import reverse
 import reverse_inventory
 import specstride_spec
+import verification_plan
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 FIXTURES = os.path.join(HERE, "fixtures", "reverse")
@@ -411,3 +412,177 @@ def test_guard_cli_exit_codes(tmp_path):
     assert reverse.main(argv) == 0
     (src / "README.md").write_text("edited\n")
     assert reverse.main(argv) == 3
+
+
+# ── plan: output dir numbering and refusals ──────────────────────────────────
+
+def planned(tmp_path, with_git=True, **kw):
+    src = src_mini(tmp_path)
+    if with_git:
+        git(src, "init", "-q")
+        git(src, "add", "-A")
+        git(src, "commit", "-q", "-m", "init")
+    result = reverse.plan(str(src), **kw)
+    return src, result
+
+
+
+def test_default_output_numbering(tmp_path):
+    src = src_mini(tmp_path)
+    assert reverse.default_out(str(src), "x") == str(src / "specs" / "001-as-is-x")
+    for name in ("001-a", "004-b"):
+        (src / "specs" / name).mkdir(parents=True)
+    result = reverse.plan(str(src))
+    assert result["out"] == str(src / "specs" / "005-as-is-src-mini")
+    assert result["slug"] == "src-mini" and result["feature"] == "reverse-src-mini"
+
+
+def test_name_is_kebab_cased_and_truncated_to_forty():
+    assert reverse.slugify("My Great__Project!") == "my-great-project"
+    assert len(reverse.slugify("a" * 60)) == 40
+    assert reverse.slugify("***") == "project"
+
+
+@pytest.mark.parametrize("out,message", [
+    (".", "source root"),
+    ("../elsewhere", "inside the source tree"),
+    (".git/specs", ".git"),
+    (".specstride/out", "state directory"),
+    (".specify/out", ".specify"),
+])
+def test_refused_output_dirs(tmp_path, out, message):
+    src = src_mini(tmp_path)
+    (src / ".git").mkdir()
+    with pytest.raises(reverse.ReverseError, match=re.escape(message)):
+        reverse.plan(str(src), out=str(src / out))
+
+
+def test_a_non_empty_output_dir_is_refused(tmp_path):
+    src = src_mini(tmp_path)
+    (src / "specs" / "001-x").mkdir(parents=True)
+    (src / "specs" / "001-x" / "spec.md").write_text("x\n")
+    with pytest.raises(reverse.ReverseError, match="not empty"):
+        reverse.plan(str(src), out=str(src / "specs" / "001-x"))
+    assert reverse.main(["plan", str(src), "--out", str(src / "specs" / "001-x")]) == 3
+
+
+def test_a_feature_with_gate_state_is_refused_toward_resume(tmp_path):
+    src = src_mini(tmp_path)
+    gates = src / ".specstride" / "features" / "reverse-src-mini" / "gates"
+    gates.mkdir(parents=True)
+    (gates / "GATE1-APPROVED").write_text("")
+    with pytest.raises(reverse.ReverseError, match="specstride resume"):
+        reverse.plan(str(src))
+
+
+def test_plan_never_touches_specify_or_writes_outside_state(tmp_path):
+    src, result = planned(tmp_path)
+    assert not (src / ".specify").exists()
+    assert not os.path.exists(result["out"])
+    status = git(src, "status", "--porcelain", "--untracked-files=all").stdout.split("\n")
+    assert all(line[3:].startswith(".specstride/") for line in status if line)
+
+
+# ── plan: the driver and its verification commands ─────────────────────────
+
+def test_driver_is_a_valid_native_spec_with_contiguous_phases(tmp_path):
+    _src, result = planned(tmp_path)
+    with open(result["driver"]) as handle:
+        text = handle.read()
+    ok, count, errors = specstride_spec.validate(text, "native")
+    assert ok and count == 5, errors
+    assert [p["lint_level"] for p in result["phases"]] == [1, 2, 3, 4, 5]
+    titles = [p.title for p in specstride_spec.get_phases(text, "native")]
+    assert titles[0] == "Constitution and specification"
+    for phase in specstride_spec.get_phases(text, "native"):
+        assert result["inventory_md"].split(result["src"] + "/")[1] in phase.section
+        assert "--upto" in phase.section and "reverse.py guard" in phase.section
+        assert "desired" in phase.section                         # the policy travels
+
+
+def test_oversize_splits_phase_one_by_unit_with_contiguous_numbers(tmp_path):
+    src = src_mini(tmp_path)
+    result = reverse.plan(str(src), environ={"SPECSTRIDE_REVERSE_MAX_TOTAL_BYTES": "100"})
+    assert result["oversize"] is True
+    with open(result["driver"]) as handle:
+        text = handle.read()
+    ok, count, errors = specstride_spec.validate(text, "native")
+    assert ok, errors
+    phases = specstride_spec.get_phases(text, "native")
+    assert [p.n for p in phases] == list(range(1, count + 1))
+    assert [p.title for p in phases[:3]] == [
+        "Investigate unit . (1a)", "Investigate unit tally (1b)", "Investigate unit tests (1c)"]
+    assert phases[3].title.startswith("Synthesis")
+    assert [p["lint_level"] for p in result["phases"]] == [0, 0, 0, 1, 2, 3, 4, 5]
+    with open(result["verification_commands"]) as handle:
+        document = json.load(handle)
+    assert document["phaseTimeouts"] == {"1": 3600, "2": 3600, "3": 3600, "4": 3600}
+    lint1 = next(c for c in document["commands"] if c["id"] == "lint-1")
+    assert lint1["args"][-2:] == ["--claims", os.path.join(result["run_state"],
+                                                           "claims-root.md")]
+
+
+def test_verification_commands_load_and_gate_only_declared_commands(tmp_path):
+    src, result = planned(tmp_path)
+    loaded = verification_plan.load_declared_commands(result["verification_commands"])
+    assert loaded["discovery"] == "none"
+    assert sorted(c["declaredId"] for c in loaded["commands"]) == sorted(
+        "%s-%d" % (kind, n) for kind in ("lint", "guard") for n in range(1, 6))
+    for command in loaded["commands"]:
+        assert os.path.isabs(command["executable"]) and command["cwd"] == result["src"]
+        assert all(os.path.isabs(a) or not a.startswith((".", "lib")) for a in command["args"])
+    plan = verification_plan.create_plan(result["src"], result["driver"], fmt="native",
+                                         required=True,
+                                         commands_path=result["verification_commands"])
+    # src-mini's pyproject mentions pytest, so discovery WOULD have added it
+    assert "pytest" in plan["project"]["frameworks"]
+    assert all(c.get("source") == "declared" for c in plan["commands"])
+    assert plan["ambiguities"] == []
+
+
+def test_the_gates_pass_once_the_artifacts_are_written(tmp_path):
+    """End to end without an LLM: plan, drop good/ into the output dir, and every
+    phase gate's lint + guard pass exactly as the orchestrator would run them."""
+    src, result = planned(tmp_path)
+    plan = verification_plan.create_plan(result["src"], result["driver"], fmt="native",
+                                         required=True,
+                                         commands_path=result["verification_commands"])
+    first = verification_plan.run_gate(plan, 1)
+    assert first["passed"] is False                         # nothing written yet
+    shutil.copytree(GOOD, result["out"])
+    evidence = verification_plan.run_gate(plan, 5)
+    assert evidence["passed"] is True, json.dumps(evidence["commands"], indent=1)[:4000]
+    assert len(evidence["commands"]) == 10                  # cumulative: 5 phases x 2
+    assert not (src / "testautomation").exists()
+
+
+def test_plan_cli_prints_the_paths_as_json(tmp_path, capsys):
+    src = src_mini(tmp_path)
+    assert reverse.main(["plan", str(src), "--name", "Mini Tally", "--tasks", "open"]) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["feature"] == "reverse-mini-tally"
+    assert result["tasks_mode"] == "open"
+    for key in ("inventory", "inventory_md", "driver", "verification_commands"):
+        assert os.path.isfile(result[key])
+    assert result["test_plan"].startswith(os.path.join(str(src), ".specstride", "reverse"))
+
+
+def test_tasks_mode_default_comes_from_the_environment(tmp_path, monkeypatch, capsys):
+    src = src_mini(tmp_path)
+    monkeypatch.setenv("SPECSTRIDE_REVERSE_TASKS", "open")
+    assert reverse.main(["plan", str(src)]) == 0
+    assert json.loads(capsys.readouterr().out)["tasks_mode"] == "open"
+    monkeypatch.setenv("SPECSTRIDE_REVERSE_TASKS", "sometimes")
+    assert reverse.main(["plan", str(src), "--name", "other"]) == 3
+
+
+def test_lint_cli_json_and_exit_codes(tmp_path, capsys):
+    src, feature = src_mini(tmp_path), good(tmp_path)
+    assert reverse.main(["lint", str(feature), "--src", str(src), "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"errors": [], "warnings": []}
+    edit(feature / "spec.md", FR2_EV, FR2_EV.replace("kind=observed", "kind=desired"))
+    assert reverse.main(["lint", str(feature), "--src", str(src), "--json"]) == 3
+    finding = json.loads(capsys.readouterr().out)["errors"][0]
+    assert set(finding) == {"rule", "file", "line", "message"}
+    assert finding["rule"] == "evidence.kind" and finding["file"] == "spec.md"
+    assert reverse.main(["lint", str(tmp_path / "nowhere")]) == 3
