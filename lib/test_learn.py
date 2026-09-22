@@ -291,7 +291,7 @@ def test_summarize_is_pure_and_repeatable():
 # these tests can control exactly how many non-futility-killed samples a phase
 # has without perturbing the step-0 assertions that already pin the fixture's
 # numbers.
-def _events_for_phase(phase, work_secs, futile_count=0, run_id="run-X"):
+def _events_for_phase(phase, work_secs, futile_count=0, run_id="run-X", shape=None):
     events, ts = [], [1000.0]
 
     def emit(ev):
@@ -302,7 +302,8 @@ def _events_for_phase(phase, work_secs, futile_count=0, run_id="run-X"):
         ts[0] += 1
 
     emit({"event": "run_start", "run_id": run_id, "feature": "f"})
-    emit({"event": "phase_start", "run_id": run_id, "phase": phase, "title": "T"})
+    emit(dict({"event": "phase_start", "run_id": run_id, "phase": phase, "title": "T"},
+              **({"shape": shape} if shape else {})))
     attempt = 0
     for work in work_secs:
         attempt += 1
@@ -815,6 +816,83 @@ def test_cli_apply_supports_yield_poll_interval(tmp_path):
     assert learn.effective_value(applied_file, "yield_poll_interval", 6) == 15
 
 
+# -- the phase shape keys samples and decisions (§5.5 invariant 4) -----------
+def _shaped_history():
+    # three samples under shape "aaaa", then three under the edited phase "bbbb"
+    return (_events_for_phase(3, [1200.0, 1300.0, 1250.0], run_id="run-old", shape="aaaa")
+            + _events_for_phase(3, [300.0, 320.0], run_id="run-new", shape="bbbb"))
+
+
+def test_samples_of_another_shape_stop_counting():
+    events = _shaped_history()
+    whole = learn.summarize(events)["phases"]["3"]
+    assert whole["work_sec_samples"] == 5 and whole["shape"] is None
+    new = learn.summarize(events, phase_shapes={3: "bbbb"})["phases"]["3"]
+    assert new["work_sec_samples"] == 2 and new["shape"] == "bbbb"
+    assert new["other_shape_attempts"] == 3 and new["runs_seen"] == ["run-new"]
+    rows = learn.advise(learn.summarize(events, phase_shapes={3: "bbbb"}), "proposer_timeout", 3, 5400,
+                        shapes={3: "bbbb"})
+    assert rows[0]["value"] is None and rows[0]["samples"] == 2   # below the floor under the new shape
+    # a run that recorded no shape is not evidence for any shape
+    unshaped = _events_for_phase(3, [1200.0, 1300.0, 1250.0], run_id="run-legacy")
+    assert "3" not in learn.summarize(unshaped, phase_shapes={3: "bbbb"})["phases"]
+
+
+def test_a_decision_stops_applying_when_the_phase_is_edited(tmp_path):
+    applied, events_file = _applied_paths(tmp_path)
+    summary = learn.summarize(_shaped_history(), phase_shapes={3: "aaaa"})
+    entry = learn.apply_proposer_timeout(summary, 3, 5400, applied, events_file=events_file,
+                                          run_id="learn-shape-1", shape="aaaa")
+    assert entry["shape"] == "aaaa" and entry["schema"] == learn.LEARN_APPLIED_SCHEMA
+    env = {"SPECSTRIDE_LEARNING": "apply"}
+    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env=env, shape="aaaa") == entry["value"]
+    assert learn.resolve_knob("proposer_timeout", 3, 5400, applied, env=env, shape="bbbb") == 5400
+    # reverting is scoped to the same key, and leaves another shape's decision alone
+    s_b = learn.summarize(_events_for_phase(3, [2000.0, 2100.0, 2050.0], run_id="run-b", shape="bbbb"),
+                          phase_shapes={3: "bbbb"})
+    other = learn.apply_proposer_timeout(s_b, 3, 5400, applied, run_id="learn-shape-2", shape="bbbb")
+    learn.revert_run("learn-shape-1", applied)
+    assert learn.effective_value(applied, "proposer_timeout", 3, "aaaa") == 5400
+    assert learn.effective_value(applied, "proposer_timeout", 3, "bbbb") == other["value"]
+    assert {e["reverts_run_id"] for e in learn.revert_all(applied)} == {"learn-shape-2"}
+
+
+def test_a_decision_recorded_before_shapes_is_never_silently_applied(tmp_path):
+    applied, _ = _applied_paths(tmp_path)
+    learn._append_jsonl(applied, {"schema": "specstride.learn.applied/1", "action": "apply", "run_id": "old",
+                                  "knob": "proposer_timeout", "phase": 3, "value": 2400, "previous": 1800})
+    env = {"SPECSTRIDE_LEARNING": "apply"}
+    assert learn.resolve_knob("proposer_timeout", 3, 1800, applied, env=env, shape="aaaa") == 1800
+    assert "predate phase-shape keys" in learn.unshaped_notice(applied, "proposer_timeout", 3, "aaaa")
+    assert learn.unshaped_notice(applied, "proposer_timeout", 4, "aaaa") is None
+    r = subprocess.run([sys.executable, os.path.join(HERE, "learn.py"), "resolve", "--knob", "proposer_timeout",
+                        "--phase", "3", "--default", "1800", "--applied-file", applied, "--phase-shape", "aaaa"],
+                       capture_output=True, text=True, env=dict(os.environ, SPECSTRIDE_LEARNING="apply"))
+    assert r.returncode == 0 and r.stdout.strip() == "1800"
+    assert "predate phase-shape keys" in r.stderr
+
+
+def test_cli_apply_with_specs_keys_the_decision_on_the_current_shape(tmp_path):
+    sys.path.insert(0, HERE)
+    import specstride_spec
+    spec = tmp_path / "SPECS.md"
+    spec.write_text("## Phase 3 — Build\n\n### Acceptance criteria\n- [ ] it builds\n")
+    shape = specstride_spec.phase_shape(spec.read_text(), 3, "native")
+    events = _write_events(tmp_path, _events_for_phase(3, [1200.0, 1300.0, 1250.0], shape=shape))
+    r = subprocess.run([sys.executable, os.path.join(HERE, "learn.py"), "apply", "--events", events,
+                        "--phase", "3", "--default", "5400", "--feature-dir", str(tmp_path),
+                        "--specs", str(spec)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    applied = str(tmp_path / "learning" / "applied.json")
+    assert learn.effective_value(applied, "proposer_timeout", 3, shape) is not None
+    assert learn.effective_value(applied, "proposer_timeout", 3) is None
+
+
+def test_observe_with_a_phase_shape_observes_only_that_shape():
+    doc = learn.observation_for_phase(_shaped_history(), 3, shape="bbbb")
+    assert doc["shape"] == "bbbb" and doc["observation"]["attempts_total"] == 2
+
+
 # -- `specstride learn`: the dispatcher passes the asked knob's own default ---
 def _cli_workdir(tmp_path, events):
     wd = tmp_path / "proj"
@@ -869,7 +947,7 @@ def test_proposer_cap_is_recorded_once_per_run_and_phase():
         {"run": "run-1", "seconds": 1800, "source": "learned", "yield_poll": 45, "yield_poll_source": "learned"},
         {"run": "run-2", "seconds": 1800, "source": "learned", "yield_poll": 45, "yield_poll_source": "learned"},
     ]
-    assert learn.SCHEMA == "specstride.learn.summary/2"
+    assert learn.SCHEMA.startswith("specstride.learn.summary/")
 
 
 # -- observe: the §5.4 per-phase observation document ------------------------

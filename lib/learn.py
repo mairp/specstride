@@ -21,6 +21,11 @@ attributed to the run of the stream they were read from. Events the proposer
 emits (``iter_*``, ``agent_*``, ``pass_killed``) carry no ``phase``/``attempt``;
 they are attributed to the running ``phase_start``/``proposer_start`` state.
 
+Learned state is further keyed on the phase's *shape* (``phase_start.shape``, a
+digest of number + title + criteria text from ``specstride_spec.phase_shape``):
+``summarize(phase_shapes=…)`` counts only samples of the current shape, and a
+decision in ``applied.json`` applies only to the shape it was learned under.
+
 Wait vs. work
 -------------
 An ``agent_tool`` whose tool is ``Bash`` and whose target matches ``WAIT_RE``
@@ -89,7 +94,8 @@ to call once per ``phase_done``, and safe to call again by hand.
 
 Output schema (``specstride.learn.summary/2``)
 ------------------------------------------
-``/2`` adds ``phases[*].caps`` (one entry per run from ``proposer_cap``) to ``/1``.
+``/2`` adds ``phases[*].caps`` (one entry per run from ``proposer_cap``) to ``/1``;
+``/3`` adds ``attempts[*].shape`` and ``phases[*].shape``/``other_shape_attempts``.
 {
   "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
@@ -101,7 +107,7 @@ Output schema (``specstride.learn.summary/2``)
       "non_approved_cost_share" } },
   "attempts": [ {   # ``billed`` is True/False on a terminal pass, None while open;
                     # ``work_sec_estimate`` = max(0, elapsed − sleep_sec_declared)
-      "run", "phase", "attempt", "title", "verdict", "verdict_reason",
+      "run", "phase", "attempt", "title", "shape", "verdict", "verdict_reason",
       "verification": "passed"|"failed"|null, "verification_rc",
       "started", "ended", "wall_sec", "passes", "proposer_elapsed_sec",
       "cost_usd", "billed_passes", "unbilled_passes",
@@ -116,7 +122,7 @@ Output schema (``specstride.learn.summary/2``)
                            "wait_calls", "sleep_sec_declared", "dominant_repeat",
                            "dominant_repeat_n", "dominant_repeat_share" } ] } ],
   "phases": { "<phase>": {
-      "title", "runs_seen", "attempts_total", "attempts_to_approval",
+      "title", "shape", "other_shape_attempts", "runs_seen", "attempts_total", "attempts_to_approval",
       "approved_in_run", "attempt_number_reset", "cost_usd",
       "work_sec_p50", "work_sec_p90", "work_sec_samples", "kills_by_reason",
       "job_duration_p50", "job_duration_samples",           # yield_poll_interval's evidence
@@ -146,7 +152,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
-SCHEMA = "specstride.learn.summary/2"
+SCHEMA = "specstride.learn.summary/3"
 
 # The wait/poll classifier of 03-002-run-telemetry.md §2, applied to Bash targets.
 WAIT_RE = re.compile(
@@ -319,9 +325,11 @@ class _Pass:
 
 
 class _Attempt:
-    def __init__(self, run: str, phase: int, attempt: int, start: Optional[float], title: str):
+    def __init__(self, run: str, phase: int, attempt: int, start: Optional[float], title: str,
+                 shape: Optional[str] = None):
         self.run, self.phase, self.attempt = run, phase, attempt
         self.title = title
+        self.shape = shape   # the phase's shape digest from phase_start (None: not recorded)
         self.start = start
         self.end: Optional[float] = None
         self.passes: "OrderedDict[int, _Pass]" = OrderedDict()
@@ -354,6 +362,7 @@ class _Attempt:
             "phase": self.phase,
             "attempt": self.attempt,
             "title": self.title,
+            "shape": self.shape,
             "verdict": self.verdict,
             "verdict_reason": self.verdict_reason,
             "verification": self.verification,
@@ -399,6 +408,7 @@ class _Run:
         self.stop_phase: Optional[int] = None
         self.cur_phase: Optional[int] = None
         self.cur_title: str = ""
+        self.cur_shape: Optional[str] = None
         self.cur_attempt: Optional[int] = None
         self.cur_pass: Optional[_Pass] = None
         self.attempts: "OrderedDict[Tuple[str,int,int], _Attempt]" = OrderedDict()
@@ -411,13 +421,20 @@ class _Run:
             return None
         key = (self.run_id, self.cur_phase, self.cur_attempt)
         if key not in self.attempts:
-            self.attempts[key] = _Attempt(self.run_id, self.cur_phase, self.cur_attempt, self.last_ts, self.cur_title)
+            self.attempts[key] = _Attempt(self.run_id, self.cur_phase, self.cur_attempt, self.last_ts,
+                                          self.cur_title, self.cur_shape)
         return self.attempts[key]
 
 
 def summarize(events: List[dict], verification_dir: Optional[str] = None,
-              run_log_live_invocations: Optional[int] = None) -> dict:
-    """The pure summariser: a list of parsed events in → the summary dict out."""
+              run_log_live_invocations: Optional[int] = None,
+              phase_shapes: Optional[Dict[int, str]] = None) -> dict:
+    """The pure summariser: a list of parsed events in → the summary dict out.
+
+    ``phase_shapes`` ({phase: shape digest}) restricts a phase's entry in
+    ``phases`` to the attempts recorded under that shape (``phase_start.shape``);
+    attempts of an edited phase, or of a run that recorded no shape, stop counting
+    as its samples. ``attempts`` and ``runs`` are never filtered."""
     runs: "OrderedDict[str, _Run]" = OrderedDict()
     src_run: Dict[str, str] = {}   # stream file → run id, for run_id-less critic events
 
@@ -442,6 +459,7 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
             run.resume_from = _int(ev.get("resume"))
         elif name == "phase_start":
             run.cur_phase, run.cur_title, run.cur_attempt, run.cur_pass = phase, ev.get("title", ""), None, None
+            run.cur_shape = ev.get("shape") or None
         elif name == "proposer_start":
             if phase is not None:
                 run.cur_phase = phase
@@ -538,14 +556,16 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
     if verification_dir:
         _attach_gate_figures(runs, verification_dir)
 
-    return _render(runs, run_log_live_invocations)
+    return _render(runs, run_log_live_invocations, phase_shapes)
 
 
 def _locate(run: _Run, phase: Optional[int], attempt: Optional[int]) -> Optional[_Attempt]:
     if phase is not None and attempt is not None:
         key = (run.run_id, phase, attempt)
         if key not in run.attempts:
-            run.attempts[key] = _Attempt(run.run_id, phase, attempt, run.last_ts, run.cur_title if phase == run.cur_phase else "")
+            current = phase == run.cur_phase
+            run.attempts[key] = _Attempt(run.run_id, phase, attempt, run.last_ts,
+                                         run.cur_title if current else "", run.cur_shape if current else None)
         return run.attempts[key]
     return run.attempt()
 
@@ -578,7 +598,8 @@ def _attach_gate_figures(runs, verification_dir: str) -> None:
                 a.gate_duration_ms, a.gate_live_share = total, share
 
 
-def _render(runs, run_log_live_invocations: Optional[int]) -> dict:
+def _render(runs, run_log_live_invocations: Optional[int],
+            phase_shapes: Optional[Dict[int, str]] = None) -> dict:
     attempts_out: List[dict] = []
     runs_out: "OrderedDict[str, dict]" = OrderedDict()
     for run in runs.values():
@@ -620,7 +641,7 @@ def _render(runs, run_log_live_invocations: Optional[int]) -> dict:
     for run in runs.values():
         for ph, cap in run.caps.items():
             caps.setdefault(ph, []).append(cap)
-    phases_out = _phases(attempts_out, caps)
+    phases_out = _phases(attempts_out, caps, phase_shapes)
 
     cost = round(sum(a["cost_usd"] for a in attempts_out), 4)
     non_approved = round(sum(a["cost_usd"] for a in attempts_out if a["verdict"] != "APPROVED"), 4)
@@ -658,14 +679,24 @@ def _render(runs, run_log_live_invocations: Optional[int]) -> dict:
     }
 
 
-def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None) -> "OrderedDict[str, dict]":
+def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None,
+            phase_shapes: Optional[Dict[int, str]] = None) -> "OrderedDict[str, dict]":
     caps = caps or {}
+    phase_shapes = phase_shapes or {}
     by_phase: Dict[int, List[dict]] = {}
     for a in attempts:
         by_phase.setdefault(a["phase"], []).append(a)
     out: "OrderedDict[str, dict]" = OrderedDict()
     for ph in sorted(by_phase):
         atts = by_phase[ph]   # stream order == chronological across runs when files are given in order
+        shape = phase_shapes.get(ph)
+        other_shape = 0
+        if shape:
+            kept = [a for a in atts if a.get("shape") == shape]
+            other_shape = len(atts) - len(kept)
+            if not kept:
+                continue
+            atts = kept
         approved_idx = next((i for i, a in enumerate(atts) if a["verdict"] == "APPROVED"), None)
         runs_seen = []
         for a in atts:
@@ -691,6 +722,10 @@ def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None) 
                          if p.get("job_duration_sec") is not None]
         out[str(ph)] = {
             "title": next((a["title"] for a in atts if a["title"]), ""),
+            # the shape these figures were restricted to (None: unrestricted), and how
+            # many attempts of the phase number were left out for another shape
+            "shape": shape,
+            "other_shape_attempts": other_shape,
             "runs_seen": runs_seen,
             "attempts_total": len(atts),
             "attempts_to_approval": (approved_idx + 1 if approved_idx is not None else None),
@@ -715,7 +750,7 @@ def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None) 
             "wait_share_samples": len(wait_shares),
             "hard_cap_kills_with_wait": hard_cap_with_wait,
             # what each run actually ran this phase under (proposer_cap, per run)
-            "caps": caps.get(ph, []),
+            "caps": [c for c in caps.get(ph, []) if c["run"] in runs_seen],
         }
     return out
 
@@ -767,7 +802,10 @@ STEP_CAP_FRACTION = 0.5   # "≤ ±50% per step" — every numeric adjustable kn
 YIELD_POLL_WASTE_FRACTION = 0.1
 
 
-LEARN_APPLIED_SCHEMA = "specstride.learn.applied/1"
+# /2 entries carry "shape" (the phase-shape digest they were learned under); /1
+# entries, and any entry without a shape, are still read but never match a shape.
+LEARN_APPLIED_SCHEMA = "specstride.learn.applied/2"
+LEARN_APPLIED_SCHEMAS_READ = ("specstride.learn.applied/1", LEARN_APPLIED_SCHEMA)
 OBSERVATION_SCHEMA = "specstride.learn.observation/1"
 
 
@@ -823,17 +861,44 @@ def _feature_paths(feature_dir: Optional[str], applied_file: Optional[str],
     return applied_file, events_file
 
 
-def effective_value(applied_file: Optional[str], knob: str, phase: int):
-    """Replay the append-only decision log to the current value of (knob, phase),
-    or None if nothing has ever been applied. Both an `apply` and a `revert` entry
-    record the resulting value under "value" — a `revert` restores the value that
-    was current *before* the apply it targets — so a straight last-one-wins replay
-    is correct for either kind of entry."""
+def _entry_shape(entry: dict) -> Optional[str]:
+    return entry.get("shape") or None
+
+
+def _decisions(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str]) -> List[dict]:
+    """The log entries for one decision key, (knob, phase, shape), in order. An
+    entry recorded without a shape matches only a shape-less lookup."""
+    return [e for e in _read_jsonl(applied_file)
+            if e.get("knob") == knob and _int(e.get("phase")) == phase and _entry_shape(e) == (shape or None)]
+
+
+def effective_value(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str] = None):
+    """Replay the append-only decision log to the current value of (knob, phase,
+    shape), or None if nothing has ever been applied under that key. Both an
+    `apply` and a `revert` entry record the resulting value under "value" — a
+    `revert` restores the value that was current *before* the apply it targets —
+    so a straight last-one-wins replay is correct for either kind of entry.
+
+    The shape is part of the key: a decision learned for an earlier version of
+    the phase (different title or criteria) never applies to the edited one, and
+    one recorded before shapes existed never applies to any shape."""
     current = None
-    for e in _read_jsonl(applied_file):
-        if e.get("knob") == knob and _int(e.get("phase")) == phase:
-            current = e.get("value")
+    for e in _decisions(applied_file, knob, phase, shape):
+        current = e.get("value")
     return current
+
+
+def unshaped_notice(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str]) -> Optional[str]:
+    """The notice printed when a shape is asked for and the log holds decisions for
+    (knob, phase) recorded under no shape: they are never silently applied."""
+    if not shape:
+        return None
+    n = sum(1 for e in _read_jsonl(applied_file)
+            if e.get("knob") == knob and _int(e.get("phase")) == phase and _entry_shape(e) is None)
+    if not n:
+        return None
+    return (f"learn: notice — {n} decision(s) for {knob}[{phase}] predate phase-shape keys and are "
+            f"not applied; re-derive with `specstride learn --apply` under the current spec")
 
 
 def _round_step(value: float, step: int = 60) -> int:
@@ -921,7 +986,7 @@ SUGGESTION_ENGINES = {
 
 
 def advise(summary: dict, knob: str, phase: Optional[int], default: int,
-           applied_file: Optional[str] = None) -> List[dict]:
+           applied_file: Optional[str] = None, shapes: Optional[Dict[int, str]] = None) -> List[dict]:
     """One advice dict per phase (or just `phase` if given), dispatched to
     `knob`'s entry in `SUGGESTION_ENGINES`. Every allowlisted knob has an
     engine; a `knob` outside that map (never reachable through the CLI,
@@ -936,16 +1001,18 @@ def advise(summary: dict, knob: str, phase: Optional[int], default: int,
         if stats is None:
             continue
         ph = _int(k)
-        current = effective_value(applied_file, knob, ph) if applied_file else None
+        shape = (shapes or {}).get(ph)
+        current = effective_value(applied_file, knob, ph, shape) if applied_file else None
         adv = SUGGESTION_ENGINES[knob](stats, default, current)
-        adv.update({"phase": ph, "current": current if current is not None else default,
+        adv.update({"phase": ph, "shape": shape, "current": current if current is not None else default,
                     "runs_seen": stats.get("runs_seen", [])})
         out.append(adv)
     return out
 
 
 def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file: str,
-                            events_file: Optional[str] = None, run_id: Optional[str] = None) -> dict:
+                            events_file: Optional[str] = None, run_id: Optional[str] = None,
+                            shape: Optional[str] = None) -> dict:
     """Compute the suggestion for `phase` and, if it clears the evidence floor,
     append one decision to `applied_file` and one `knob_adjusted` event to
     `events_file`. Raises ValueError (never writes) when the floor isn't met or
@@ -953,7 +1020,7 @@ def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file
     stats = summary.get("phases", {}).get(str(phase))
     if stats is None:
         raise ValueError(f"no telemetry for phase {phase}")
-    current = effective_value(applied_file, "proposer_timeout", phase)
+    current = effective_value(applied_file, "proposer_timeout", phase, shape)
     adv = suggest_proposer_timeout(stats, default, current)
     if adv["value"] is None:
         raise ValueError(adv["reason"])
@@ -961,7 +1028,7 @@ def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file
     run_id = run_id or _new_run_id()
     entry = {
         "schema": LEARN_APPLIED_SCHEMA, "action": "apply", "run_id": run_id,
-        "knob": "proposer_timeout", "phase": phase, "value": adv["value"], "previous": previous,
+        "knob": "proposer_timeout", "phase": phase, "shape": shape, "value": adv["value"], "previous": previous,
         "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
         "metric": "work_sec_p90", "applied_at": _now_iso(),
     }
@@ -975,14 +1042,15 @@ def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file
 
 
 def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_file: str,
-                               events_file: Optional[str] = None, run_id: Optional[str] = None) -> dict:
+                               events_file: Optional[str] = None, run_id: Optional[str] = None,
+                               shape: Optional[str] = None) -> dict:
     """`apply_proposer_timeout`'s counterpart for `yield_poll_interval`: same
     provenance shape, same append-only `applied_file`/`events_file`, same
     ValueError-and-write-nothing refusal below the evidence floor."""
     stats = summary.get("phases", {}).get(str(phase))
     if stats is None:
         raise ValueError(f"no telemetry for phase {phase}")
-    current = effective_value(applied_file, "yield_poll_interval", phase)
+    current = effective_value(applied_file, "yield_poll_interval", phase, shape)
     adv = suggest_yield_poll_interval(stats, default, current)
     if adv["value"] is None:
         raise ValueError(adv["reason"])
@@ -990,7 +1058,7 @@ def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_f
     run_id = run_id or _new_run_id()
     entry = {
         "schema": LEARN_APPLIED_SCHEMA, "action": "apply", "run_id": run_id,
-        "knob": "yield_poll_interval", "phase": phase, "value": adv["value"], "previous": previous,
+        "knob": "yield_poll_interval", "phase": phase, "shape": shape, "value": adv["value"], "previous": previous,
         "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
         "metric": "job_duration_p50", "applied_at": _now_iso(),
     }
@@ -1006,12 +1074,12 @@ def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_f
 
 # Dispatch table mirroring `SUGGESTION_ENGINES`.
 APPLY_ENGINES = {
-    "proposer_timeout": lambda summary, phase, default, applied_file, events_file, run_id:
+    "proposer_timeout": lambda summary, phase, default, applied_file, events_file, run_id, shape:
         apply_proposer_timeout(summary, phase, default, applied_file,
-                                events_file=events_file, run_id=run_id),
-    "yield_poll_interval": lambda summary, phase, default, applied_file, events_file, run_id:
+                                events_file=events_file, run_id=run_id, shape=shape),
+    "yield_poll_interval": lambda summary, phase, default, applied_file, events_file, run_id, shape:
         apply_yield_poll_interval(summary, phase, default, applied_file,
-                                   events_file=events_file, run_id=run_id),
+                                   events_file=events_file, run_id=run_id, shape=shape),
 }
 
 
@@ -1031,14 +1099,15 @@ def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None
         raise ValueError(f"no applied entry with run_id {run_id!r}")
     latest = None
     for e in entries:
-        if e.get("knob") == orig["knob"] and _int(e.get("phase")) == orig["phase"]:
+        if (e.get("knob") == orig["knob"] and _int(e.get("phase")) == orig["phase"]
+                and _entry_shape(e) == _entry_shape(orig)):
             latest = e
     if not (latest is not None and latest.get("action") == "apply" and latest.get("run_id") == run_id):
         raise ValueError(f"run_id {run_id!r} is not the active decision for "
                           f"{orig['knob']}[{orig['phase']}] — nothing to revert")
     entry = {
         "schema": LEARN_APPLIED_SCHEMA, "action": "revert", "run_id": _new_run_id(),
-        "reverts_run_id": run_id, "knob": orig["knob"], "phase": orig["phase"],
+        "reverts_run_id": run_id, "knob": orig["knob"], "phase": orig["phase"], "shape": _entry_shape(orig),
         "value": orig["previous"], "previous": orig["value"], "applied_at": _now_iso(),
     }
     _append_jsonl(applied_file, entry)
@@ -1053,12 +1122,12 @@ def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None
 def revert_all(applied_file: str, events_file: Optional[str] = None) -> List[dict]:
     """`specstride learn --off`: revert every (knob, phase) currently at a non-default
     value, in one pass — the bulk form of `revert_run` for "turn learning off"."""
-    latest: "OrderedDict[Tuple[str, int], dict]" = OrderedDict()
+    latest: "OrderedDict[Tuple[str, int, Optional[str]], dict]" = OrderedDict()
     for e in _read_jsonl(applied_file):
-        key = (e.get("knob"), _int(e.get("phase")))
+        key = (e.get("knob"), _int(e.get("phase")), _entry_shape(e))
         latest[key] = e
     out = []
-    for (knob, phase), e in latest.items():
+    for e in latest.values():
         if e.get("action") == "revert":
             continue   # already at baseline
         out.append(revert_run(e["run_id"], applied_file, events_file))
@@ -1066,7 +1135,7 @@ def revert_all(applied_file: str, events_file: Optional[str] = None) -> List[dic
 
 
 def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str],
-                  env: Optional[dict] = None) -> int:
+                  env: Optional[dict] = None, shape: Optional[str] = None) -> int:
     """The one integration point (§6 step 5): what another component (e.g. a future
     `resolve_proposer_timeout`) calls to get this run's value for `knob`/`phase`.
 
@@ -1076,13 +1145,16 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     default "suggest" mode both zero-behaviour-change (§5.5 invariant 5; the
     migration table in the design doc).
 
+    `shape` is the phase's current shape digest: a decision recorded under
+    another shape, or under none, resolves to `default`.
+
     Every knob resolves to an `int`, so a shell caller never has to branch on type."""
     env = os.environ if env is None else env
     if env.get("SPECSTRIDE_LEARNING") != "apply":
         return int(default)
     if knob not in ADJUSTABLE_KNOBS:
         return int(default)
-    value = effective_value(applied_file, knob, phase)
+    value = effective_value(applied_file, knob, phase, shape)
     if value is None:
         return int(default)
     if knob not in KNOB_HARD_MIN:
@@ -1127,7 +1199,8 @@ def _cmd_summarize(args: argparse.Namespace) -> int:
 
 
 def observation_for_phase(events: List[dict], phase: int,
-                           verification_dir: Optional[str] = None) -> dict:
+                           verification_dir: Optional[str] = None,
+                           shape: Optional[str] = None) -> dict:
     """§5.4's per-phase **observation** document: exactly this phase's entry from
     `summarize`'s `phases` map (§5.3's metric set), wrapped with a schema tag and
     a generation timestamp. Pure other than that timestamp — the same `events`
@@ -1135,22 +1208,62 @@ def observation_for_phase(events: List[dict], phase: int,
     `observe` CLI command idempotent (safe to call once per `phase_done`, and
     safe to call again by hand). `"observation"` is `None`, not an error, when
     `phase` has no telemetry yet in `events` — a hook firing on the very first
-    pass of a brand-new phase is not a failure."""
-    summary = summarize(events, verification_dir=verification_dir)
+    pass of a brand-new phase is not a failure. With `shape`, only attempts
+    recorded under that phase shape are observed."""
+    summary = summarize(events, verification_dir=verification_dir,
+                        phase_shapes={phase: shape} if shape else None)
     return {
         "schema": OBSERVATION_SCHEMA,
         "phase": phase,
+        "shape": shape,
         "generated_at": _now_iso(),
         "observation": summary.get("phases", {}).get(str(phase)),
     }
 
 
+def _phase_shapes(args: argparse.Namespace) -> Dict[int, str]:
+    """{phase: shape} from --phase-shape (for --phase) and/or --specs (every phase,
+    computed by specstride_spec, the one module that parses specs). Empty when
+    neither is given: nothing is then restricted by shape."""
+    shapes: Dict[int, str] = {}
+    specs = getattr(args, "specs", None)
+    if specs:
+        import specstride_spec
+        try:
+            with open(specs, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+            fmt = specstride_spec.detect_format(specs, text, getattr(args, "spec_format", None) or None)
+            for ph in specstride_spec.get_phases(text, fmt):
+                shapes[int(ph.n)] = specstride_spec.phase_shape_of(ph)
+        except (OSError, ValueError) as e:
+            print(f"learn: cannot read phase shapes from {specs}: {e}", file=sys.stderr)
+    if getattr(args, "phase_shape", None) and getattr(args, "phase", None) is not None:
+        shapes[int(args.phase)] = args.phase_shape
+    return shapes
+
+
+def _restrict(summary: dict, shapes: Dict[int, str]) -> dict:
+    """Re-derive a loaded summary's `phases` restricted to `shapes`, from its own
+    `attempts` (which carry each attempt's shape), keeping each phase's caps."""
+    if not shapes:
+        return summary
+    caps: Dict[int, List[dict]] = {}
+    for k, stats in (summary.get("phases") or {}).items():
+        caps[_int(k)] = list(stats.get("caps") or [])
+    out = dict(summary)
+    out["phases"] = _phases(summary.get("attempts") or [], caps, shapes)
+    return out
+
+
 def _load_summary(args: argparse.Namespace) -> Optional[dict]:
     """advise/apply accept either --summary (a `summarize --out` document, so a
-    caller can decouple measuring from advising) or --events (computed fresh)."""
+    caller can decouple measuring from advising) or --events (computed fresh);
+    either way a phase's figures are restricted to its current shape when one is
+    known (--phase-shape / --specs)."""
+    shapes = _phase_shapes(args)
     if getattr(args, "summary", None):
         with open(args.summary, "r", encoding="utf-8") as fh:
-            return json.load(fh)
+            return _restrict(json.load(fh), shapes)
     if getattr(args, "events", None):
         files = find_event_files(args.events)
         if not files:
@@ -1159,7 +1272,7 @@ def _load_summary(args: argparse.Namespace) -> Optional[dict]:
         events: List[dict] = []
         for f in files:
             events.extend(read_events(f))
-        return summarize(events)
+        return summarize(events, phase_shapes=shapes or None)
     print("learn: one of --events or --summary is required", file=sys.stderr)
     return None
 
@@ -1169,8 +1282,9 @@ def _cmd_advise(args: argparse.Namespace) -> int:
     if summary is None:
         return 2
     applied_file, _ = _feature_paths(args.feature_dir, args.applied_file, None)
+    shapes = _phase_shapes(args)
     try:
-        rows = advise(summary, args.knob, args.phase, args.default, applied_file)
+        rows = advise(summary, args.knob, args.phase, args.default, applied_file, shapes)
     except ValueError as e:
         print(f"learn: {e}", file=sys.stderr)
         return 2
@@ -1180,6 +1294,9 @@ def _cmd_advise(args: argparse.Namespace) -> int:
         return 1
     for r in rows:
         unit = _unit_suffix(r["knob"])
+        notice = unshaped_notice(applied_file, r["knob"], r["phase"], r.get("shape"))
+        if notice:
+            print(notice, file=sys.stderr)
         if r["value"] is None:
             print(f"learn: phase {r['phase']} {r['knob']}: {r['samples']} sample(s) — {r['reason']}; "
                   f"no suggestion (need {'>=3'})")
@@ -1217,9 +1334,13 @@ def _cmd_apply(args: argparse.Namespace) -> int:
     if not applied_file:
         print("learn: --applied-file or --feature-dir is required to apply", file=sys.stderr)
         return 2
+    shape = _phase_shapes(args).get(args.phase)
+    notice = unshaped_notice(applied_file, args.knob, args.phase, shape)
+    if notice:
+        print(notice, file=sys.stderr)
     try:
         entry = APPLY_ENGINES[args.knob](summary, args.phase, args.default, applied_file,
-                                          events_file, args.run_id)
+                                          events_file, args.run_id, shape)
     except ValueError as e:
         print(f"learn: refusing to apply — {e}", file=sys.stderr)
         return 3
@@ -1263,7 +1384,11 @@ def _cmd_off(args: argparse.Namespace) -> int:
 
 def _cmd_resolve(args: argparse.Namespace) -> int:
     applied_file, _ = _feature_paths(args.feature_dir, args.applied_file, None)
-    print(resolve_knob(args.knob, args.phase, args.default, applied_file))
+    if os.environ.get("SPECSTRIDE_LEARNING") == "apply":
+        notice = unshaped_notice(applied_file, args.knob, args.phase, args.phase_shape)
+        if notice:
+            print(notice, file=sys.stderr)
+    print(resolve_knob(args.knob, args.phase, args.default, applied_file, shape=args.phase_shape))
     return 0
 
 
@@ -1275,7 +1400,8 @@ def _cmd_observe(args: argparse.Namespace) -> int:
     events: List[dict] = []
     for f in files:
         events.extend(read_events(f))
-    doc = observation_for_phase(events, args.phase, verification_dir=args.verification_dir)
+    doc = observation_for_phase(events, args.phase, verification_dir=args.verification_dir,
+                                shape=args.phase_shape)
     doc["inputs"] = files
     text = json.dumps(doc, indent=2 if args.pretty else None, sort_keys=False)
     if args.out:
@@ -1307,6 +1433,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     s.add_argument("--pretty", action="store_true")
     s.set_defaults(func=_cmd_summarize)
 
+    def _shape_args(p):
+        p.add_argument("--phase-shape", help="the shape digest of --phase (`specstride_spec.py shape N`): "
+                                              "samples and decisions of another shape are left out")
+        p.add_argument("--specs", help="the spec, to key every phase on its current shape")
+        p.add_argument("--spec-format", help="native|speckit-tasks|openspec-change (else auto-detect)")
+
     def _events_or_summary(p):
         p.add_argument("--events", action="append", help="events.jsonl, a run dir, or a dir of run dirs (repeatable)")
         p.add_argument("--summary", help="a `summarize --out` JSON document, instead of --events")
@@ -1319,6 +1451,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     a.add_argument("--feature-dir", help="<feature-dir>/learning/applied.json is read for 'current', if present")
     a.add_argument("--applied-file", help="override the applied.json path (instead of deriving from --feature-dir)")
     a.add_argument("--out", help="also write the advice rows as JSON here")
+    _shape_args(a)
     a.set_defaults(func=_cmd_advise)
 
     ap_ = sub.add_parser("apply", help="apply the current suggestion for one phase — writes applied.json + a "
@@ -1331,6 +1464,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap_.add_argument("--applied-file", help="<feature-dir>/learning/applied.json by default")
     ap_.add_argument("--events-file", help="<feature-dir>/events.jsonl by default; the knob_adjusted event goes here")
     ap_.add_argument("--run-id", help="override the generated run id (mainly for tests)")
+    _shape_args(ap_)
     ap_.set_defaults(func=_cmd_apply)
 
     r = sub.add_parser("revert", help="undo one prior apply by its run id — restores the prior value exactly")
@@ -1353,6 +1487,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     rs.add_argument("--default", type=int, required=True)
     rs.add_argument("--feature-dir")
     rs.add_argument("--applied-file")
+    rs.add_argument("--phase-shape", help="the phase's current shape digest (`specstride_spec.py shape N`); "
+                                           "a decision recorded under another shape, or none, is not applied")
     rs.set_defaults(func=_cmd_resolve)
 
     ob = sub.add_parser("observe", help="write the §5.4 per-phase OBSERVATION document (not a decision — see "
@@ -1364,6 +1500,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ob.add_argument("--verification-dir", help="a run's verification/ dir, for gate durations")
     ob.add_argument("--out", help="write JSON here, e.g. <feature-dir>/learning/phase-<N>.json (default: stdout)")
     ob.add_argument("--pretty", action="store_true")
+    ob.add_argument("--phase-shape", help="observe only attempts recorded under this phase shape")
     ob.set_defaults(func=_cmd_observe)
 
     args = ap.parse_args(argv)

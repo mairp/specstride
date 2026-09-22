@@ -52,6 +52,12 @@ The design's third knob, `inject_yield_hint`, was removed rather than wired: the
 contract is already appended to every proposer and accelerator prompt, so it had nothing to
 switch, and the only change left to make was to a prompt the critic later judges.
 
+Samples and decisions are keyed on the phase's **shape** — a digest of its number, title and
+criteria text, recorded on `phase_start` (`lib/specstride_spec.py shape N`). Ticking a checkbox
+leaves it unchanged; editing a criterion or the title changes it, and then the old phase's
+samples stop counting and its decisions stop applying. A decision or run recorded before
+shapes existed matches no shape and is never silently applied; a one-line notice says so.
+
 Every knob needs at least 3 samples before a value is suggested. A pass killed for futility
 (`repeat_stall`, `progress_stall`) never counts as a sample, because its duration says nothing
 about how long the work takes.
@@ -74,7 +80,7 @@ says why it must not be there.
 | File | Written by | What it holds |
 |---|---|---|
 | `.specstride/features/<slug>/learning/phase-<N>.json` | `learn.py observe`, at `phase_done` | the phase's cross-run metrics (an **observation**); idempotent, best-effort, never fails the phase |
-| `.specstride/features/<slug>/learning/applied.json` | `specstride learn --apply/--revert/--off` | an append-only log of **decisions**, each with the run ids and sample count behind it and the previous value |
+| `.specstride/features/<slug>/learning/applied.json` | `specstride learn --apply/--revert/--off` | an append-only log of **decisions**, each with the phase shape, the run ids and sample count behind it and the previous value |
 
 Observations and decisions are kept in separate files so a measurement can never be mistaken
 for a decision. Events: `learning_observed` (an observation was written) and `knob_adjusted`
