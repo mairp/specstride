@@ -62,6 +62,24 @@ Every knob needs at least 3 samples before a value is suggested. A pass killed f
 (`repeat_stall`, `progress_stall`) never counts as a sample, because its duration says nothing
 about how long the work takes.
 
+## Evaluating a decision
+
+`--apply` records a baseline beside the decision (per-pass cost and wall-clock of the samples
+that produced it, the phase shape, the backend label, the guardrail counts). At every
+`phase_done` `learn.py evaluate` labels each active decision for the phase:
+
+| Label | When |
+|---|---|
+| `insufficient` | fewer than 6 billed, non-futility passes in either arm, or the shape or backend label changed since the baseline |
+| `helped` | log cost or log wall-clock per pass fell by at least the MDE, and neither rose by it |
+| `regressed` | either rose by at least the MDE |
+| `neutral` | anything in between |
+
+`MDE = 2.80 · s · sqrt(1/n_a + 1/n_b) · sqrt(1 + (m̄ − 1)·0.5)`, `s` floored at 0.50. It is always
+printed beside the effect: at 6 passes per arm only a change of roughly ×2–3 in cost is
+visible, so `neutral` does not mean "no effect". No significance test is run; none is
+attainable at these run counts. Design: `roadmap/research/self-improvement-loops/05-evaluate-design.md`.
+
 ## What can never be tuned
 
 The allowlist is exactly the two knobs above, and `lib/test_learn.py` asserts it literally.
@@ -82,8 +100,8 @@ the verification plan.
 | File | Written by | What it holds |
 |---|---|---|
 | `.specstride/features/<slug>/learning/phase-<N>.json` | `learn.py observe`, at `phase_done` | the phase's cross-run metrics (an **observation**); idempotent, best-effort, never fails the phase |
-| `.specstride/features/<slug>/learning/applied.json` | `specstride learn --apply/--revert/--off` | an append-only log of **decisions**, each with the phase shape, the run ids and sample count behind it and the previous value |
+| `.specstride/features/<slug>/learning/applied.json` | `specstride learn --apply/--revert/--off`, and `learn.py evaluate` (evaluate entries only) | an append-only log of **decisions** and their evaluations, each decision with its baseline, the phase shape, the run ids and sample count behind it and the previous value |
 
 Observations and decisions are kept in separate files so a measurement can never be mistaken
-for a decision. Events: `learning_observed` (an observation was written) and `knob_adjusted`
-(a decision was applied or reverted). See [On-Disk Contract](On-Disk-Contract).
+for a decision. Events: `learning_observed` (an observation was written), `knob_adjusted`
+(a decision was applied or reverted) and `knob_evaluated` (a decision was labelled). See [On-Disk Contract](On-Disk-Contract).

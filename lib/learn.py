@@ -96,7 +96,8 @@ Output schema (``specstride.learn.summary/2``)
 ------------------------------------------
 ``/2`` adds ``phases[*].caps`` (one entry per run from ``proposer_cap``) to ``/1``;
 ``/3`` adds ``attempts[*].shape`` and ``phases[*].shape``/``other_shape_attempts``;
-``/4`` adds ``attempts[*].diagnostician_case`` and ``phases[*].diagnostician_cases``.
+``/4`` adds ``attempts[*].diagnostician_case`` and ``phases[*].diagnostician_cases``;
+``/5`` adds ``phases[*].episodes`` and ``phases[*].pass_samples`` (item 4's primaries).
 {
   "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
@@ -129,7 +130,9 @@ Output schema (``specstride.learn.summary/2``)
       "job_duration_p50", "job_duration_samples",           # yield_poll_interval's evidence
       "wait_share_p50", "wait_share_samples", "hard_cap_kills_with_wait",
       "caps": [ { "run", "seconds", "source", "yield_poll", "yield_poll_source" } ],
-      "diagnostician_cases": { "grounding"|"real_gap"|"unknown": n } } },
+      "diagnostician_cases": { "grounding"|"real_gap"|"unknown": n },
+      "episodes": [ { "run", "cost_usd", "wall_sec", "passes", "approved" } ],
+      "pass_samples": [ { "run", "cost_usd", "elapsed_sec" } ] } },
   "totals": { "runs", "attempts", "passes", "cost_usd", "unbilled_passes",
               "kills_by_reason", "outcomes", "approved_phases",
               "cost_per_approved_phase", "non_approved_cost_share",
@@ -141,8 +144,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
+import statistics
 import sys
 import time
 import uuid
@@ -154,7 +159,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
-SCHEMA = "specstride.learn.summary/4"
+SCHEMA = "specstride.learn.summary/5"
 
 # The wait/poll classifier of 03-002-run-telemetry.md §2, applied to Bash targets.
 WAIT_RE = re.compile(
@@ -689,6 +694,33 @@ def _render(runs, run_log_live_invocations: Optional[int],
     }
 
 
+def _is_sample(p: dict) -> bool:
+    """Item 4's sample unit: a billed pass not killed for futility. An unbilled pass
+    (no cost: a kill severed the stream) is no cost sample, and a futility kill's
+    duration means nothing; both arms use this one filter."""
+    return p.get("billed") is True and p.get("kill_class") != "futility"
+
+
+def _episodes(atts: List[dict]) -> List[dict]:
+    """One entry per run that touched the phase: that run's phase_start→phase_done
+    window, with its cost, wall-clock, billed passes and whether it approved."""
+    by_run: "OrderedDict[str, List[dict]]" = OrderedDict()
+    for a in atts:
+        by_run.setdefault(a["run"], []).append(a)
+    out = []
+    for run, group in by_run.items():
+        starts = [a["started"] for a in group if a["started"] is not None]
+        ends = [a["ended"] for a in group if a["ended"] is not None]
+        out.append({
+            "run": run,
+            "cost_usd": round(sum(a["cost_usd"] for a in group), 4),
+            "wall_sec": (round(max(ends) - min(starts), 1) if starts and ends else None),
+            "passes": sum(1 for a in group for p in a["passes_detail"] if _is_sample(p)),
+            "approved": any(a["verdict"] == "APPROVED" for a in group),
+        })
+    return out
+
+
 def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None,
             phase_shapes: Optional[Dict[int, str]] = None) -> "OrderedDict[str, dict]":
     caps = caps or {}
@@ -759,6 +791,11 @@ def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None,
             "wait_share_p50": percentile(wait_shares, 0.5),
             "wait_share_samples": len(wait_shares),
             "hard_cap_kills_with_wait": hard_cap_with_wait,
+            # item 4's primaries, per phase episode (one run's window on this phase),
+            # and its sample unit: every billed, non-futility pass, tagged with its run
+            "episodes": _episodes(atts),
+            "pass_samples": [{"run": a["run"], "cost_usd": p["cost_usd"], "elapsed_sec": p["elapsed_sec"]}
+                             for a in atts for p in a["passes_detail"] if _is_sample(p)],
             # what each run actually ran this phase under (proposer_cap, per run)
             "caps": [c for c in caps.get(ph, []) if c["run"] in runs_seen],
             # the diagnostician's declared case per consulted attempt (read-only):
@@ -879,11 +916,18 @@ def _entry_shape(entry: dict) -> Optional[str]:
     return entry.get("shape") or None
 
 
+def _is_decision(entry: dict) -> bool:
+    """`apply` and `revert` entries are decisions; an `evaluate` entry is a record
+    about one and never moves a value (entries from before `action` existed count)."""
+    return entry.get("action") in (None, "apply", "revert")
+
+
 def _decisions(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str]) -> List[dict]:
-    """The log entries for one decision key, (knob, phase, shape), in order. An
-    entry recorded without a shape matches only a shape-less lookup."""
+    """The decision entries for one key, (knob, phase, shape), in order. An entry
+    recorded without a shape matches only a shape-less lookup."""
     return [e for e in _read_jsonl(applied_file)
-            if e.get("knob") == knob and _int(e.get("phase")) == phase and _entry_shape(e) == (shape or None)]
+            if _is_decision(e) and e.get("knob") == knob and _int(e.get("phase")) == phase
+            and _entry_shape(e) == (shape or None)]
 
 
 def effective_value(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str] = None):
@@ -908,7 +952,8 @@ def unshaped_notice(applied_file: Optional[str], knob: str, phase: int, shape: O
     if not shape:
         return None
     n = sum(1 for e in _read_jsonl(applied_file)
-            if e.get("knob") == knob and _int(e.get("phase")) == phase and _entry_shape(e) is None)
+            if _is_decision(e) and e.get("knob") == knob and _int(e.get("phase")) == phase
+            and _entry_shape(e) is None)
     if not n:
         return None
     return (f"learn: notice — {n} decision(s) for {knob}[{phase}] predate phase-shape keys and are "
@@ -1045,6 +1090,7 @@ def apply_proposer_timeout(summary: dict, phase: int, default: int, applied_file
         "knob": "proposer_timeout", "phase": phase, "shape": shape, "value": adv["value"], "previous": previous,
         "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
         "metric": "work_sec_p90", "applied_at": _now_iso(),
+        "baseline": record_baseline(summary, phase, shape, stats.get("runs_seen", [])),
     }
     _append_jsonl(applied_file, entry)
     _append_jsonl(events_file, {
@@ -1075,6 +1121,7 @@ def apply_yield_poll_interval(summary: dict, phase: int, default: int, applied_f
         "knob": "yield_poll_interval", "phase": phase, "shape": shape, "value": adv["value"], "previous": previous,
         "samples": adv["samples"], "source_runs": stats.get("runs_seen", []),
         "metric": "job_duration_p50", "applied_at": _now_iso(),
+        "baseline": record_baseline(summary, phase, shape, stats.get("runs_seen", [])),
     }
     _append_jsonl(applied_file, entry)
     _append_jsonl(events_file, {
@@ -1113,7 +1160,7 @@ def revert_run(run_id: str, applied_file: str, events_file: Optional[str] = None
         raise ValueError(f"no applied entry with run_id {run_id!r}")
     latest = None
     for e in entries:
-        if (e.get("knob") == orig["knob"] and _int(e.get("phase")) == orig["phase"]
+        if (_is_decision(e) and e.get("knob") == orig["knob"] and _int(e.get("phase")) == orig["phase"]
                 and _entry_shape(e) == _entry_shape(orig)):
             latest = e
     if not (latest is not None and latest.get("action") == "apply" and latest.get("run_id") == run_id):
@@ -1138,6 +1185,8 @@ def revert_all(applied_file: str, events_file: Optional[str] = None) -> List[dic
     value, in one pass — the bulk form of `revert_run` for "turn learning off"."""
     latest: "OrderedDict[Tuple[str, int, Optional[str]], dict]" = OrderedDict()
     for e in _read_jsonl(applied_file):
+        if not _is_decision(e):
+            continue
         key = (e.get("knob"), _int(e.get("phase")), _entry_shape(e))
         latest[key] = e
     out = []
@@ -1179,6 +1228,274 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     hard_lo = KNOB_HARD_MIN[knob]
     hard_hi = KNOB_HARD_MAX_FIXED.get(knob, 2 * default)   # proposer_timeout: 2×default
     return int(min(max(int(value), hard_lo), hard_hi))
+
+
+# ── evaluate: did an applied decision help? (item 4; 05-evaluate-design.md) ──
+#
+# The corpus allows no significance test (design §1): a decision is labelled by
+# comparing its effect with the minimum detectable effect at the arm sizes it has,
+# and the MDE is always reported beside the effect, so "neutral" reads as "nothing
+# this large could be seen", never as "no effect".
+EVAL_FLOOR = 6            # billed non-futility passes per arm, below which: insufficient
+EVAL_Z = 2.80             # z(0.975) + z(0.80): 5 % two-sided, 80 % power
+EVAL_SD_FLOOR = 0.50      # floor on the pooled within-phase sd of log(x)
+EVAL_ICC = 0.5            # assumed intra-episode correlation (the corpus cannot estimate it)
+LABELS = ("helped", "neutral", "regressed", "insufficient")
+# log() needs a positive value: a pass billed at $0 or timed at 0 s is floored here
+_LOG_FLOOR = {"cost": 1e-4, "wall": 1.0}
+# the proposer_cap fields that say which value a run's passes ran under, per knob
+_CAP_FIELDS = {
+    "proposer_timeout": ("seconds", "source", "arm"),
+    "yield_poll_interval": ("yield_poll", "yield_poll_source", "yield_poll_arm"),
+}
+
+
+def mde(s: float, n_a: int, n_b: int, mbar: float = 1.0) -> float:
+    """Minimum detectable effect on log(x): 2.80 · s · sqrt(1/n_a + 1/n_b) · sqrt(DEFF),
+    s floored at 0.50, DEFF = 1 + (m̄ − 1)·0.5 for m̄ passes per episode."""
+    deff = 1.0 + (max(mbar, 1.0) - 1.0) * EVAL_ICC
+    return EVAL_Z * max(s, EVAL_SD_FLOOR) * math.sqrt(1.0 / n_a + 1.0 / n_b) * math.sqrt(deff)
+
+
+def compare_arms(applied: List[Tuple[str, float]], baseline: List[Tuple[str, float]], kind: str) -> dict:
+    """One primary: `applied`/`baseline` are (run, value) samples; the run is the
+    episode a pass clusters in."""
+    floor = _LOG_FLOOR[kind]
+    la = [math.log(max(v, floor)) for _, v in applied if v is not None]
+    lb = [math.log(max(v, floor)) for _, v in baseline if v is not None]
+    n_a, n_b = len(la), len(lb)
+    out = {"n_a": n_a, "n_b": n_b, "r": None, "mde": None, "s": None, "deff": None, "label": "insufficient"}
+    if n_a < EVAL_FLOOR or n_b < EVAL_FLOOR:
+        return out
+    ma, mb = statistics.fmean(la), statistics.fmean(lb)
+    ss = sum((x - ma) ** 2 for x in la) + sum((x - mb) ** 2 for x in lb)
+    sd = math.sqrt(ss / (n_a + n_b - 2))
+    episodes = len({r for r, v in applied if v is not None}) + len({r for r, v in baseline if v is not None})
+    mbar = (n_a + n_b) / max(episodes, 1)
+    r = ma - mb
+    m = mde(sd, n_a, n_b, mbar)
+    label = "helped" if r <= -m else "regressed" if r >= m else "neutral"
+    out.update({"r": round(r, 4), "mde": round(m, 4), "s": round(max(sd, EVAL_SD_FLOOR), 4),
+                "sd": round(sd, 4), "deff": round(1.0 + (mbar - 1.0) * EVAL_ICC, 4),
+                "mbar": round(mbar, 3), "label": label})
+    return out
+
+
+def _combine(cost: dict, wall: dict) -> str:
+    labels = (cost["label"], wall["label"])
+    if "regressed" in labels:
+        return "regressed"
+    if "helped" in labels:
+        return "helped"
+    if "neutral" in labels:
+        return "neutral"
+    return "insufficient"
+
+
+def _phase_attempts(summary: dict, phase: int, shape: Optional[str], runs) -> List[dict]:
+    runs = set(runs)
+    return [a for a in summary.get("attempts", [])
+            if a["phase"] == phase and a["run"] in runs and (not shape or a.get("shape") == shape)]
+
+
+def _samples(attempts: List[dict]) -> Tuple[List[Tuple[str, float]], List[Tuple[str, float]]]:
+    cost, wall = [], []
+    for a in attempts:
+        for p in a["passes_detail"]:
+            if _is_sample(p):
+                cost.append((a["run"], p["cost_usd"]))
+                if p["elapsed_sec"] is not None:
+                    wall.append((a["run"], p["elapsed_sec"]))
+    return cost, wall
+
+
+# the stop reasons that hand a phase back to a human: the arbitration proxy (no
+# event records arbitration itself; 05-evaluate-design.md §2.6)
+ARBITRATION_STOPS = ("max_rejects", "gate_oscillation", "critic_config", "proposer_no_progress")
+
+
+def guardrail_counts(attempts: List[dict], runs_meta: dict, phase: int) -> dict:
+    """The raw counts every guardrail needs, for one arm."""
+    verdicts = [a for a in attempts if a.get("verdict")]
+    first = [a for a in verdicts if a["attempt"] == 1]
+    cases = [a["diagnostician_case"] for a in attempts if a.get("diagnostician_case")]
+    episodes = sorted({a["run"] for a in attempts})
+    return {
+        "attempts": len(attempts),
+        "verdicts": len(verdicts),
+        "malformed": sum(1 for a in verdicts if a["verdict"] == "MALFORMED"),
+        "grounding_gap": sum(1 for a in verdicts if a.get("grounding_gap_paths")),
+        "verification_failed": sum(1 for a in attempts if a.get("verification") == "failed"),
+        "first_verdicts": len(first),
+        "first_approved": sum(1 for a in first if a["verdict"] == "APPROVED"),
+        "diagnostician_cases": len(cases),
+        "diagnostician_grounding": sum(1 for c in cases if c == "grounding"),
+        "episodes": len(episodes),
+        "arbitration": sum(1 for r in episodes
+                           if (runs_meta.get(r) or {}).get("stop_reason") in ARBITRATION_STOPS
+                           and (runs_meta.get(r) or {}).get("stop_phase") == phase),
+        "critic_prompt_bytes": [a["critic_prompt_bytes"] for a in attempts
+                                if a.get("critic_prompt_bytes") is not None],
+    }
+
+
+def record_baseline(summary: dict, phase: int, shape: Optional[str], source_runs: List[str]) -> dict:
+    """What `apply` stores beside a decision: the samples that produced it, under
+    the backend label of the most recent source run (runs under another label are
+    left out, not mixed in). The label, not a model version, is the reset key:
+    nothing in the event stream records a model version."""
+    runs_meta = summary.get("runs", {})
+    backend = next((runs_meta.get(r, {}).get("backend") for r in reversed(source_runs)
+                    if r in runs_meta), None)
+    base_runs = [r for r in source_runs if runs_meta.get(r, {}).get("backend") == backend]
+    atts = _phase_attempts(summary, phase, shape, base_runs)
+    cost, wall = _samples(atts)
+    return {"backend": backend, "shape": shape, "runs": base_runs,
+            "cost": [[r, v] for r, v in cost], "wall": [[r, v] for r, v in wall],
+            "guardrails": guardrail_counts(atts, runs_meta, phase)}
+
+
+def _applied_runs(summary: dict, decision: dict) -> List[str]:
+    """The runs whose passes of this phase ran under the decision: by the recorded
+    arm when proposer_cap carries one, else by source `learned` at the decision's
+    value. The decision's own source runs are never in its applied arm."""
+    value_f, source_f, arm_f = _CAP_FIELDS[decision["knob"]]
+    caps = (summary.get("phases", {}).get(str(decision["phase"])) or {}).get("caps") or []
+    source = set(decision.get("source_runs") or [])
+    out = []
+    for c in caps:
+        if c["run"] in source:
+            continue
+        arm = c.get(arm_f)
+        if arm is not None:
+            hit = arm == "applied"
+        else:
+            hit = c.get(source_f) == "learned" and c.get(value_f) == _int(decision.get("value"))
+        if hit:
+            out.append(c["run"])
+    return out
+
+
+def counterfactual(decision: dict) -> dict:
+    """What the recorded passes can say without a run under the new value
+    (05-evaluate-design.md §2.9). Informational only; never a label input."""
+    base = decision.get("baseline") or {}
+    value, previous = _int(decision.get("value")), _int(decision.get("previous"))
+    if decision["knob"] != "proposer_timeout" or value is None or previous is None or value == previous:
+        return {"kind": "none"}
+    if value > previous:
+        return {"kind": "censored",
+                "note": "a longer cap cannot be evaluated from logs: a killed pass does not show how long it would have run"}
+    wall = [(r, v) for r, v in base.get("wall") or []]
+    capped = [(r, min(v, value)) for r, v in wall]
+    return {"kind": "shorter_cap_wall_only",
+            "note": "wall-clock only: a truncated pass's cost is unobserved",
+            "wall": compare_arms(capped, wall, "wall")}
+
+
+def evaluate_decision(summary: dict, decision: dict, current_shape: Optional[str],
+                      excluded_runs=()) -> dict:
+    """Label one applied decision against its recorded baseline."""
+    base = decision.get("baseline")
+    phase = _int(decision["phase"])
+    result = {"knob": decision["knob"], "phase": phase, "shape": _entry_shape(decision),
+              "evaluates_run_id": decision["run_id"], "value": decision.get("value"),
+              "previous": decision.get("previous"), "reset": None, "applied_runs": [],
+              "counterfactual": counterfactual(decision)}
+    empty = compare_arms([], [], "cost")
+    if not base:
+        result.update(label="insufficient", reason="no baseline recorded (applied before evaluate existed)",
+                      cost=empty, wall=dict(empty))
+        return result
+    backend = base.get("backend")
+    result["backend"] = backend
+    if (current_shape or None) != _entry_shape(decision):
+        result.update(label="insufficient", reset="shape", cost=empty, wall=dict(empty),
+                      reason="the phase's shape changed since the decision; its baseline no longer applies")
+        return result
+    runs_meta = summary.get("runs", {})
+    phase_runs = (summary.get("phases", {}).get(str(phase)) or {}).get("runs_seen") or []
+    latest = next((r for r in reversed(phase_runs) if r in runs_meta), None)
+    if latest is not None and latest not in (base.get("runs") or []) \
+            and runs_meta[latest].get("backend") != backend:
+        result.update(label="insufficient", reset="backend", cost=empty, wall=dict(empty),
+                      reason=f"backend changed from {backend!r} to {runs_meta[latest].get('backend')!r}; "
+                             "applied-arm samples discarded")
+        return result
+    excluded = set(excluded_runs)
+    applied = [r for r in _applied_runs(summary, decision)
+               if r not in excluded and runs_meta.get(r, {}).get("backend") == backend]
+    result["applied_runs"] = applied
+    result["excluded_runs"] = sorted(excluded & set(_applied_runs(summary, decision)))
+    atts = _phase_attempts(summary, phase, _entry_shape(decision), applied)
+    cost_a, wall_a = _samples(atts)
+    cost = compare_arms(cost_a, [tuple(x) for x in base.get("cost") or []], "cost")
+    wall = compare_arms(wall_a, [tuple(x) for x in base.get("wall") or []], "wall")
+    result.update(cost=cost, wall=wall, label=_combine(cost, wall),
+                  applied_guardrails=guardrail_counts(atts, runs_meta, phase))
+    return result
+
+
+def active_decisions(applied_file: Optional[str], phase: Optional[int] = None) -> List[dict]:
+    """The apply entries currently in effect, one per (knob, phase, shape)."""
+    latest: "OrderedDict[Tuple[str, int, Optional[str]], dict]" = OrderedDict()
+    for e in _read_jsonl(applied_file):
+        if _is_decision(e):
+            latest[(e.get("knob"), _int(e.get("phase")), _entry_shape(e))] = e
+    return [e for e in latest.values()
+            if e.get("action") == "apply" and (phase is None or _int(e.get("phase")) == phase)]
+
+
+def _last_evaluation(applied_file: Optional[str], run_id: str) -> Optional[dict]:
+    last = None
+    for e in _read_jsonl(applied_file):
+        if e.get("action") == "evaluate" and e.get("evaluates_run_id") == run_id:
+            last = e
+    return last
+
+
+def _signature(result: dict) -> tuple:
+    return (result.get("label"), result.get("reset"), result.get("action_taken"),
+            result["cost"]["n_a"], result["cost"]["n_b"], result["wall"]["n_a"], result["wall"]["n_b"],
+            json.dumps(result.get("guardrails"), sort_keys=True))
+
+
+def record_evaluation(result: dict, applied_file: str, events_file: Optional[str]) -> Optional[dict]:
+    """Append one `evaluate` entry (never touching the apply entry) and emit
+    `knob_evaluated` — only when the result differs from the last evaluation of
+    the same decision, so re-approving a phase without new samples adds nothing."""
+    last = _last_evaluation(applied_file, result["evaluates_run_id"])
+    if last is not None and _signature(last) == _signature(result):
+        return None
+    entry = dict(result, schema=LEARN_APPLIED_SCHEMA, action="evaluate", run_id=_new_run_id(),
+                 evaluated_at=_now_iso())
+    _append_jsonl(applied_file, entry)
+    _append_jsonl(events_file, {
+        "event": "knob_evaluated", "ts": _now_ts(), "knob": result["knob"], "phase": result["phase"],
+        "label": result["label"], "action": result.get("action_taken") or "evaluated",
+        "reset": result.get("reset"),
+        "cost_r": result["cost"]["r"], "cost_mde": result["cost"]["mde"],
+        "wall_r": result["wall"]["r"], "wall_mde": result["wall"]["mde"],
+        "n_applied": result["cost"]["n_a"], "n_baseline": result["cost"]["n_b"],
+        "run_id": entry["run_id"], "evaluates_run_id": result["evaluates_run_id"],
+    })
+    return entry
+
+
+def _fmt_primary(name: str, c: dict) -> str:
+    if c["r"] is None:
+        return f"{name} n={c['n_a']}/{c['n_b']} (need {EVAL_FLOOR}/{EVAL_FLOOR})"
+    return f"{name} r={c['r']:+.2f} (MDE ±{c['mde']:.2f}, n={c['n_a']}/{c['n_b']})"
+
+
+def format_evaluation(result: dict) -> str:
+    unit = _unit_suffix(result["knob"])
+    head = (f"learn: phase {result['phase']} {result['knob']} {result.get('previous')}{unit}→"
+            f"{result.get('value')}{unit} [{result['evaluates_run_id']}]: {result['label']}")
+    if result.get("reset"):
+        head += f" (baseline reset: {result['reset']})"
+    tail = f" — {_fmt_primary('cost', result['cost'])}; {_fmt_primary('wall', result['wall'])}"
+    return head + tail
 
 
 def _unit_suffix(knob: str) -> str:
@@ -1433,6 +1750,46 @@ def _cmd_observe(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_evaluate(args: argparse.Namespace) -> int:
+    applied_file, events_file = _feature_paths(args.feature_dir, args.applied_file, args.events_file)
+    if not applied_file:
+        print("learn: --applied-file or --feature-dir is required", file=sys.stderr)
+        return 2
+    decisions = active_decisions(applied_file, args.phase)
+    if args.report:
+        # read-only: the last recorded evaluation of every active decision
+        if not decisions:
+            print("learn: no active decisions")
+        for d in decisions:
+            last = _last_evaluation(applied_file, d["run_id"])
+            if last is None:
+                unit = _unit_suffix(d["knob"])
+                print(f"learn: phase {d['phase']} {d['knob']} {d.get('previous')}{unit}→{d.get('value')}{unit} "
+                      f"[{d['run_id']}]: not evaluated yet")
+            else:
+                print(format_evaluation(last))
+        return 0
+    if not args.events:
+        print("learn: --events is required (or --report)", file=sys.stderr)
+        return 2
+    if not decisions:
+        return 0
+    files = find_event_files(args.events)
+    events: List[dict] = []
+    for f in files:
+        events.extend(read_events(f))
+    summary = summarize(events)
+    shapes = _phase_shapes(args)
+    for d in decisions:
+        ph = _int(d["phase"])
+        current = shapes.get(ph, _entry_shape(d))
+        result = evaluate_decision(summary, d, current)
+        print(format_evaluation(result))
+        if not args.dry_run:
+            record_evaluation(result, applied_file, events_file)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(prog="learn.py", description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -1516,6 +1873,22 @@ def main(argv: Optional[List[str]] = None) -> int:
     ob.add_argument("--pretty", action="store_true")
     ob.add_argument("--phase-shape", help="observe only attempts recorded under this phase shape")
     ob.set_defaults(func=_cmd_observe)
+
+    ev = sub.add_parser("evaluate", help="label every active decision helped/neutral/regressed/insufficient "
+                                          "against its recorded baseline; appends an `evaluate` entry and a "
+                                          "knob_evaluated event when the result changed")
+    ev.add_argument("--events", action="append",
+                    help="events.jsonl, a run dir, or a dir of run dirs (repeatable) — the phase_done hook "
+                         "passes \"$FEATURE_DIR/runs\", every run of the feature")
+    ev.add_argument("--phase", type=int, help="only decisions for this phase (default: every active decision)")
+    ev.add_argument("--feature-dir")
+    ev.add_argument("--applied-file")
+    ev.add_argument("--events-file", help="where knob_evaluated goes (default <feature-dir>/events.jsonl)")
+    ev.add_argument("--dry-run", action="store_true", help="print the evaluation; write nothing")
+    ev.add_argument("--report", action="store_true",
+                    help="read-only: print the last recorded evaluation of every active decision")
+    _shape_args(ev)
+    ev.set_defaults(func=_cmd_evaluate)
 
     args = ap.parse_args(argv)
     return args.func(args)
