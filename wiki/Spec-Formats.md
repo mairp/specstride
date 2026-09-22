@@ -1,24 +1,12 @@
 # Spec Formats
 
 Specstride parses the spec through a **single pluggable layer** — [`lib/specstride_spec.py`](../lib/specstride_spec.py),
-the one source of truth both the bash side and the critic call. Three formats ship; the format
-is **auto-detected**, or forced with `--spec-format` / `SPECSTRIDE_SPEC_FORMAT`.
+the one source of truth both the bash side and the critic call. **A Spec Kit `tasks.md` is the
+input to use.** OpenSpec changes are also supported, and the older hand-written `SPECS.md`
+format still works but will be deprecated soon. The format is **auto-detected**, or forced with
+`--spec-format` / `SPECSTRIDE_SPEC_FORMAT`.
 
-## `native` (the default)
-
-Each phase is a level-2 heading whose text starts with `Phase <N>`, containing an
-`### Acceptance criteria` block:
-
-```markdown
-## Phase 0 — <title>
-<description of the work>
-
-### Acceptance criteria
-- [ ] criterion one
-- [ ] criterion two
-```
-
-## `speckit-tasks`
+## `speckit-tasks` (recommended)
 
 A [GitHub Spec Kit](https://github.com/github/spec-kit) `tasks.md`. Each `## Phase N:` heading
 becomes a Specstride phase, and every `- [ ]` task line under it becomes a required deliverable the
@@ -80,12 +68,29 @@ Canonical OpenSpec paths are detected before the generic `tasks.md` filename rul
 task shape is also content-detected when the file has another name. Example:
 [`examples/openspec-tasks.example.md`](../examples/openspec-tasks.example.md).
 
+## `native` (legacy, to be deprecated soon)
+
+A hand-written `SPECS.md` where each phase is a level-2 heading whose text starts with
+`Phase <N>`, containing an `### Acceptance criteria` block. It is still the fallback when nothing
+else is detected, so existing `SPECS.md` projects keep running; new work should use a Spec Kit
+feature:
+
+```markdown
+## Phase 0 — <title>
+<description of the work>
+
+### Acceptance criteria
+- [ ] criterion one
+- [ ] criterion two
+```
+
 ## Spec resolution (zero-flag start)
 
 Inside a Spec Kit or OpenSpec project you rarely need `-s`. When it is omitted, Specstride resolves
 the spec in this order (never silently picking between candidates):
 
-1. `<workdir>/SPECS.md` — unchanged precedence, so native users are unaffected.
+1. `<workdir>/SPECS.md`, if a legacy one exists — checked first so existing projects are
+   unaffected; remove it once the work has moved to a Spec Kit feature.
 2. `<workdir>/.specify/feature.json` → its `feature_directory` → `<dir>/tasks.md`.
 3. discover `<workdir>/specs/*/tasks.md` and `<workdir>/openspec/changes/*/tasks.md` — exactly
    one match is used; two or more with no `--feature` exits `E_SPEC` (3), listing every
@@ -96,17 +101,17 @@ the spec in this order (never silently picking between candidates):
 specstride run -w ./            # resolves specs/001-.../tasks.md, no -s
 ```
 
-## `SPECS.md` vs `tasks.md`: which is the source of truth?
+## `tasks.md` is the source of truth
 
-Never keep both for the same work — gate approvals live in `.specstride/`, not in either markdown,
-so a hand-written `SPECS.md` beside a `tasks.md` becomes a second, un-reconciled source of truth.
+Write the work as a Spec Kit feature and let Spec Kit own its `tasks.md`; it is generated from the
+feature's `spec.md` and `plan.md`. Never keep a hand-written `SPECS.md` beside it for the same
+work: `SPECS.md` is checked first and would become a second, un-reconciled source of truth.
+`SPECS.md` remains readable for existing projects but will be deprecated soon; move non-feature
+work (migrations, refactors, ops roadmaps) into a Spec Kit feature too.
 
-- **Inside a `.specify` project → `tasks.md` is the SoT.** It is generated from the feature's
-  `spec.md`/`plan.md`; let Spec Kit own it.
-- **For non-feature-shaped work → `SPECS.md` (native) is the SoT.** Migrations, refactors, ops
-  roadmaps — anything not a Spec Kit feature.
-
-Specstride never writes checkbox state back into `tasks.md`; approvals stay in
-`.specstride/features/<slug>/gates/`, so there is exactly one source of truth for "is phase N done".
+Gate approvals live in `.specstride/features/<slug>/gates/`, which is what "is phase N done"
+means. When the critic approves a phase, Specstride also ticks that phase's task checkboxes in
+`tasks.md` (`SPECSTRIDE_TICK_TASKS=false` turns that off); checkbox state is outside the plan
+hash and never re-plans anything.
 
 Next: [On-Disk Contract](On-Disk-Contract) · [Architecture](Architecture)
