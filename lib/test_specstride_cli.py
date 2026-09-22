@@ -313,3 +313,117 @@ def test_resume_without_saved_git_commits_changes_nothing(tmp_path):
                        env=dict(_clean_env(), SPECSTRIDE_GIT_COMMITS="auto"))
     assert "GIT_COMMITS_ENV=auto" in p.stdout
 
+
+# ── specstride --reverse / reverse (lib/reverse.py) ──────────────────────────
+import shutil  # noqa: E402
+
+REVERSE_FIXTURES = os.path.join(HERE, "fixtures", "reverse")
+
+
+def _reverse_src(tmp_path, with_existing_tasks=False):
+    src = tmp_path / "mini"
+    shutil.copytree(os.path.join(REVERSE_FIXTURES, "src-mini"), src, symlinks=True)
+    if with_existing_tasks:
+        # a Spec Kit feature already in the target: resolve_spec would pick it up if
+        # the reverse run ever launched without its own -s
+        (src / "specs" / "001-existing").mkdir(parents=True)
+        (src / "specs" / "001-existing" / "tasks.md").write_text(
+            "# Tasks\n\n## Phase 1: Setup\n\n- [ ] T001 Something in `x.py`\n")
+    return src
+
+
+def _specstride(*args, env=None, timeout=60):
+    p = subprocess.run(["bash", SPECSTRIDE, *map(str, args)], capture_output=True,
+                       text=True, timeout=timeout, env=env or _clean_env())
+    return p.returncode, p.stdout, p.stderr
+
+
+def test_reverse_dry_run_is_identical_under_both_spellings(tmp_path):
+    src = _reverse_src(tmp_path)
+    rc1, out1, _err1 = _specstride("--reverse", src, "--dry-run")
+    rc2, out2, _err2 = _specstride("reverse", src, "--dry-run")
+    assert rc1 == rc2 == 0
+    assert out1 == out2
+    assert "dry run" in out1
+
+
+def test_reverse_flag_is_not_forwarded_as_a_launch(tmp_path):
+    rc, out, err = _specstride("--reverse", _reverse_src(tmp_path), "--dry-run")
+    assert rc == 0
+    assert "unknown arg" not in err and "orchestrator.sh: " not in err
+    assert "no LLM call" in out
+
+
+def test_reverse_dry_run_argv_pins_the_driver_and_the_state_paths(tmp_path):
+    src = _reverse_src(tmp_path, with_existing_tasks=True)
+    rc, out, err = _specstride("reverse", src, "--dry-run", "--proposer", "dsh",
+                               "--critic", "dsh")
+    assert rc == 0, err
+    state = str(src / ".specstride" / "reverse" / "mini")
+    argv_line = next(line for line in out.splitlines() if "orchestrator.sh" in line)
+    assert argv_line.strip().startswith("SPECSTRIDE_GIT_COMMITS=off ")
+    argv = argv_line.split()
+    assert argv[argv.index("-s") + 1] == state + "/DRIVER.md"
+    assert argv[argv.index("--spec-format") + 1] == "native"
+    assert argv[argv.index("--feature") + 1] == "reverse-mini"
+    assert argv[argv.index("--test-plan") + 1] == state + "/TEST_PLAN.md"
+    assert argv[argv.index("--generate-tests") + 1] == state + "/generated"
+    assert argv[argv.index("--verification-commands") + 1] == \
+        state + "/verification-commands.json"
+    assert argv[-4:] == ["--proposer", "dsh", "--critic", "dsh"]
+    assert "001-existing" not in argv_line                       # never the found tasks.md
+    assert str(src / "specs" / "002-as-is-mini") in out         # numbered after it
+    assert not (src / "specs" / "002-as-is-mini").exists()
+
+
+def test_reverse_refuses_flags_it_owns_and_other_modes(tmp_path):
+    src = _reverse_src(tmp_path)
+    rc, _out, err = _specstride("reverse", src, "-s", "x.md", "--dry-run")
+    assert rc == 3 and "set by the reverse run itself" in err
+    rc, _out, err = _specstride("reverse", src, "--mode", "black-box")
+    assert rc == 3 and "Black-box reverse engineering requires an explicit permission" in err
+    rc, _out, err = _specstride("reverse", src, "--mode", "runtime-assisted")
+    assert rc == 3 and "Runtime-assisted" in err
+    rc, _out, _err = _specstride("reverse", src, "--mode", "source-aware", "--dry-run")
+    assert rc == 0
+    rc, _out, err = _specstride("reverse", src, "--out", src, "--dry-run")
+    assert rc == 3 and "source root" in err
+
+
+def test_reverse_lint_exit_codes(tmp_path):
+    good = tmp_path / "good"
+    shutil.copytree(os.path.join(REVERSE_FIXTURES, "good"), good)
+    src = os.path.join(REVERSE_FIXTURES, "src-mini")
+    rc, out, _err = _specstride("reverse", "--lint", good, "--src", src)
+    assert rc == 0 and "0 error(s), 0 warning(s)" in out
+    rc, out, _err = _specstride("reverse", "--lint", good, "--src", src, "--upto", "2",
+                                "--json")
+    assert rc == 0 and json.loads(out) == {"errors": [], "warnings": []}
+    (good / "README.md").write_text("not Spec Kit\n")
+    rc, out, _err = _specstride("reverse", "--lint", good)
+    assert rc == 3 and "structure.extra" in out
+    rc, _out, _err = _specstride("reverse", "--lint", good, "--upto", "many")
+    assert rc == 2
+
+
+def test_resume_of_a_reverse_run_keeps_checkpoints_off(tmp_path):
+    """`specstride resume --feature reverse-<slug>` must not re-enable the git
+    checkpoints the reverse launch turned off (the conf is what carries it)."""
+    wd = _resume_conf(tmp_path, "GIT_COMMITS=off\n")
+    conf = wd / ".specstride" / "features" / "tf" / "last-run.conf"
+    rev = wd / ".specstride" / "features" / "reverse-mini"
+    rev.mkdir(parents=True)
+    (rev / "last-run.conf").write_text(conf.read_text().replace("FEATURE=tf", "FEATURE=reverse-mini"))
+    p = subprocess.run(["bash", SPECSTRIDE, "resume", "-w", str(wd), "--feature", "reverse-mini"],
+                       capture_output=True, text=True, timeout=20, env=_clean_env())
+    assert "GIT_COMMITS_ENV=off" in p.stdout
+    assert "reverse-mini" in p.stdout
+
+
+def test_help_lists_the_reverse_verb():
+    rc, out, _err = _specstride("--help")
+    assert rc == 0
+    assert "specstride reverse   <SRC> [--out DIR] [--name SLUG] [--tasks done|open]" in out
+    assert "specstride reverse --lint <FEATURE_DIR> [--src SRC] [--upto N] [--json]" in out
+    assert "Also `specstride --reverse <SRC> …`" in out
+    assert out.rstrip().endswith("orchestrator.sh --help for launch flags.")

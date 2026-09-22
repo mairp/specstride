@@ -34,6 +34,15 @@
 #                                        SPECSTRIDE_LEARNING=apply. --summarize prints
 #                                        the metric JSON and --evaluate what evaluate
 #                                        would conclude now; both read-only.
+#   specstride reverse   <SRC> [--out DIR] [--name SLUG] [--tasks done|open] [--dry-run] […]
+#                                        reverse-engineer SRC, read-only, into a Spec Kit
+#                                        feature directory that describes it as it is
+#                                        (MUTATES: only the output dir, default
+#                                        SRC/specs/NNN-as-is-<slug>/, and SRC/.specstride/).
+#                                        Also `specstride --reverse <SRC> …`; launch flags
+#                                        (--proposer, --critic, timeouts) pass through.
+#   specstride reverse --lint <FEATURE_DIR> [--src SRC] [--upto N] [--json]
+#                                        lint any Spec Kit feature directory; no LLM.
 # Launch defaults to required verification with feature-scoped TEST_PLAN.md and
 # generated scaffolds; `--verification plan|off` changes that behavior. Explicit
 # `--test-plan`/`--generate-tests` paths override defaults, and resume preserves
@@ -51,7 +60,7 @@ LIB_DIR="$SCRIPT_DIR/lib"          # Python components live here
 . "$SCRIPT_DIR/specstride-lib.sh"
 
 usage() {
-  sed -n '2,43p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ── Single front door ──────────────────────────────────────────────────────
@@ -62,7 +71,115 @@ usage() {
 #   • `specstride -w DIR -s SPEC …`  (leading flag) → start a run (orchestrator.sh)
 #   • `specstride <verb> …` (status/watch/…) and `-h`/`--help` → inspect, below.
 SUB="${1:-}"
+
+# ── reverse: a codebase reverse-engineered into Spec Kit (lib/reverse.py) ──────
+# Both spellings (`specstride --reverse SRC …` and `specstride reverse SRC …`) land
+# here. `reverse.py plan` writes the inventory, the native driver spec and the
+# verification-commands document under SRC/.specstride/reverse/<slug>/; this
+# function then launches the ordinary orchestrator on them. The run's workdir is
+# SRC, a repo it must never commit into, so git checkpoints are forced off.
+reverse_main() {
+  local src="" out="" name="" tasks="" mode="" dry="false"
+  local lint_dir="" lint_src="" upto="" json="false"
+  local -a launch=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --lint)     lint_dir="${2:?--lint needs a feature directory}"; shift 2 ;;
+      --src)      lint_src="${2:?--src needs a directory}"; shift 2 ;;
+      --upto)     upto="${2:?--upto needs a level}"; shift 2 ;;
+      --json)     json="true"; shift ;;
+      --out)      out="${2:?--out needs a directory}"; shift 2 ;;
+      --name)     name="${2:?--name needs a slug}"; shift 2 ;;
+      --tasks)    tasks="${2:?--tasks needs done or open}"; shift 2 ;;
+      --mode)     mode="${2:?--mode needs a value}"; shift 2 ;;
+      --dry-run)  dry="true"; shift ;;
+      -h|--help)  usage; exit 0 ;;
+      -w|--workdir|-s|--specs|--spec-format|--feature|--verification|--verification-commands|--test-plan|--generate-tests)
+        echo "specstride reverse: $1 is set by the reverse run itself; it cannot be passed" >&2
+        exit 3 ;;
+      --proposer|--critic|--max-rejects|--max-iter|--proposer-timeout|--proposer-timeout-phase|--critic-timeout|--start-phase|--loki-url|--otel-url|--long-job-phase|--long-job-cmd)
+        launch+=( "$1" "${2:?$1 needs a value}" ); shift 2 ;;
+      -*)         launch+=( "$1" ); shift ;;
+      *)
+        if [[ -z "$src" ]]; then src="$1"; shift
+        else echo "specstride reverse: unexpected argument '$1'" >&2; exit 2; fi ;;
+    esac
+  done
+
+  if [[ -n "$lint_dir" ]]; then
+    local -a largs=( lint "$lint_dir" )
+    [[ -n "$lint_src" ]] && largs+=( --src "$lint_src" )
+    [[ -n "$upto" ]] && largs+=( --upto "$upto" )
+    [[ "$json" == "true" ]] && largs+=( --json )
+    exec python3 "$LIB_DIR/reverse.py" "${largs[@]}"
+  fi
+  # Lisa refuses these too: they need a permission and side-effect policy nobody
+  # has written, and this mode will not infer one.
+  if [[ -n "$mode" && "$mode" != "source-aware" ]]; then
+    local label="Runtime-assisted"
+    [[ "$mode" == "black-box" ]] && label="Black-box"
+    echo "specstride reverse: $label reverse engineering requires an explicit permission and side-effect policy. Specstride will not infer those permissions; only --mode source-aware is supported." >&2
+    exit 3
+  fi
+  [[ -n "$src" ]] || { echo "usage: specstride reverse <SRC> [--out DIR] [--name SLUG] [--tasks done|open] [--dry-run] [launch flags…]" >&2; exit 2; }
+
+  # SPECSTRIDE_REVERSE_* knobs follow the normal precedence: .env fills in what the
+  # caller did not export (the same rule orchestrator.sh applies).
+  if [[ -f "$SCRIPT_DIR/.env" ]]; then
+    local _caller_env
+    _caller_env="$(export -p)"
+    set -a; # shellcheck source=/dev/null
+    . "$SCRIPT_DIR/.env"; set +a
+    eval "$_caller_env"
+    specstride_env_compat
+  fi
+
+  local -a pargs=( plan "$src" )
+  [[ -n "$out" ]] && pargs+=( --out "$out" )
+  [[ -n "$name" ]] && pargs+=( --name "$name" )
+  [[ -n "$tasks" ]] && pargs+=( --tasks "$tasks" )
+  local plan_json
+  plan_json="$(python3 "$LIB_DIR/reverse.py" "${pargs[@]}")" || exit $?
+  local -a f=()
+  mapfile -t f < <(printf '%s' "$plan_json" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+for k in ("src","driver","feature","verification_commands","test_plan","generate_tests"):
+    print(d[k])')
+  local -a argv=( bash "$SCRIPT_DIR/orchestrator.sh" -w "${f[0]}" -s "${f[1]}"
+                  --spec-format native --feature "${f[2]}"
+                  --verification-commands "${f[3]}"
+                  --test-plan "${f[4]}" --generate-tests "${f[5]}" "${launch[@]}" )
+  if [[ "$dry" == "true" ]]; then
+    printf '%s' "$plan_json" | python3 -c 'import json,sys
+d=json.load(sys.stdin); s=d["summary"]
+print("specstride reverse — dry run (no LLM call, nothing launched)")
+print("  source      : %s (%s, HEAD %s)" % (d["src"], "git ls-files" if s["walk"] == "git" else "filesystem walk", s["git_head"] or "none"))
+print("  inventory   : %d text files, %d skipped, %d bytes; oversize=%s; units=%d" % (
+    s["files"], s["skipped"], s["text_bytes"], str(d["oversize"]).lower(), s["units"]))
+print("  languages   : %s" % (", ".join("%s (%d)" % kv for kv in sorted(s["languages"].items())) or "none"))
+print("  frameworks  : %s" % (", ".join(s["frameworks"]) or "none detected"))
+print("  constitution: %s" % s["constitution"])
+print("  output dir  : %s" % d["out"])
+print("  tasks mode  : %s" % d["tasks_mode"])
+print("  inventory   : %s" % d["inventory"])
+print("  driver      : %s" % d["driver"])
+print("  commands    : %s" % d["verification_commands"])
+print("  phases:")
+for p in d["phases"]:
+    print("    %d. %s  (lint --upto %d)" % (p["n"], p["title"], p["lint_level"]))'
+    echo "  orchestrator (not executed):"
+    printf '    SPECSTRIDE_GIT_COMMITS=off'
+    printf ' %q' "${argv[@]}"
+    printf '\n'
+    exit 0
+  fi
+  export SPECSTRIDE_GIT_COMMITS=off
+  echo "reverse: launching ${argv[*]}"
+  exec "${argv[@]}"
+}
+
 case "$SUB" in
+  --reverse|reverse)  shift; reverse_main "$@"; exit $? ;;
   run|start)          shift; exec bash "$SCRIPT_DIR/orchestrator.sh" "$@" ;;
   -h|--help|help|"")  ;;                                   # → inspection usage
   -*)                 exec bash "$SCRIPT_DIR/orchestrator.sh" "$@" ;;  # bare flag → launch
