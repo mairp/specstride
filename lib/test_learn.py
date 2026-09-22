@@ -950,6 +950,20 @@ def test_proposer_cap_is_recorded_once_per_run_and_phase():
     assert learn.SCHEMA.startswith("specstride.learn.summary/")
 
 
+# -- diagnostician_done: the declared case, per attempt and per phase --------
+def test_diagnostician_case_is_counted_per_phase():
+    events = _events_for_phase(5, [100.0, 110.0, 120.0])
+    # the critic's events carry no run_id: they are attributed to the stream's run
+    extra = [{"event": "diagnostician_done", "phase": "5", "attempt": "1", "case": "grounding"},
+             {"event": "diagnostician_done", "phase": "5", "attempt": "2", "case": "real_gap"},
+             {"event": "diagnostician_done", "phase": "5", "attempt": "3", "bytes": "10"}]   # pre-case
+    for e in extra:
+        e.update(ts="2000", _src="synthetic")
+    s = learn.summarize(events + extra)
+    assert s["phases"]["5"]["diagnostician_cases"] == {"grounding": 1, "real_gap": 1, "unknown": 1}
+    assert _attempt(s, "run-X", 5, 2)["diagnostician_case"] == "real_gap"
+
+
 # -- observe: the §5.4 per-phase observation document ------------------------
 def test_observation_for_phase_has_the_documented_shape():
     events = learn.read_events(FIXTURE)

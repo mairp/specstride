@@ -853,7 +853,7 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 | `attempt_archived` | orchestrator | a rejected evidence file was archived before retry |
 | `verdict` | critic | the critic's APPROVED/REJECTED decision |
 | `reject` | orchestrator | phase N rejected (attempt M) with feedback |
-| `diagnostician_trigger` / `diagnostician_start` / `diagnostician_done` / `diagnostician_error` | orchestrator / critic | a NEW unmet-criteria signature: one tool-free full-file pass wrote `GATE<N>-HINT.md` |
+| `diagnostician_trigger` / `diagnostician_start` / `diagnostician_done` / `diagnostician_error` | orchestrator / critic | a NEW unmet-criteria signature: one tool-free full-file pass wrote `GATE<N>-HINT.md`. `diagnostician_done` carries `bytes` and `case` — the diagnostician's declared first line, `grounding` (the proposer cites badly), `real_gap` (the work is incomplete) or `unknown`; a read-only metric, counted per phase by `learn.py summarize` and never read by the gate |
 | `accelerator_start` | orchestrator | attempt M is an accelerator pass (narrowed prompt) acting on the hint for `criteria` |
 | `acceleration_note` | orchestrator | `GATE<N>-ACCELERATION.md` written: what the accelerator pass changed |
 | `git_checkpoint` / `gates_migrated` | orchestrator | per-phase commit / one-time relocation of pre-v2 state into `features/default/` |

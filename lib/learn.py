@@ -95,7 +95,8 @@ to call once per ``phase_done``, and safe to call again by hand.
 Output schema (``specstride.learn.summary/2``)
 ------------------------------------------
 ``/2`` adds ``phases[*].caps`` (one entry per run from ``proposer_cap``) to ``/1``;
-``/3`` adds ``attempts[*].shape`` and ``phases[*].shape``/``other_shape_attempts``.
+``/3`` adds ``attempts[*].shape`` and ``phases[*].shape``/``other_shape_attempts``;
+``/4`` adds ``attempts[*].diagnostician_case`` and ``phases[*].diagnostician_cases``.
 {
   "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
@@ -115,7 +116,7 @@ Output schema (``specstride.learn.summary/2``)
       "tool_calls", "wait_calls", "work_calls", "wait_call_share",
       "sleep_sec_declared", "work_sec_estimate",
       "kills_by_reason", "outcomes", "evidence_written",
-      "grounding_gap_paths", "critic_sec",
+      "grounding_gap_paths", "critic_sec", "diagnostician_case",
       "gate_duration_ms", "gate_live_share",          # with --verification-dir
       "passes_detail": [ { "iter", "outcome", "kill_reason", "kill_class",
                            "elapsed_sec", "cost_usd", "billed", "tool_calls",
@@ -127,7 +128,8 @@ Output schema (``specstride.learn.summary/2``)
       "work_sec_p50", "work_sec_p90", "work_sec_samples", "kills_by_reason",
       "job_duration_p50", "job_duration_samples",           # yield_poll_interval's evidence
       "wait_share_p50", "wait_share_samples", "hard_cap_kills_with_wait",
-      "caps": [ { "run", "seconds", "source", "yield_poll", "yield_poll_source" } ] } },
+      "caps": [ { "run", "seconds", "source", "yield_poll", "yield_poll_source" } ],
+      "diagnostician_cases": { "grounding"|"real_gap"|"unknown": n } } },
   "totals": { "runs", "attempts", "passes", "cost_usd", "unbilled_passes",
               "kills_by_reason", "outcomes", "approved_phases",
               "cost_per_approved_phase", "non_approved_cost_share",
@@ -152,7 +154,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
-SCHEMA = "specstride.learn.summary/3"
+SCHEMA = "specstride.learn.summary/4"
 
 # The wait/poll classifier of 03-002-run-telemetry.md §2, applied to Bash targets.
 WAIT_RE = re.compile(
@@ -343,6 +345,7 @@ class _Attempt:
         self.critic_sec: Optional[float] = None
         self.gate_duration_ms: Optional[int] = None
         self.gate_live_share: Optional[float] = None
+        self.diagnostician_case: Optional[str] = None
 
     def key(self) -> Tuple[str, int, int]:
         return (self.run, self.phase, self.attempt)
@@ -392,6 +395,7 @@ class _Attempt:
             "critic_sec": self.critic_sec,
             "gate_duration_ms": self.gate_duration_ms,
             "gate_live_share": self.gate_live_share,
+            "diagnostician_case": self.diagnostician_case,
             "passes_detail": passes,
         }
 
@@ -523,6 +527,12 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
             a = _locate(run, phase, attempt)
             if a is not None:
                 a.critic_start = ts
+        elif name == "diagnostician_done":
+            # critic-emitted, no run_id: attributed by the same _locate rules. An
+            # event from before the case field existed counts as "unknown".
+            a = _locate(run, phase, attempt)
+            if a is not None:
+                a.diagnostician_case = ev.get("case") or "unknown"
         elif name == "grounding_gap":
             a = _locate(run, phase, attempt)
             if a is not None:
@@ -751,6 +761,10 @@ def _phases(attempts: List[dict], caps: Optional[Dict[int, List[dict]]] = None,
             "hard_cap_kills_with_wait": hard_cap_with_wait,
             # what each run actually ran this phase under (proposer_cap, per run)
             "caps": [c for c in caps.get(ph, []) if c["run"] in runs_seen],
+            # the diagnostician's declared case per consulted attempt (read-only):
+            # "the proposer cites badly" vs "the work is incomplete"
+            "diagnostician_cases": dict(Counter(a["diagnostician_case"] for a in atts
+                                                if a.get("diagnostician_case"))),
         }
     return out
 

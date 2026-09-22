@@ -1366,3 +1366,29 @@ def test_previous_needs_grounding_files_are_carried_and_emitted_whole():
         assert '"chips": 16' in snap, snap
         # No feedback file: nothing carried, nothing raised.
         assert carried_grounding(os.path.join(d, "nope.md"), d, sd) == []
+
+
+# ── the diagnostician's declared CASE, recorded on diagnostician_done ───────
+def test_diagnostician_case_parses_both_cases_and_falls_back_to_unknown():
+    assert critic_mod.diagnostician_case("CASE: GROUNDING\nthe cites are loose") == "grounding"
+    assert critic_mod.diagnostician_case("\n**CASE: REAL-GAP**\nT032 is unbuilt") == "real_gap"
+    assert critic_mod.diagnostician_case("The work looks incomplete.\nCASE: REAL-GAP") == "unknown"
+    assert critic_mod.diagnostician_case("CASE: MAYBE") == "unknown"
+    assert critic_mod.diagnostician_case("") == "unknown"
+    assert critic_mod.diagnostician_case(None) == "unknown"
+
+
+def test_diagnostician_done_carries_the_case(tmp_path, monkeypatch):
+    work = tmp_path / "repo"
+    gates_rel = os.path.join(".specstride", "features", "001-demo", "gates")
+    gates_dir = work / gates_rel
+    gates_dir.mkdir(parents=True)
+    feature_dir = os.path.dirname(str(gates_dir))
+    events = tmp_path / "events.jsonl"
+    for reply, case in (("CASE: REAL-GAP\nunbuilt", "real_gap"), ("", "unknown")):
+        monkeypatch.setattr(critic_mod, "critic_call", lambda p, pr, t, w, reply=reply: reply)
+        run_diagnostician(_diagnostician_args(), str(work), 4, feature_dir, str(gates_dir),
+                          gates_rel, "### T032\n", "evidence\n", events_path=str(events))
+        done = [json.loads(l) for l in events.read_text().splitlines()
+                if json.loads(l)["event"] == "diagnostician_done"][-1]
+        assert done["case"] == case   # a literal string, never dropped as None
