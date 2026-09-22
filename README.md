@@ -631,7 +631,7 @@ feature** (from `.specstride/last-run.conf`); `status --all` spans every feature
 | `specstride watch  [-w DIR]` | the live status card (with heartbeat + run totals) |
 | `specstride stop   [-w DIR] [--now]` | **(mutates)** request a clean stop — writes `stop.flag`; the run finishes its current pass and exits 6. `--now` also kill-trees the in-flight proposer pass so it stops within seconds. Stops the single running run regardless of feature |
 | `specstride resume [-w DIR] [--feature S] [overrides…]` | **(mutates)** relaunch the orchestrator from the saved config of the last run (`.specstride/last-run.conf`, or a feature's own with `--feature`); refuses if a run is already active. Extra args override the saved flags (last-wins) |
-| `specstride learn  [-w DIR] [--feature S] [--show\|--apply\|--revert <run-id>\|--off]` | the self-tuning loop over this feature's telemetry — see [Learning](#learning-self-tuning-knobs). `--show` (default) is read-only; `--apply`/`--revert`/`--off` **mutate** `learning/applied.json` |
+| `specstride learn  [-w DIR] [--feature S] [--show\|--apply\|--revert <run-id>\|--off\|--summarize\|--evaluate]` | the self-tuning loop over this feature's telemetry — see [Learning](#learning-self-tuning-knobs). `--show` (default), `--summarize` (the metric JSON over every run) and `--evaluate` (what evaluation would conclude now; always a dry run) are read-only; `--apply`/`--revert`/`--off` **mutate** `learning/applied.json` |
 
 ## Learning (self-tuning knobs)
 
@@ -660,6 +660,10 @@ SPECSTRIDE_LEARNING=apply specstride run ...
 # Undo one decision, or all of them
 specstride learn --revert <run-id>
 specstride learn --off
+
+# Read-only: the metric JSON, and what evaluation would conclude now
+specstride learn --summarize
+specstride learn --evaluate
 ```
 
 - **Suggest by default.** `specstride learn --show` (or bare `specstride learn`) prints a
