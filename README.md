@@ -850,6 +850,22 @@ QUARANTINED, and `--apply` refuses a value within ±10 % of it (exit 4, naming t
 until 6 new billed non-futility samples have accrued since; `--apply --force` overrides and is
 recorded (`force: true`). A shape or backend change clears it.
 
+**The arm and the tamper rule.** `learn.py resolve` prints `<value>\t<arm>`, and every
+`proposer_cap` carries `arm` and `yield_poll_arm`: `applied` while a decision is in effect for
+that phase and shape — even one whose value equals the default — else `baseline`. Evaluation
+compares before with after; it does not alternate arms (at these run counts alternation never
+reaches its own floor, and a resumed run would split one episode across both arms), which is
+why only a revert is ever automatic. Because the proposer runs unsandboxed in the project and
+appends to the same `events.jsonl`, the orchestrator — the parent process — brackets every
+proposer launch while the layer is on: it records the size and SHA-256 prefix of
+`events.jsonl`, `learning/applied.json` and `learning/phase-<N>.json` before the pass, and if
+afterwards any is shorter or its old bytes differ, it emits `events_tampered` and that run is
+excluded from every evaluation (appends are normal and never flagged; a run whose arm was
+recorded without the bracket is excluded, not trusted). With the layer off no bracket is taken.
+The rule does not catch forged *appended* events, writes outside a pass (detached long jobs),
+edits to verdict transcripts, verification records or evidence files, or spec edits (which the
+shape detects); see the design note.
+
 **Where it is shown.** `specstride learn --show` prints each active decision's latest
 evaluation after the suggestions, and every run prints the same lines on exit — on
 `run_end` and on each `run_stop` path — when the layer is on.
@@ -914,8 +930,9 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
 | `knob_evaluated` | learn.py (at `phase_done`) | an active decision was labelled — `knob`, `phase`, `label` (`helped` \| `neutral` \| `regressed` \| `insufficient`), `cost_r`/`cost_mde`, `wall_r`/`wall_mde`, `n_applied`/`n_baseline`, `reset`, `action` (`evaluated` \| `auto_reverted` \| `skipped_superseded`), `evaluates_run_id`. Emitted only when the result changed |
 | `knob_auto_reverted` | learn.py (at `phase_done`) | a guardrail breached, so the decision was reverted — `knob`, `phase`, `guardrail`, `from`, `to`, `reverts_run_id`. The only automatic write the loop makes to a decision |
+| `events_tampered` | orchestrator | with the learning layer on, a proposer pass shortened a bracketed file or changed bytes that predated it (`events.jsonl`, `learning/applied.json`, `learning/phase-<N>.json`) — `phase`, `attempt`, `file`. The run is excluded from every evaluation |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
-| `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. An unsourced budget is what makes budget archaeology expensive six hours in |
+| `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. `arm` / `yield_poll_arm` (`applied` \| `baseline`) say which side of an evaluation the pass is on, and `tamper_bracket=on` that the tamper rule's bracket was taken. An unsourced budget is what makes budget archaeology expensive six hours in |
 | `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `SPECSTRIDE_PROPOSER_MAX_CAPS`. A budget signal, not an error |
 | `pass_cost_unknown` | proposer | a killed pass reports NO usage or cost (the kill severs the provider stream); this says "unmeasured", never "cheap" |
 | `pass_yield` | proposer | a pass ended cleanly while a job it depends on runs — `reason`, `predicate_kind`, `deadline_sec`, `job_mode`, `job_log`, `yield_index` |

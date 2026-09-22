@@ -1553,7 +1553,7 @@ build_proposer_prompt() {
 #   1.5 the learned value (step 5, `learn.py resolve`) — only under SPECSTRIDE_LEARNING=apply,
 #       and only when an applied decision exists for this phase
 #
-# Prints "<seconds>\t<source>". The source is not decoration: an unsourced number
+# Prints "<seconds>\t<source>\t<arm>". The source is not decoration: an unsourced number
 # is what makes budget archaeology expensive six hours into a run, so it is
 # carried into the proposer_cap event beside the value.
 #
@@ -1562,7 +1562,7 @@ build_proposer_prompt() {
 resolve_proposer_timeout() {
   local n="$1" shape="${2:-}"
   if [[ -n "${PHASE_TIMEOUT_OVERRIDE[$n]:-}" ]]; then
-    printf '%s\t%s\n' "${PHASE_TIMEOUT_OVERRIDE[$n]}" "override"
+    printf '%s\t%s\t%s\n' "${PHASE_TIMEOUT_OVERRIDE[$n]}" "override" "baseline"
   else
     # Routes 2 and 3 first, as the fallback the learning layer is asked against.
     local fallback fallback_src
@@ -1574,18 +1574,21 @@ resolve_proposer_timeout() {
     # Route 1.5 (§4.1's learned value; step 5): ONLY when the operator has turned
     # application on, and only for a phase whose shape is known. `learn.py resolve`
     # prints the applied value for this (knob, phase, shape) or the fallback
-    # unchanged; anything unparseable falls through. Its notices go to the run log.
+    # unchanged, and beside it the arm: `applied` once a decision is in effect for
+    # this (knob, phase, shape) — even one whose value equals the fallback, which
+    # is why the value is not compared with the fallback — else `baseline`.
+    # Anything unparseable falls through. Its notices go to the run log.
     if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" && -n "$shape" ]]; then
-      local learned
-      learned="$(python3 "$LIB_DIR/learn.py" resolve --knob proposer_timeout \
+      local learned="" arm=""
+      IFS=$'\t' read -r learned arm < <(python3 "$LIB_DIR/learn.py" resolve --knob proposer_timeout \
                    --phase "$n" --default "$fallback" --feature-dir "$FEATURE_DIR" \
-                   --phase-shape "$shape" 2>>"$LOG")" || learned=""
-      if [[ "$learned" =~ ^[0-9]+$ && "$learned" != "$fallback" ]]; then
-        printf '%s\t%s\n' "$learned" "learned"
+                   --phase-shape "$shape" 2>>"$LOG") || true
+      if [[ "$learned" =~ ^[0-9]+$ && "$arm" == "applied" ]]; then
+        printf '%s\t%s\t%s\n' "$learned" "learned" "applied"
         return 0
       fi
     fi
-    printf '%s\t%s\n' "$fallback" "$fallback_src"
+    printf '%s\t%s\t%s\n' "$fallback" "$fallback_src" "baseline"
   fi
 }
 
@@ -1599,20 +1602,20 @@ resolve_proposer_timeout() {
 resolve_yield_poll() {
   local n="$1" shape="${2:-}" fallback=30
   if [[ -n "${SPECSTRIDE_YIELD_POLL+x}" ]]; then
-    printf '%s\t%s\n' "$SPECSTRIDE_YIELD_POLL" "override"
+    printf '%s\t%s\t%s\n' "$SPECSTRIDE_YIELD_POLL" "override" "baseline"
     return 0
   fi
   if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" && -n "$shape" ]]; then
-    local learned
-    learned="$(python3 "$LIB_DIR/learn.py" resolve --knob yield_poll_interval \
+    local learned="" arm=""
+    IFS=$'\t' read -r learned arm < <(python3 "$LIB_DIR/learn.py" resolve --knob yield_poll_interval \
                  --phase "$n" --default "$fallback" --feature-dir "$FEATURE_DIR" \
-                 --phase-shape "$shape" 2>>"$LOG")" || learned=""
-    if [[ "$learned" =~ ^[0-9]+$ && "$learned" != "$fallback" ]]; then
-      printf '%s\t%s\n' "$learned" "learned"
+                 --phase-shape "$shape" 2>>"$LOG") || true
+    if [[ "$learned" =~ ^[0-9]+$ && "$arm" == "applied" ]]; then
+      printf '%s\t%s\t%s\n' "$learned" "learned" "applied"
       return 0
     fi
   fi
-  printf '%s\t%s\n' "$fallback" "default"
+  printf '%s\t%s\t%s\n' "$fallback" "default" "baseline"
 }
 
 # One line per active learned decision — its latest evaluation, with the MDE
@@ -1628,6 +1631,24 @@ learning_exit_summary() {
   done < <(python3 "$LIB_DIR/learn.py" evaluate --report --feature-dir "$FEATURE_DIR" 2>/dev/null)
 }
 add_exit_hook learning_exit_summary
+
+# "<size> <sha256 of those bytes>" of a file, or "absent".
+prefix_digest() {
+  local f="$1" size
+  [[ -f "$f" ]] || { printf 'absent\n'; return 0; }
+  size="$(stat -c %s "$f")"
+  printf '%s %s\n' "$size" "$(head -c "$size" "$f" | sha256sum | cut -d' ' -f1)"
+}
+# True when the first <size> bytes recorded by prefix_digest are still there, unchanged.
+# Growth is fine (appends); a shorter file or a different prefix is not.
+prefix_intact() {
+  local f="$1" before="$2" size sha
+  [[ "$before" == "absent" ]] && return 0
+  read -r size sha <<<"$before"
+  [[ -f "$f" ]] || return 1
+  (( $(stat -c %s "$f") >= size )) || return 1
+  [[ "$(head -c "$size" "$f" | sha256sum | cut -d' ' -f1)" == "$sha" ]]
+}
 
 # ── the phase loop ───────────────────────────────────────────────────────────
 run_phase() {
@@ -1655,10 +1676,12 @@ run_phase() {
   local prev_role=""
   local malformed_streak=0
   # This phase's pass ceiling, resolved once and named with its source.
-  local phase_timeout phase_timeout_source
-  IFS=$'\t' read -r phase_timeout phase_timeout_source < <(resolve_proposer_timeout "$n" "$shape")
-  local phase_yield_poll phase_yield_poll_source
-  IFS=$'\t' read -r phase_yield_poll phase_yield_poll_source < <(resolve_yield_poll "$n" "$shape")
+  local phase_timeout phase_timeout_source phase_timeout_arm
+  IFS=$'\t' read -r phase_timeout phase_timeout_source phase_timeout_arm \
+    < <(resolve_proposer_timeout "$n" "$shape")
+  local phase_yield_poll phase_yield_poll_source phase_yield_poll_arm
+  IFS=$'\t' read -r phase_yield_poll phase_yield_poll_source phase_yield_poll_arm \
+    < <(resolve_yield_poll "$n" "$shape")
   while (( attempt <= MAX_REJECTS + 1 )); do
     # stop.flag / budget checks at each phase-boundary step
     if [[ -f "$STOP_FLAG" ]]; then
@@ -1710,9 +1733,14 @@ run_phase() {
     # the start of the pass it governs. Reconstructing that afterwards from a
     # halted run's flags, env and documents is the expensive part of budget
     # archaeology, so it is never left implicit.
+    # `arm`/`yield_poll_arm` record which side of an evaluation this pass is on;
+    # `tamper_bracket` that the prefix-immutability bracket below was taken for it.
+    local bracket_on=""
+    [[ -n "${SPECSTRIDE_LEARNING:-}" && "${SPECSTRIDE_LEARNING}" != "off" ]] && bracket_on="on"
     specstride_emit proposer_cap phase "$n" attempt "$attempt" role "$role" \
-      seconds "$phase_timeout" source "$phase_timeout_source" \
-      yield_poll "$phase_yield_poll" yield_poll_source "$phase_yield_poll_source"
+      seconds "$phase_timeout" source "$phase_timeout_source" arm "$phase_timeout_arm" \
+      yield_poll "$phase_yield_poll" yield_poll_source "$phase_yield_poll_source" \
+      yield_poll_arm "$phase_yield_poll_arm" tamper_bracket "$bracket_on"
     log "      pass ceiling: ${phase_timeout}s (${phase_timeout_source}); yield poll: ${phase_yield_poll}s (${phase_yield_poll_source})"
     prev_role="$role"
 
@@ -1738,9 +1766,27 @@ run_phase() {
     # The resolved poll interval rides on this one command, not an `export`: an
     # exported value would read as an operator override at the next phase's
     # set-ness test in resolve_yield_poll.
+    # The tamper rule (05-evaluate-design.md §4), only with the learning layer on:
+    # the proposer runs unsandboxed in this tree and appends to the same
+    # events.jsonl, so appends are normal; rewriting any byte that existed before
+    # the pass is not. The bracket is taken here, by the parent, per invocation.
+    local -a bracket_files=() bracket_before=()
+    if [[ -n "$bracket_on" ]]; then
+      bracket_files=( "$SPECSTRIDE_EVENTS" "$FEATURE_DIR/learning/applied.json"
+                      "$FEATURE_DIR/learning/phase-$n.json" )
+      local bf
+      for bf in "${bracket_files[@]}"; do bracket_before+=( "$(prefix_digest "$bf")" ); done
+    fi
     SPECSTRIDE_YIELD_POLL="$phase_yield_poll" \
       bash "$SCRIPT_DIR/proposer.sh" "${prop_args[@]}" 2>&1 | emit_out
     local prc="${PIPESTATUS[0]}"
+    local bi
+    for bi in "${!bracket_files[@]}"; do
+      if ! prefix_intact "${bracket_files[$bi]}" "${bracket_before[$bi]}"; then
+        log "!!! learning: ${bracket_files[$bi]} lost or rewrote bytes that predate this pass — run excluded from every evaluation"
+        specstride_emit events_tampered phase "$n" attempt "$attempt" file "${bracket_files[$bi]}"
+      fi
+    done
 
     if [[ "$role" == "accelerator" ]]; then
       workdir_change_snapshot "$rem_after"

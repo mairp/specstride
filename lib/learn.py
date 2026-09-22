@@ -98,7 +98,8 @@ Output schema (``specstride.learn.summary/2``)
 ``/3`` adds ``attempts[*].shape`` and ``phases[*].shape``/``other_shape_attempts``;
 ``/4`` adds ``attempts[*].diagnostician_case`` and ``phases[*].diagnostician_cases``;
 ``/5`` adds ``phases[*].episodes`` and ``phases[*].pass_samples`` (item 4's primaries);
-``/6`` adds ``attempts[*].critic_prompt_bytes`` (with ``--verdicts-dir``).
+``/6`` adds ``attempts[*].critic_prompt_bytes`` (with ``--verdicts-dir``);
+``/7`` adds ``runs[*].tampered`` and the caps' ``arm``/``yield_poll_arm``/``tamper_bracket``.
 {
   "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
@@ -107,7 +108,7 @@ Output schema (``specstride.learn.summary/2``)
       "resume_from", "wall_sec", "cost_usd", "passes", "billed_passes",
       "unbilled_passes", "kills_by_reason", "outcomes", "attempts",
       "approved_phases", "cost_per_approved_phase", "non_approved_cost_usd",
-      "non_approved_cost_share" } },
+      "non_approved_cost_share", "tampered" } },
   "attempts": [ {   # ``billed`` is True/False on a terminal pass, None while open;
                     # ``work_sec_estimate`` = max(0, elapsed − sleep_sec_declared)
       "run", "phase", "attempt", "title", "shape", "verdict", "verdict_reason",
@@ -131,7 +132,8 @@ Output schema (``specstride.learn.summary/2``)
       "work_sec_p50", "work_sec_p90", "work_sec_samples", "kills_by_reason",
       "job_duration_p50", "job_duration_samples",           # yield_poll_interval's evidence
       "wait_share_p50", "wait_share_samples", "hard_cap_kills_with_wait",
-      "caps": [ { "run", "seconds", "source", "yield_poll", "yield_poll_source" } ],
+      "caps": [ { "run", "seconds", "source", "arm", "yield_poll", "yield_poll_source",
+                  "yield_poll_arm", "tamper_bracket" } ],
       "diagnostician_cases": { "grounding"|"real_gap"|"unknown": n },
       "episodes": [ { "run", "cost_usd", "wall_sec", "passes", "approved" } ],
       "pass_samples": [ { "run", "cost_usd", "elapsed_sec" } ] } },
@@ -161,7 +163,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
-SCHEMA = "specstride.learn.summary/6"
+SCHEMA = "specstride.learn.summary/7"
 
 # The wait/poll classifier of 03-002-run-telemetry.md §2, applied to Bash targets.
 WAIT_RE = re.compile(
@@ -428,6 +430,7 @@ class _Run:
         # phase → the first proposer_cap of this run for it. The event fires once
         # per attempt, the values are resolved once per phase: dedupe on (run, phase).
         self.caps: "OrderedDict[int, dict]" = OrderedDict()
+        self.tampered = False
 
     def attempt(self) -> Optional[_Attempt]:
         if self.cur_phase is None or self.cur_attempt is None:
@@ -567,7 +570,14 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
                     "source": ev.get("source"),
                     "yield_poll": _int(ev.get("yield_poll")),
                     "yield_poll_source": ev.get("yield_poll_source"),
+                    "arm": ev.get("arm") or None,
+                    "yield_poll_arm": ev.get("yield_poll_arm") or None,
+                    "tamper_bracket": ev.get("tamper_bracket") or None,
                 }
+        elif name == "events_tampered":
+            # the orchestrator saw bytes that predated a pass rewritten during it
+            # (05-evaluate-design.md §4): this run is excluded from every evaluation
+            run.tampered = True
         elif name == "run_stop":
             run.stopped = ts
             run.stop_reason = ev.get("reason")
@@ -706,6 +716,7 @@ def _render(runs, run_log_live_invocations: Optional[int],
             "cost_per_approved_phase": (round(cost / len(approved), 4) if approved else None),
             "non_approved_cost_usd": non_approved,
             "non_approved_cost_share": (round(non_approved / cost, 3) if cost else None),
+            "tampered": run.tampered,
         }
 
     caps: Dict[int, List[dict]] = {}
@@ -1427,7 +1438,8 @@ def record_baseline(summary: dict, phase: int, shape: Optional[str], source_runs
     runs_meta = summary.get("runs", {})
     backend = next((runs_meta.get(r, {}).get("backend") for r in reversed(source_runs)
                     if r in runs_meta), None)
-    base_runs = [r for r in source_runs if runs_meta.get(r, {}).get("backend") == backend]
+    base_runs = [r for r in source_runs if runs_meta.get(r, {}).get("backend") == backend
+                 and not runs_meta.get(r, {}).get("tampered")]
     atts = _phase_attempts(summary, phase, shape, base_runs)
     cost, wall = _samples(atts)
     return {"backend": backend, "shape": shape, "runs": base_runs,
@@ -1448,7 +1460,9 @@ def _applied_runs(summary: dict, decision: dict) -> List[str]:
             continue
         arm = c.get(arm_f)
         if arm is not None:
-            hit = arm == "applied"
+            # a run that recorded an arm but no tamper bracket is excluded, not trusted
+            hit = (arm == "applied" and c.get(value_f) == _int(decision.get("value"))
+                   and c.get("tamper_bracket") == "on")
         else:
             hit = c.get(source_f) == "learned" and c.get(value_f) == _int(decision.get("value"))
         if hit:
@@ -1502,7 +1516,7 @@ def evaluate_decision(summary: dict, decision: dict, current_shape: Optional[str
                       reason=f"backend changed from {backend!r} to {runs_meta[latest].get('backend')!r}; "
                              "applied-arm samples discarded")
         return result
-    excluded = set(excluded_runs)
+    excluded = set(excluded_runs) | {r for r, m in runs_meta.items() if m.get("tampered")}
     applied = [r for r in _applied_runs(summary, decision)
                if r not in excluded and runs_meta.get(r, {}).get("backend") == backend]
     result["applied_runs"] = applied
@@ -1981,13 +1995,28 @@ def _cmd_off(args: argparse.Namespace) -> int:
     return 0
 
 
+def resolve_arm(knob: str, phase: int, applied_file: Optional[str], env: Optional[dict] = None,
+                shape: Optional[str] = None) -> str:
+    """`applied` while a decision is in effect for (knob, phase, shape) under
+    SPECSTRIDE_LEARNING=apply — whatever its value, even one equal to the default —
+    else `baseline`. The run records it so evaluate can tell the arms apart."""
+    env = os.environ if env is None else env
+    if env.get("SPECSTRIDE_LEARNING") != "apply" or knob not in ADJUSTABLE_KNOBS:
+        return "baseline"
+    latest = None
+    for e in _decisions(applied_file, knob, phase, shape):
+        latest = e
+    return "applied" if latest is not None and latest.get("action") in (None, "apply") else "baseline"
+
+
 def _cmd_resolve(args: argparse.Namespace) -> int:
     applied_file, _ = _feature_paths(args.feature_dir, args.applied_file, None)
     if os.environ.get("SPECSTRIDE_LEARNING") == "apply":
         notice = unshaped_notice(applied_file, args.knob, args.phase, args.phase_shape)
         if notice:
             print(notice, file=sys.stderr)
-    print(resolve_knob(args.knob, args.phase, args.default, applied_file, shape=args.phase_shape))
+    value = resolve_knob(args.knob, args.phase, args.default, applied_file, shape=args.phase_shape)
+    print(f"{value}\t{resolve_arm(args.knob, args.phase, applied_file, shape=args.phase_shape)}")
     return 0
 
 
@@ -2126,8 +2155,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     o.add_argument("--events-file")
     o.set_defaults(func=_cmd_off)
 
-    rs = sub.add_parser("resolve", help="the shell-callable integration point: print one integer — the effective "
-                                         "value of --knob/--phase, or --default if SPECSTRIDE_LEARNING != apply")
+    rs = sub.add_parser("resolve", help="the shell-callable integration point: print `<value>\\t<arm>` — the "
+                                         "effective value of --knob/--phase (or --default if SPECSTRIDE_LEARNING "
+                                         "!= apply) and `applied`|`baseline`")
     rs.add_argument("--knob", required=True, choices=sorted(ADJUSTABLE_KNOBS))
     rs.add_argument("--phase", type=int, required=True)
     rs.add_argument("--default", type=int, required=True)

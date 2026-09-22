@@ -838,7 +838,7 @@ def test_resolve_cli_is_the_documented_shell_callable_entry_point(tmp_path):
          "--applied-file", applied],
         capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == str(entry["value"])
+    assert r.stdout.strip() == f"{entry['value']}\tapplied"
     # and with SPECSTRIDE_LEARNING unset, the same call is a total no-op
     env_off = {k: v for k, v in os.environ.items() if k != "SPECSTRIDE_LEARNING"}
     r2 = subprocess.run(
@@ -846,7 +846,7 @@ def test_resolve_cli_is_the_documented_shell_callable_entry_point(tmp_path):
          "--knob", "proposer_timeout", "--phase", "9", "--default", "5400",
          "--applied-file", applied],
         capture_output=True, text=True, env=env_off)
-    assert r2.returncode == 0 and r2.stdout.strip() == "5400"
+    assert r2.returncode == 0 and r2.stdout.strip() == "5400\tbaseline"
 
 
 def test_resolve_yield_poll_interval_clamps_to_the_hard_bounds(tmp_path):
@@ -935,7 +935,7 @@ def test_a_decision_recorded_before_shapes_is_never_silently_applied(tmp_path):
     r = subprocess.run([sys.executable, os.path.join(HERE, "learn.py"), "resolve", "--knob", "proposer_timeout",
                         "--phase", "3", "--default", "1800", "--applied-file", applied, "--phase-shape", "aaaa"],
                        capture_output=True, text=True, env=dict(os.environ, SPECSTRIDE_LEARNING="apply"))
-    assert r.returncode == 0 and r.stdout.strip() == "1800"
+    assert r.returncode == 0 and r.stdout.strip() == "1800\tbaseline"
     assert "predate phase-shape keys" in r.stderr
 
 
@@ -1010,9 +1010,12 @@ def test_proposer_cap_is_recorded_once_per_run_and_phase():
                            "role": "proposer", "seconds": secs, "source": "learned",
                            "yield_poll": "45", "yield_poll_source": "learned", "ts": "3", "_src": rid})
     caps = learn.summarize(events)["phases"]["4"]["caps"]
+    unset = {"arm": None, "yield_poll_arm": None, "tamper_bracket": None}
     assert caps == [
-        {"run": "run-1", "seconds": 1800, "source": "learned", "yield_poll": 45, "yield_poll_source": "learned"},
-        {"run": "run-2", "seconds": 1800, "source": "learned", "yield_poll": 45, "yield_poll_source": "learned"},
+        dict({"run": "run-1", "seconds": 1800, "source": "learned", "yield_poll": 45,
+              "yield_poll_source": "learned"}, **unset),
+        dict({"run": "run-2", "seconds": 1800, "source": "learned", "yield_poll": 45,
+              "yield_poll_source": "learned"}, **unset),
     ]
     assert learn.SCHEMA.startswith("specstride.learn.summary/")
 
@@ -1368,6 +1371,52 @@ def test_cli_apply_exits_four_on_quarantine(tmp_path):
     assert r.returncode == 4 and "quarantined" in r.stderr and "learn-eval" in r.stderr
     r = subprocess.run(cmd + ["--force"], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
+
+
+# -- the arm field and the tamper rule (item 4c) ------------------------------
+def test_resolve_reports_the_arm_even_for_a_decision_equal_to_the_default(tmp_path):
+    applied, _ = _applied_paths(tmp_path)
+    learn._append_jsonl(applied, {"action": "apply", "run_id": "eq", "knob": "proposer_timeout", "phase": 3,
+                                  "shape": "S1", "value": 1800, "previous": 1800})
+    env = {"SPECSTRIDE_LEARNING": "apply"}
+    assert learn.resolve_arm("proposer_timeout", 3, applied, env=env, shape="S1") == "applied"
+    assert learn.resolve_arm("proposer_timeout", 4, applied, env=env, shape="S1") == "baseline"
+    assert learn.resolve_arm("proposer_timeout", 3, applied, env={}, shape="S1") == "baseline"
+    learn.revert_run("eq", applied)
+    assert learn.resolve_arm("proposer_timeout", 3, applied, env=env, shape="S1") == "baseline"
+
+
+def test_the_arm_field_selects_the_applied_arm_and_needs_the_bracket(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    v = entry["value"]
+    # source says "global" (e.g. equal to the fallback) but the arm says applied: counted
+    arm = (_arm(entry, [0.1] * 3) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0))
+    for e in arm:
+        if e["event"] == "proposer_cap":
+            e.update(source="global", arm="applied", tamper_bracket="on")
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["applied_runs"] == ["app-1", "app-2"] and result["label"] == "helped"
+    # an arm recorded without the tamper bracket is excluded, not trusted
+    for e in arm:
+        if e["event"] == "proposer_cap":
+            e.pop("tamper_bracket")
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["applied_runs"] == [] and v == entry["value"]
+
+
+def test_a_tampered_run_is_excluded_from_every_evaluation(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    tampered = _arm(entry, [0.1] * 3, extra=[{"event": "events_tampered", "run_id": "app-1", "phase": "3",
+                                             "attempt": "3", "file": "events.jsonl"}])
+    arm = tampered + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0)
+    summary = learn.summarize(_baseline_events() + arm)
+    assert summary["runs"]["app-1"]["tampered"] is True and summary["runs"]["app-2"]["tampered"] is False
+    result = learn.evaluate_decision(summary, entry, "S1")
+    assert result["applied_runs"] == ["app-2"] and result["excluded_runs"] == ["app-1"]
+    assert result["cost"]["n_a"] == 3 and result["label"] == "insufficient"
+    # nor can a tampered run be a baseline sample
+    base = learn.record_baseline(summary, 3, "S1", ["base-1", "app-1"])
+    assert base["runs"] == ["base-1"]
 
 
 # -- observe: the §5.4 per-phase observation document ------------------------
