@@ -1,0 +1,17 @@
+{
+  "name": "@demo/cli",
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "demo": "./dist/cli.js"
+  },
+  "exports": {
+    ".": "./dist/cli.js"
+  },
+  "dependencies": {
+    "@demo/core": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p ."
+  }
+}
