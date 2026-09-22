@@ -1553,7 +1553,7 @@ build_proposer_prompt() {
 # With nothing configured this returns $PROPOSER_TIMEOUT and the run behaves
 # exactly as it did before this existed.
 resolve_proposer_timeout() {
-  local n="$1"
+  local n="$1" shape="${2:-}"
   if [[ -n "${PHASE_TIMEOUT_OVERRIDE[$n]:-}" ]]; then
     printf '%s\t%s\n' "${PHASE_TIMEOUT_OVERRIDE[$n]}" "override"
   else
@@ -1565,13 +1565,14 @@ resolve_proposer_timeout() {
       fallback="$PROPOSER_TIMEOUT"; fallback_src="global"
     fi
     # Route 1.5 (§4.1's learned value; step 5): ONLY when the operator has turned
-    # application on. `learn.py resolve` prints the applied value for this
-    # (knob, phase) or the fallback unchanged; anything unparseable falls through.
-    if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" ]]; then
+    # application on, and only for a phase whose shape is known. `learn.py resolve`
+    # prints the applied value for this (knob, phase, shape) or the fallback
+    # unchanged; anything unparseable falls through. Its notices go to the run log.
+    if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" && -n "$shape" ]]; then
       local learned
       learned="$(python3 "$LIB_DIR/learn.py" resolve --knob proposer_timeout \
                    --phase "$n" --default "$fallback" --feature-dir "$FEATURE_DIR" \
-                   2>/dev/null)" || learned=""
+                   --phase-shape "$shape" 2>>"$LOG")" || learned=""
       if [[ "$learned" =~ ^[0-9]+$ && "$learned" != "$fallback" ]]; then
         printf '%s\t%s\n' "$learned" "learned"
         return 0
@@ -1589,16 +1590,16 @@ resolve_proposer_timeout() {
 #   learned   an applied `yield_poll_interval` decision, under SPECSTRIDE_LEARNING=apply
 #   default   proposer.sh's own 30s
 resolve_yield_poll() {
-  local n="$1" fallback=30
+  local n="$1" shape="${2:-}" fallback=30
   if [[ -n "${SPECSTRIDE_YIELD_POLL+x}" ]]; then
     printf '%s\t%s\n' "$SPECSTRIDE_YIELD_POLL" "override"
     return 0
   fi
-  if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" ]]; then
+  if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" && -n "$shape" ]]; then
     local learned
     learned="$(python3 "$LIB_DIR/learn.py" resolve --knob yield_poll_interval \
                  --phase "$n" --default "$fallback" --feature-dir "$FEATURE_DIR" \
-                 2>/dev/null)" || learned=""
+                 --phase-shape "$shape" 2>>"$LOG")" || learned=""
     if [[ "$learned" =~ ^[0-9]+$ && "$learned" != "$fallback" ]]; then
       printf '%s\t%s\n' "$learned" "learned"
       return 0
@@ -1611,8 +1612,13 @@ resolve_yield_poll() {
 run_phase() {
   local n="$1"
   local title; title="$(specstride_spec_phase_title "$SPECS" "$n")"
+  # The phase's shape (number + title + criteria text): the key learned state is
+  # filed under, so an edited phase stops inheriting what was learned about the old
+  # one. Recorded on phase_start whatever the learning mode, so a run's samples can
+  # be attributed later; empty only if the spec cannot be read.
+  local shape; shape="$(specstride_spec_phase_shape "$SPECS" "$n" 2>/dev/null)" || shape=""
   local attempt=1
-  specstride_emit phase_start phase "$n" title "$title" total "$PHASE_COUNT"
+  specstride_emit phase_start phase "$n" title "$title" total "$PHASE_COUNT" shape "$shape"
   log ""
   log "===== PHASE $n${title:+ — $title}  ($(date -Is)) ====="
   sweep_stray_progress
@@ -1629,9 +1635,9 @@ run_phase() {
   local malformed_streak=0
   # This phase's pass ceiling, resolved once and named with its source.
   local phase_timeout phase_timeout_source
-  IFS=$'\t' read -r phase_timeout phase_timeout_source < <(resolve_proposer_timeout "$n")
+  IFS=$'\t' read -r phase_timeout phase_timeout_source < <(resolve_proposer_timeout "$n" "$shape")
   local phase_yield_poll phase_yield_poll_source
-  IFS=$'\t' read -r phase_yield_poll phase_yield_poll_source < <(resolve_yield_poll "$n")
+  IFS=$'\t' read -r phase_yield_poll phase_yield_poll_source < <(resolve_yield_poll "$n" "$shape")
   while (( attempt <= MAX_REJECTS + 1 )); do
     # stop.flag / budget checks at each phase-boundary step
     if [[ -f "$STOP_FLAG" ]]; then
@@ -1947,8 +1953,10 @@ run_phase() {
          && python3 "$LIB_DIR/learn.py" observe --help >/dev/null 2>&1; then
         local observation="$FEATURE_DIR/learning/phase-$n.json"
         mkdir -p "$FEATURE_DIR/learning" 2>/dev/null || true
+        local -a shape_args=()
+        [[ -n "$shape" ]] && shape_args=( --phase-shape "$shape" )
         if python3 "$LIB_DIR/learn.py" observe --events "$FEATURE_DIR/runs" \
-             --phase "$n" --out "$observation" >>"$LOG" 2>&1; then
+             --phase "$n" "${shape_args[@]}" --out "$observation" >>"$LOG" 2>&1; then
           specstride_emit learning_observed phase "$n" path "$observation"
         else
           log "#   (learning: observing phase $n failed — continuing; the run is unaffected)"

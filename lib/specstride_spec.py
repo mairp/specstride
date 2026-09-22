@@ -49,6 +49,8 @@ clone-and-run guarantee. Tests run with the stdlib runner: `python3 -m pytest li
 Exit codes (CLI):  0 ok · 3 invalid spec / bad usage.
 """
 import argparse
+import hashlib
+import json
 import os
 import shutil
 import re
@@ -442,6 +444,32 @@ def slice_phase(text, n, fmt="native"):
     return ""
 
 
+_WS = re.compile(r"\s+")
+
+
+def phase_shape_of(phase):
+    """A stable digest of a phase's *shape*: its number, title and criteria text.
+
+    The learning layer keys its decisions and samples on this, so an edited phase
+    stops inheriting what was learned about the old one. `Phase.criteria` holds only
+    the text after a checkbox, so ticking `[ ]` → `[x]` never changes the digest;
+    whitespace runs are collapsed for the same reason. `Phase.section` is NOT used:
+    it is the raw slice, checkbox markers included."""
+    def norm(value):
+        return _WS.sub(" ", value or "").strip()
+    payload = json.dumps([int(phase.n), norm(phase.title), [norm(c) for c in phase.criteria]],
+                         ensure_ascii=False, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def phase_shape(text, n, fmt="native"):
+    """`phase_shape_of` for phase `n` of `text`, or "" when there is no such phase."""
+    for p in get_phases(text, fmt):
+        if p.n == n:
+            return phase_shape_of(p)
+    return ""
+
+
 def phase_title(text_or_section, n=None, fmt="native"):
     """Title of phase `n`. When called with a single section string (critic's old
     signature phase_title(section_text)), parse just that heading."""
@@ -828,8 +856,8 @@ def main(argv=None):
     ap.add_argument("subcommand",
                     choices=["numbers", "title", "slice", "validate",
                              "first-unapproved", "detect", "context",
-                             "render-context", "feature-slug", "tick"])
-    ap.add_argument("n", nargs="?", help="phase number (for title/slice/tick)")
+                             "render-context", "feature-slug", "tick", "shape"])
+    ap.add_argument("n", nargs="?", help="phase number (for title/slice/tick/shape)")
     ap.add_argument("--specs", required=True)
     ap.add_argument("--workdir", default=".")
     ap.add_argument("--gates-dir", default=None,
@@ -900,6 +928,13 @@ def main(argv=None):
             sys.stderr.write("specstride_spec: title needs a phase number\n")
             sys.exit(3)
         print(phase_title(text, int(args.n), fmt))
+        return 0
+
+    if args.subcommand == "shape":
+        if args.n is None:
+            sys.stderr.write("specstride_spec: shape needs a phase number\n")
+            sys.exit(3)
+        print(phase_shape(text, int(args.n), fmt))
         return 0
 
     if args.subcommand == "slice":

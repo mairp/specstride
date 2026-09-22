@@ -2,7 +2,11 @@ import json
 import os
 import stat
 import subprocess
+import sys
 from pathlib import Path
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import specstride_spec  # noqa: E402
 
 
 ORCHESTRATOR = os.path.join(
@@ -980,12 +984,18 @@ def test_an_explicit_override_outranks_the_declared_document(tmp_path):
 
 
 # ── route 1.5: the learned ceiling (step 5 wired into step 2) ────────────────
-def _seed_applied(tmp_path, phase, value):
+def _shape(phase, spec=None):
+    """The shape digest the orchestrator files phase N of TWO_PHASE_SPEC under."""
+    return specstride_spec.phase_shape(spec or TWO_PHASE_SPEC, phase, "native")
+
+
+def _seed_applied(tmp_path, phase, value, shape=None):
     learning = tmp_path / "work" / ".specstride" / "features" / "obs-lifecycle" / "learning"
     learning.mkdir(parents=True, exist_ok=True)
     (learning / "applied.json").write_text(json.dumps(
-        {"knob": "proposer_timeout", "phase": phase, "value": value,
-         "previous": 900, "samples": 3, "runs": ["seed"], "ts": "2026-09-12T00:00:00Z"}) + "\n")
+        {"schema": "specstride.learn.applied/2", "action": "apply", "run_id": "seed",
+         "knob": "proposer_timeout", "phase": phase, "shape": shape or _shape(phase), "value": value,
+         "previous": 900, "samples": 3, "source_runs": ["seed"], "applied_at": "2026-09-12T00:00:00Z"}) + "\n")
 
 
 def test_an_applied_learning_decision_resolves_as_learned_only_when_applying(tmp_path):
@@ -1008,6 +1018,22 @@ def test_learning_unset_never_reads_an_applied_decision(tmp_path):
     assert all(c["seconds"] == "900" and c["source"] == "global" for c in caps.values())
 
 
+def test_phase_start_records_the_phase_shape(tmp_path):
+    _result, _workdir, events = _run_orchestrator(tmp_path, proposer_timeout=900)
+    starts = {e["phase"]: e for e in events if e["event"] == "phase_start"}
+    assert starts["1"]["shape"] == _shape(1) and starts["2"]["shape"] == _shape(2)
+
+
+def test_a_learned_value_for_an_edited_phase_is_not_applied(tmp_path):
+    """A decision learned for an earlier version of phase 1 (other criteria) does
+    not reach the edited phase. (A shape-less decision: test_learn.py.)"""
+    _seed_applied(tmp_path, 1, 1234, shape=_shape(1, TWO_PHASE_SPEC.replace("phase-one", "phase-1")))
+    _result, _workdir, events = _run_orchestrator(
+        tmp_path, proposer_timeout=900, extra_env={"SPECSTRIDE_LEARNING": "apply"})
+    caps = {c["phase"]: c for c in _caps(events)}
+    assert caps["1"]["seconds"] == "900" and caps["1"]["source"] == "global"
+
+
 def test_an_explicit_override_outranks_a_learned_value(tmp_path):
     """Resolution order: the operator's override is route 1 and wins over 1.5."""
     _seed_applied(tmp_path, 1, 1234)
@@ -1023,8 +1049,9 @@ def _seed_applied_yield_poll(tmp_path, phase, value):
     learning = tmp_path / "work" / ".specstride" / "features" / "obs-lifecycle" / "learning"
     learning.mkdir(parents=True, exist_ok=True)
     with (learning / "applied.json").open("a") as handle:
-        handle.write(json.dumps({"knob": "yield_poll_interval", "phase": phase, "value": value,
-                                 "previous": 30, "samples": 3, "action": "apply", "run_id": "seed"}) + "\n")
+        handle.write(json.dumps({"knob": "yield_poll_interval", "phase": phase, "shape": _shape(phase),
+                                 "value": value, "previous": 30, "samples": 3, "action": "apply",
+                                 "run_id": "seed"}) + "\n")
 
 
 def _witnessed_polls(tmp_path):
@@ -1085,7 +1112,7 @@ import argparse, json, sys
 parser = argparse.ArgumentParser()
 sub = parser.add_subparsers(dest="cmd", required=True)
 resolve = sub.add_parser("resolve")
-for flag in ("--knob", "--phase", "--default", "--feature-dir"):
+for flag in ("--knob", "--phase", "--default", "--feature-dir", "--phase-shape"):
     resolve.add_argument(flag)
 '''
 
@@ -1093,6 +1120,7 @@ _LEARN_OBSERVE = '''observe = sub.add_parser("observe")
 observe.add_argument("--events", required=True)
 observe.add_argument("--phase", required=True)
 observe.add_argument("--out", required=True)
+observe.add_argument("--phase-shape")
 '''
 
 _LEARN_TAIL = '''args = parser.parse_args()
@@ -1103,7 +1131,7 @@ sys.stderr.write("observe: stand-in for phase " + args.phase + "\\n")
 if "__OUTCOME__" == "fail":
     sys.exit(1)
 with open(args.out, "w") as handle:
-    json.dump({"phase": args.phase, "events": args.events}, handle)
+    json.dump({"phase": args.phase, "events": args.events, "shape": args.phase_shape}, handle)
 '''
 
 
@@ -1174,6 +1202,8 @@ def test_phase_done_writes_one_observation_per_phase_and_announces_it(tmp_path):
         assert written["phase"] == event["phase"]
         # The hook observes the feature's whole runs directory (cross-run view), not one run.
         assert written["events"].rstrip("/").endswith("/runs"), written["events"]
+        # ... restricted to the phase's current shape
+        assert written["shape"] == _shape(int(event["phase"]))
 
     # An observation is a by-product of the closed phase: it follows phase_done.
     order = [e["event"] for e in events

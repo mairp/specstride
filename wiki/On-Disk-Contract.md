@@ -119,7 +119,7 @@ stream-json tap ([`lib/agent_stream.py`](../lib/agent_stream.py), gated by `SPEC
 |---|---|---|
 | `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`) |
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
-| `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
+| `phase_start` / `phase_done` | orchestrator | phase N entered / approved. `phase_start` carries `shape`, the phase-shape digest learned state is keyed on |
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. An unsourced budget is what makes budget archaeology expensive six hours in |

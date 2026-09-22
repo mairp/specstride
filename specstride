@@ -519,6 +519,14 @@ for o in keep[-5:]:
     PASSTHRU=("${EXTRA[@]:1}")
     EV="$(feature_events)"
     args=( --feature-dir "$FEATURE_DIR" )
+    # Key every phase on its current shape (lib/specstride_spec.py), so samples and
+    # decisions of an edited phase are left out, exactly as a run leaves them out.
+    shape_args=()
+    if [[ -f "$SPECS" ]]; then
+      shape_args=( --specs "$SPECS" )
+      _sf="$(grep -m1 '^SPEC_FORMAT=' "$FEATURE_DIR/last-run.conf" 2>/dev/null | cut -d= -f2- | tr -d "'\"")"
+      [[ -n "${_sf:-}" ]] && shape_args+=( --spec-format "$_sf" )
+    fi
     # `advise`/`apply` need --default, and it must be the default of the knob asked
     # about: the engines step ±50 % from it, so a 1800 s default handed to the 30 s
     # poll interval would let one apply jump it to its 300 s bound. Fall back to the
@@ -543,12 +551,12 @@ for o in keep[-5:]:
       --show)
         add_default
         [[ -n "$EV" && -f "$EV" ]] && args+=( --events "$EV" )
-        exec python3 "$LIB_DIR/learn.py" advise "${args[@]}" "${PASSTHRU[@]}"
+        exec python3 "$LIB_DIR/learn.py" advise "${args[@]}" "${shape_args[@]}" "${PASSTHRU[@]}"
         ;;
       --apply)
         add_default
         [[ -n "$EV" && -f "$EV" ]] && args+=( --events "$EV" )
-        exec python3 "$LIB_DIR/learn.py" apply "${args[@]}" "${PASSTHRU[@]}"
+        exec python3 "$LIB_DIR/learn.py" apply "${args[@]}" "${shape_args[@]}" "${PASSTHRU[@]}"
         ;;
       --revert)
         [[ ${#PASSTHRU[@]} -ge 1 ]] || { echo "usage: specstride learn --revert <run-id>" >&2; exit 1; }
