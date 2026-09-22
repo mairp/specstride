@@ -392,14 +392,28 @@ def load_declared_commands(path, environ=None):
             )
         seen.add(command["declaredId"])
         commands.append(command)
+    # `"discovery": "none"` turns the discovered commands off for this plan: the
+    # gates run the declared list and nothing else. A run whose workdir is not the
+    # product under construction (a reverse-engineering run reads a repo it must
+    # never execute) needs that, and there is no other switch. Anything but the one
+    # value is refused rather than ignored.
+    discovery_mode = document.get("discovery")
+    if discovery_mode is not None and discovery_mode != "none":
+        raise VerificationError(
+            "verification commands 'discovery' must be \"none\" when present (got %s)"
+            % json.dumps(discovery_mode)
+        )
     with open(path, "rb") as handle:
         content_hash = sha256_bytes(handle.read())
-    return {
+    loaded = {
         "path": os.path.realpath(path),
         "contentHash": content_hash,
         "schemaVersion": document.get("schema_version"),
         "commands": commands,
     }
+    if discovery_mode is not None:
+        loaded["discovery"] = discovery_mode
+    return loaded
 
 
 def discover_project(workdir, environ=None):
@@ -732,6 +746,23 @@ def create_plan(workdir, specs_path, fmt=None, required=False, environ=None,
     declared = (
         load_declared_commands(commands_path, environ) if commands_path else None
     )
+    if declared and declared.get("discovery") == "none":
+        # The fingerprint, frameworks and assumptions stay on record; only the
+        # commands go. Re-assert the no-test ambiguity so the "neither discovered
+        # nor declared" preflight below still names any phase left without one.
+        ambiguities = list(discovery["ambiguities"])
+        if NO_TEST_COMMAND_AMBIGUITY % workdir not in ambiguities:
+            ambiguities.append(NO_TEST_COMMAND_AMBIGUITY % workdir)
+        discovery = dict(
+            discovery,
+            commands=[],
+            ambiguities=ambiguities,
+            assumptions=list(discovery["assumptions"])
+            + [
+                "Discovered commands are disabled by %s (\"discovery\": \"none\"); "
+                "the gates run only its declared commands." % declared["path"]
+            ],
+        )
     declared_by_phase = {}
     if declared:
         spec_phases = {phase.n for phase in phases}
@@ -1013,6 +1044,8 @@ def create_plan(workdir, specs_path, fmt=None, required=False, environ=None,
             "count": len(declared["commands"]),
             "phases": sorted(declared_by_phase),
         }
+        if "discovery" in declared:
+            without_hash["declaredCommands"]["discovery"] = declared["discovery"]
     plan = dict(without_hash)
     plan["contentHash"] = sha256_text(canonical_json(without_hash))
     validate_plan(plan)

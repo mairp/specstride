@@ -250,3 +250,66 @@ def test_legacy_command_name_forwards_arguments_and_exit_code(workdir, tmp_path)
     assert new.returncode == old.returncode != 0
     assert old.stderr.splitlines()[0] == SHIM_NOTICE
     assert old.stderr.splitlines()[1:] == new.stderr.splitlines()
+
+
+# ── git checkpoints survive resume (SPECSTRIDE_GIT_COMMITS is env-only) ──────
+def _env_echo_orchestrator(tmp_path):
+    fake = tmp_path / "fake-orchestrator.sh"
+    fake.write_text('#!/bin/bash\nprintf "%s\\n" "$@"\n'
+                    'echo "GIT_COMMITS_ENV=${SPECSTRIDE_GIT_COMMITS-unset}"\n')
+    fake.chmod(0o755)
+    return fake
+
+
+def _resume_conf(tmp_path, extra=""):
+    wd = tmp_path / "proj"
+    feat = wd / ".specstride" / "features" / "tf"
+    feat.mkdir(parents=True)
+    specs = wd / "spec.md"
+    specs.write_text("## Phase 1\n")
+    conf = (
+        f"WORKDIR={wd}\nSPECS={specs}\nFEATURE=tf\n"
+        "PROPOSER_BACKEND=dsh\nCRITIC_BACKEND=dsh\nMAX_REJECTS=3\nMAX_ITER=5\n"
+        f"ORCHESTRATOR={_env_echo_orchestrator(tmp_path)}\n{extra}"
+    )
+    (wd / ".specstride" / "last-run.conf").write_text(conf)
+    feat.joinpath("last-run.conf").write_text(conf)
+    return wd
+
+
+def test_launch_persists_git_commits_in_last_run_conf(tmp_path):
+    """The orchestrator writes last-run.conf before it validates the spec, so an
+    invalid spec is enough to prove the key is saved without starting any agent."""
+    wd = tmp_path / "proj"
+    wd.mkdir()
+    bad = wd / "bad.md"
+    bad.write_text("# x\n\n## Phase 1: a\n\nno criteria\n")
+    env = dict(_clean_env(), SPECSTRIDE_GIT_COMMITS="off")
+    p = subprocess.run(
+        ["bash", os.path.join(ROOT, "orchestrator.sh"), "-w", str(wd), "-s", str(bad),
+         "--feature", "tf", "--no-live"],
+        capture_output=True, text=True, timeout=60, env=env)
+    assert p.returncode == 3, p.stderr
+    for conf in (wd / ".specstride" / "last-run.conf",
+                 wd / ".specstride" / "features" / "tf" / "last-run.conf"):
+        assert "GIT_COMMITS=off\n" in conf.read_text()
+
+
+def test_resume_re_exports_saved_git_commits(tmp_path):
+    wd = _resume_conf(tmp_path, "GIT_COMMITS=off\n")
+    p = subprocess.run(["bash", SPECSTRIDE, "resume", "-w", str(wd), "--feature", "tf"],
+                       capture_output=True, text=True, timeout=20,
+                       env=dict(_clean_env(), SPECSTRIDE_GIT_COMMITS="auto"))
+    assert "GIT_COMMITS_ENV=off" in p.stdout
+
+
+def test_resume_without_saved_git_commits_changes_nothing(tmp_path):
+    wd = _resume_conf(tmp_path)
+    p = subprocess.run(["bash", SPECSTRIDE, "resume", "-w", str(wd), "--feature", "tf"],
+                       capture_output=True, text=True, timeout=20, env=_clean_env())
+    assert "GIT_COMMITS_ENV=unset" in p.stdout
+    p = subprocess.run(["bash", SPECSTRIDE, "resume", "-w", str(wd), "--feature", "tf"],
+                       capture_output=True, text=True, timeout=20,
+                       env=dict(_clean_env(), SPECSTRIDE_GIT_COMMITS="auto"))
+    assert "GIT_COMMITS_ENV=auto" in p.stdout
+
