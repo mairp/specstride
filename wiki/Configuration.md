@@ -103,6 +103,7 @@ See `.env.example` for the full set. The load-bearing ones:
 | `SPECSTRIDE_SPEC_FORMAT` | auto | force `native \| speckit-tasks \| openspec-change` |
 | `SPECSTRIDE_FEATURE` | dir basename / `default` | feature namespace |
 | `SPECSTRIDE_LEARNING` | unset (= `off`) | the [learning loop](Learning): unset/`off` = inert; `suggest` = write per-phase observations at `phase_done`; `apply` = also read applied values into the run |
+| `SPECSTRIDE_LEARNING_THROUGH` | unset | the `run_id` of the last `applied.json` decision a mixture-of-loops contract bound. `resolve` ignores every `apply` after it until a re-derivation binds it; reverts after it (an auto-revert, `--revert`, `--off`) still count, since they only move a knob toward its default. A bound value is therefore an upper bound on what runs, not a promise; the `arm` on `proposer_cap` records what did |
 | `SPECSTRIDE_YIELD_POLL` | `30` | how often a yielded pass's resume predicate is polled (seconds). Setting it at all, even to 30, overrides a learned `yield_poll_interval` |
 
 ## Privacy controls

@@ -1437,6 +1437,32 @@ def test_a_tampered_run_is_excluded_from_every_evaluation(tmp_path):
     assert base["runs"] == ["base-1"]
 
 
+# -- SPECSTRIDE_LEARNING_THROUGH: what a contract bound (item 6) --------------
+def test_learning_through_ignores_applies_newer_than_the_bound_run_id(tmp_path):
+    applied, _ = _applied_paths(tmp_path)
+    for run_id, value, previous in (("learn-a", 2400, 1800), ("learn-b", 3000, 2400)):
+        learn._append_jsonl(applied, {"action": "apply", "run_id": run_id, "knob": "proposer_timeout",
+                                      "phase": 3, "shape": "S1", "value": value, "previous": previous})
+    env = {"SPECSTRIDE_LEARNING": "apply"}
+    assert learn.resolve_knob("proposer_timeout", 3, 1800, applied, env=env, shape="S1") == 3000
+    bound = dict(env, SPECSTRIDE_LEARNING_THROUGH="learn-a")
+    assert learn.resolve_knob("proposer_timeout", 3, 1800, applied, env=bound, shape="S1") == 2400
+    assert learn.resolve_arm("proposer_timeout", 3, applied, env=bound, shape="S1") == "applied"
+    # a through that names no entry binds no applies
+    none = dict(env, SPECSTRIDE_LEARNING_THROUGH="learn-zzz")
+    assert learn.resolve_knob("proposer_timeout", 3, 1800, applied, env=none, shape="S1") == 1800
+    assert learn.resolve_arm("proposer_timeout", 3, applied, env=none, shape="S1") == "baseline"
+
+
+def test_a_revert_after_the_bound_run_id_still_applies(tmp_path):
+    applied, _ = _applied_paths(tmp_path)
+    learn._append_jsonl(applied, {"action": "apply", "run_id": "learn-a", "knob": "proposer_timeout",
+                                  "phase": 3, "shape": "S1", "value": 2400, "previous": 1800})
+    learn.revert_run("learn-a", applied, extra={"auto": True})
+    bound = {"SPECSTRIDE_LEARNING": "apply", "SPECSTRIDE_LEARNING_THROUGH": "learn-a"}
+    assert learn.resolve_knob("proposer_timeout", 3, 1800, applied, env=bound, shape="S1") == 1800
+
+
 # -- observe: the §5.4 per-phase observation document ------------------------
 def test_observation_for_phase_has_the_documented_shape():
     events = learn.read_events(FIXTURE)

@@ -989,15 +989,32 @@ def _is_decision(entry: dict) -> bool:
     return entry.get("action") in (None, "apply", "revert")
 
 
-def _decisions(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str]) -> List[dict]:
+def bound_entries(entries: List[dict], through: Optional[str]) -> List[dict]:
+    """The decision log as a contract bound it (item 6): with `through` — the run
+    id a MoL contract pinned as SPECSTRIDE_LEARNING_THROUGH — every `apply` after
+    that entry is ignored until a re-derivation binds it. Reverts after it still
+    count (an auto-revert, a `--revert`, `--off`): they only move a knob toward its
+    default, so a bound value is an upper bound on what runs, not a promise. A
+    `through` that names no entry binds no applies at all."""
+    if not through:
+        return entries
+    cut = next((i for i, e in enumerate(entries) if e.get("run_id") == through), None)
+    if cut is None:
+        return [e for e in entries if e.get("action") == "revert"]
+    return entries[:cut + 1] + [e for e in entries[cut + 1:] if e.get("action") == "revert"]
+
+
+def _decisions(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str],
+               through: Optional[str] = None) -> List[dict]:
     """The decision entries for one key, (knob, phase, shape), in order. An entry
     recorded without a shape matches only a shape-less lookup."""
-    return [e for e in _read_jsonl(applied_file)
+    return [e for e in bound_entries(_read_jsonl(applied_file), through)
             if _is_decision(e) and e.get("knob") == knob and _int(e.get("phase")) == phase
             and _entry_shape(e) == (shape or None)]
 
 
-def effective_value(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str] = None):
+def effective_value(applied_file: Optional[str], knob: str, phase: int, shape: Optional[str] = None,
+                    through: Optional[str] = None):
     """Replay the append-only decision log to the current value of (knob, phase,
     shape), or None if nothing has ever been applied under that key. Both an
     `apply` and a `revert` entry record the resulting value under "value" — a
@@ -1008,7 +1025,7 @@ def effective_value(applied_file: Optional[str], knob: str, phase: int, shape: O
     the phase (different title or criteria) never applies to the edited one, and
     one recorded before shapes existed never applies to any shape."""
     current = None
-    for e in _decisions(applied_file, knob, phase, shape):
+    for e in _decisions(applied_file, knob, phase, shape, through):
         current = e.get("value")
     return current
 
@@ -1300,7 +1317,8 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
     migration table in the design doc).
 
     `shape` is the phase's current shape digest: a decision recorded under
-    another shape, or under none, resolves to `default`.
+    another shape, or under none, resolves to `default`. SPECSTRIDE_LEARNING_THROUGH
+    (set by a MoL contract, item 6) ignores applies newer than the run id it names.
 
     Every knob resolves to an `int`, so a shell caller never has to branch on type."""
     env = os.environ if env is None else env
@@ -1308,7 +1326,7 @@ def resolve_knob(knob: str, phase: int, default: int, applied_file: Optional[str
         return int(default)
     if knob not in ADJUSTABLE_KNOBS:
         return int(default)
-    value = effective_value(applied_file, knob, phase, shape)
+    value = effective_value(applied_file, knob, phase, shape, env.get("SPECSTRIDE_LEARNING_THROUGH") or None)
     if value is None:
         return int(default)
     if knob not in KNOB_HARD_MIN:
@@ -2004,7 +2022,7 @@ def resolve_arm(knob: str, phase: int, applied_file: Optional[str], env: Optiona
     if env.get("SPECSTRIDE_LEARNING") != "apply" or knob not in ADJUSTABLE_KNOBS:
         return "baseline"
     latest = None
-    for e in _decisions(applied_file, knob, phase, shape):
+    for e in _decisions(applied_file, knob, phase, shape, env.get("SPECSTRIDE_LEARNING_THROUGH") or None):
         latest = e
     return "applied" if latest is not None and latest.get("action") in (None, "apply") else "baseline"
 

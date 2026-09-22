@@ -1180,7 +1180,10 @@ value. `--proposer-timeout` and the overrides now round-trip through
 `SPECSTRIDE_MAX_WALL_MIN` (0 = unlimited),
 `SPECSTRIDE_CRITIC_GROUNDING` (on), `SPECSTRIDE_GIT_COMMITS` (auto),
 `SPECSTRIDE_LEARNING` (unset, which is `off`: `off` | `suggest` | `apply`; see
-[Learning](#learning-self-tuning-knobs)).
+[Learning](#learning-self-tuning-knobs)), `SPECSTRIDE_LEARNING_THROUGH` (unset; set by a
+mixture-of-loops contract to the `run_id` of the last decision it bound: `resolve` ignores
+later `apply` entries until a re-derivation, while later reverts still count, so a bound
+value is an upper bound on what runs, not a promise).
 
 ## Hardening
 
