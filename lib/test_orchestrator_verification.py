@@ -69,6 +69,8 @@ else
   # $FAKE_PROPOSER_SLEEP (default 0 — the original behaviour) stalls the pass so a
   # pass-ceiling test can drive it into the watchdog instead of writing evidence.
   sleep "${FAKE_PROPOSER_SLEEP:-0}"
+  # $FAKE_TAMPER rewrites a byte of the event stream that predates this pass.
+  [[ -n "${FAKE_TAMPER:-}" && -n "${SPECSTRIDE_EVENTS:-}" ]] && sed -i '1s/run_start/run_stXrt/' "$SPECSTRIDE_EVENTS"
   # $YIELD_POLL_WITNESS records the poll interval the proposer handed down to us.
   [[ -n "${YIELD_POLL_WITNESS:-}" ]] && printf '%s\n' "${SPECSTRIDE_YIELD_POLL:-unset}" >> "$YIELD_POLL_WITNESS"
   rel="$(printf '%s\n' "$prompt" \
@@ -1340,3 +1342,34 @@ def test_learning_off_prints_no_learning_summary(tmp_path):
     _seed_applied(tmp_path, 1, 1234)
     result, workdir, _events = _run_orchestrator(tmp_path, proposer_timeout=900)
     assert "learn: phase 1" not in _run_logs(workdir) and "learn: phase 1" not in result.stdout
+
+
+# ── the arm field and the tamper rule (item 4c) ──────────────────────────────
+def test_an_applied_decision_equal_to_the_fallback_is_still_the_applied_arm(tmp_path):
+    _seed_applied(tmp_path, 1, 900)
+    _result, _workdir, events = _run_orchestrator(
+        tmp_path, proposer_timeout=900, extra_env={"SPECSTRIDE_LEARNING": "apply"})
+    caps = {c["phase"]: c for c in _caps(events)}
+    assert caps["1"]["seconds"] == "900" and caps["1"]["source"] == "learned" and caps["1"]["arm"] == "applied"
+    assert caps["2"]["source"] == "global" and caps["2"]["arm"] == "baseline"
+    assert caps["1"]["tamper_bracket"] == "on"
+
+
+def test_a_pass_that_rewrites_the_event_stream_is_marked_tampered(tmp_path):
+    result, _workdir, events = _run_orchestrator(
+        tmp_path, extra_env={"SPECSTRIDE_LEARNING": "suggest", "FAKE_TAMPER": "1"})
+    tampered = [e for e in events if e["event"] == "events_tampered"]
+    assert tampered, result.stdout + result.stderr
+    assert tampered[0]["file"].endswith("events.jsonl") and tampered[0]["phase"] == "1"
+
+
+def test_an_append_only_stream_is_not_marked_tampered(tmp_path):
+    _result, _workdir, events = _run_orchestrator(tmp_path, extra_env={"SPECSTRIDE_LEARNING": "suggest"})
+    assert [e for e in events if e["event"] == "events_tampered"] == []
+    assert all(c["tamper_bracket"] == "on" for c in _caps(events))
+
+
+def test_with_learning_off_no_bracket_is_taken(tmp_path):
+    _result, _workdir, events = _run_orchestrator(tmp_path, extra_env={"FAKE_TAMPER": "1"})
+    assert [e for e in events if e["event"] == "events_tampered"] == []
+    assert all(not c.get("tamper_bracket") for c in _caps(events))
