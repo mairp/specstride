@@ -36,7 +36,7 @@ the full launch-flag list. Common launch flags:
 | Flag | Meaning |
 |---|---|
 | `-w/--workdir DIR` | where the proposer works (default `$PWD`) |
-| `-s/--specs FILE` | the spec file (default `<workdir>/SPECS.md`, or auto-discovered) |
+| `-s/--specs FILE` | the spec, normally `specs/<feature>/tasks.md`; `run` discovers it inside a Spec Kit project (a legacy `<workdir>/SPECS.md` is still checked first) |
 | `--feature SLUG` | feature namespace under `.specstride/features/` |
 | `--spec-format native\|speckit-tasks\|openspec-change` | force the spec format (else auto-detected) |
 | `--start-phase N` | override the derived starting phase |
