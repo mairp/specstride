@@ -1123,9 +1123,24 @@ observe.add_argument("--out", required=True)
 observe.add_argument("--phase-shape")
 '''
 
+_LEARN_EVALUATE = '''evaluate = sub.add_parser("evaluate")
+for flag in ("--events", "--feature-dir", "--phase", "--phase-shape", "--events-file"):
+    evaluate.add_argument(flag)
+'''
+
 _LEARN_TAIL = '''args = parser.parse_args()
 if args.cmd == "resolve":
     print(args.default or "")
+    sys.exit(0)
+if args.cmd == "evaluate":
+    sys.stderr.write("evaluate: stand-in for phase " + args.phase + "\\n")
+    if "__EVALUATE__" == "fail":
+        sys.exit(1)
+    import os
+    os.makedirs(os.path.join(args.feature_dir, "learning"), exist_ok=True)
+    with open(os.path.join(args.feature_dir, "learning", "evaluated.jsonl"), "a") as handle:
+        handle.write(json.dumps({"phase": args.phase, "events": args.events, "shape": args.phase_shape,
+                                 "events_file": args.events_file}) + "\\n")
     sys.exit(0)
 sys.stderr.write("observe: stand-in for phase " + args.phase + "\\n")
 if "__OUTCOME__" == "fail":
@@ -1135,9 +1150,11 @@ with open(args.out, "w") as handle:
 '''
 
 
-def _learn_stub(*, observe=True, fails=False):
-    tail = _LEARN_TAIL.replace("__OUTCOME__", "fail" if fails else "ok")
-    return _LEARN_HEAD + (_LEARN_OBSERVE if observe else "") + tail
+def _learn_stub(*, observe=True, fails=False, evaluate=False, evaluate_fails=False):
+    tail = (_LEARN_TAIL.replace("__OUTCOME__", "fail" if fails else "ok")
+            .replace("__EVALUATE__", "fail" if evaluate_fails else "ok"))
+    return (_LEARN_HEAD + (_LEARN_OBSERVE if observe else "")
+            + (_LEARN_EVALUATE if evaluate else "") + tail)
 
 
 def _script_root(tmp_path, learn_source):
@@ -1242,3 +1259,52 @@ def test_a_failing_observe_never_fails_the_phase(tmp_path):
     run_log = sorted((workdir / ".specstride" / "features" / "obs-lifecycle" / "runs")
                      .rglob("run.log"))[-1].read_text()
     assert "observing phase 1 failed" in run_log
+
+
+# ── the phase_done evaluation hook (item 4; 05-evaluate-design.md §2.8) ──────
+def _evaluations(workdir):
+    path = workdir / ".specstride" / "features" / "obs-lifecycle" / "learning" / "evaluated.jsonl"
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.is_file() else []
+
+
+def test_learning_unset_evaluates_nothing_at_phase_done(tmp_path):
+    orchestrator = _script_root(tmp_path, _learn_stub(evaluate=True))
+    result, workdir, _events = _run_orchestrator(tmp_path, orchestrator=orchestrator)
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert _evaluations(workdir) == []
+
+
+def test_phase_done_evaluates_each_phase_over_the_runs_tree(tmp_path):
+    orchestrator = _script_root(tmp_path, _learn_stub(evaluate=True))
+    result, workdir, events = _run_orchestrator(
+        tmp_path, orchestrator=orchestrator, extra_env={"SPECSTRIDE_LEARNING": "suggest"})
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    evaluated = _evaluations(workdir)
+    assert [e["phase"] for e in evaluated] == ["1", "2"]
+    for e in evaluated:
+        assert e["events"].rstrip("/").endswith("/runs")          # every run, not the newest one
+        assert e["shape"] == _shape(int(e["phase"]))
+        assert e["events_file"].endswith("/events.jsonl") and "/runs/" in e["events_file"]
+    assert _observations(workdir) == ["phase-1.json", "phase-2.json"]   # observe still runs beside it
+
+
+def test_a_learn_py_without_evaluate_leaves_the_run_untouched(tmp_path):
+    orchestrator = _script_root(tmp_path, _learn_stub(evaluate=False))
+    result, workdir, events = _run_orchestrator(
+        tmp_path, orchestrator=orchestrator, extra_env={"SPECSTRIDE_LEARNING": "suggest"})
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    assert _evaluations(workdir) == []
+    assert _observations(workdir) == ["phase-1.json", "phase-2.json"]
+    assert _names(events)[-1] == "run_end"
+
+
+def test_a_failing_evaluate_never_fails_the_phase(tmp_path):
+    orchestrator = _script_root(tmp_path, _learn_stub(evaluate=True, evaluate_fails=True))
+    result, workdir, _events = _run_orchestrator(
+        tmp_path, orchestrator=orchestrator, extra_env={"SPECSTRIDE_LEARNING": "suggest"})
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+    gates = workdir / ".specstride" / "features" / "obs-lifecycle" / "gates"
+    assert (gates / "GATE1-APPROVED").is_file() and (gates / "GATE2-APPROVED").is_file()
+    run_log = sorted((workdir / ".specstride" / "features" / "obs-lifecycle" / "runs")
+                     .rglob("run.log"))[-1].read_text()
+    assert "evaluating phase 1 failed" in run_log

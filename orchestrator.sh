@@ -1949,12 +1949,12 @@ run_phase() {
       # installed learn.py has no `observe` subcommand, and any failure is
       # logged to the run log and dropped. An approved phase is never undone by
       # a measurement of it.
+      local -a shape_args=()
+      [[ -n "$shape" ]] && shape_args=( --phase-shape "$shape" )
       if [[ -n "${SPECSTRIDE_LEARNING:-}" && "${SPECSTRIDE_LEARNING}" != "off" ]] \
          && python3 "$LIB_DIR/learn.py" observe --help >/dev/null 2>&1; then
         local observation="$FEATURE_DIR/learning/phase-$n.json"
         mkdir -p "$FEATURE_DIR/learning" 2>/dev/null || true
-        local -a shape_args=()
-        [[ -n "$shape" ]] && shape_args=( --phase-shape "$shape" )
         if python3 "$LIB_DIR/learn.py" observe --events "$FEATURE_DIR/runs" \
              --phase "$n" "${shape_args[@]}" --out "$observation" >>"$LOG" 2>&1; then
           specstride_emit learning_observed phase "$n" path "$observation"
@@ -1963,6 +1963,21 @@ run_phase() {
         fi
       fi
       # ── end learning: observe at phase_done ──────────────────────────────
+      # ── learning: evaluate at phase_done ─────────────────────────────────
+      # Label every active decision for this phase against its recorded baseline
+      # (roadmap/research/self-improvement-loops/05-evaluate-design.md). Same
+      # discipline as observe: only with the layer on, skipped when the installed
+      # learn.py has no `evaluate`, and a failure is logged and dropped — an
+      # evaluation never costs an approved phase. It reads every run of the
+      # feature and writes knob_evaluated into this run's stream.
+      if [[ -n "${SPECSTRIDE_LEARNING:-}" && "${SPECSTRIDE_LEARNING}" != "off" ]] \
+         && python3 "$LIB_DIR/learn.py" evaluate --help >/dev/null 2>&1; then
+        if ! python3 "$LIB_DIR/learn.py" evaluate --events "$FEATURE_DIR/runs" --feature-dir "$FEATURE_DIR" \
+               --phase "$n" "${shape_args[@]}" --events-file "$SPECSTRIDE_EVENTS" >>"$LOG" 2>&1; then
+          log "#   (learning: evaluating phase $n failed — continuing; the run is unaffected)"
+        fi
+      fi
+      # ── end learning: evaluate at phase_done ─────────────────────────────
       maybe_git_checkpoint "$n" "$title"
       return 0
     fi
