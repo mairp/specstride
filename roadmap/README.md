@@ -26,6 +26,13 @@ This directory contains implementation roadmaps and operational guides for plann
   open: `REPEAT_IGNORE` exempts long jobs by command NAME, so foreground `make test` is
   safe and backgrounding the same suite then tailing its log is killed. Three kills,
   ~1h40m, in one run. **Planned.**
+- [What Specstride and mixture-of-loops need to be a self-improving loop](self-improving-loop-plan.md) —
+  the learning loop observes and applies but never checks whether a change helped, and MoL
+  leaks `SPECSTRIDE_LEARNING` from the caller's shell into contract-driven runs. Ranked plan:
+  close the provenance hole, wire the unread knobs, add `learn.py evaluate`. **Planned.**
+- [Self-improving loop implementation prompt](prompts/self-improving-loop-implementation.md) —
+  handoff prompt for the unattended agent that lands plan items 0–4 and 7, then 5–6, one PR
+  per item, with the plan's ground truth re-verified against the code. **Planned.**
 
 ## Status legend
 
