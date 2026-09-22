@@ -102,6 +102,7 @@ See `.env.example` for the full set. The load-bearing ones:
 | `SPECSTRIDE_AGENT_STREAM` | `true` | structured stream tap (`agent_*` events) for `claude`/`codex`/`prime`; `false` = legacy raw path |
 | `SPECSTRIDE_SPEC_FORMAT` | auto | force `native \| speckit-tasks \| openspec-change` |
 | `SPECSTRIDE_FEATURE` | dir basename / `default` | feature namespace |
+| `SPECSTRIDE_LEARNING` | unset | the [learning loop](Learning): unset/`off` = inert; `suggest` = write per-phase observations at `phase_done`; `apply` = also read applied values into the run |
 
 ## Privacy controls
 
