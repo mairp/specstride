@@ -82,3 +82,44 @@ def test_cli_ticks_the_file_atomically_and_prints_the_count(tmp_path):
     assert b"- [x] T001 Create the tree\r\n" in spec.read_bytes()
     assert oct(spec.stat().st_mode & 0o777) == "0o640"
     assert [p.name for p in tmp_path.iterdir()] == ["tasks.md"]   # no temp file left
+
+
+# ── the phase shape: what the learning layer keys on ─────────────────────────
+def test_ticking_does_not_change_the_phase_shape():
+    ticked, _ = specstride_spec.tick_phase(SPECKIT, 1, "speckit-tasks")
+    assert ticked != SPECKIT
+    for n in (1, 2):
+        assert (specstride_spec.phase_shape(ticked, n, "speckit-tasks")
+                == specstride_spec.phase_shape(SPECKIT, n, "speckit-tasks"))
+    ticked_os, _ = specstride_spec.tick_phase(OPENSPEC, 1, "openspec-change")
+    assert (specstride_spec.phase_shape(ticked_os, 1, "openspec-change")
+            == specstride_spec.phase_shape(OPENSPEC, 1, "openspec-change"))
+
+
+def test_editing_a_phase_changes_only_its_shape():
+    edited = SPECKIT.replace("T002 [P] Write the test", "T002 [P] Write two tests")
+    assert (specstride_spec.phase_shape(edited, 1, "speckit-tasks")
+            != specstride_spec.phase_shape(SPECKIT, 1, "speckit-tasks"))
+    assert (specstride_spec.phase_shape(edited, 2, "speckit-tasks")
+            == specstride_spec.phase_shape(SPECKIT, 2, "speckit-tasks"))
+    retitled = SPECKIT.replace("## Phase 2: Core", "## Phase 2: Core engine")
+    assert (specstride_spec.phase_shape(retitled, 2, "speckit-tasks")
+            != specstride_spec.phase_shape(SPECKIT, 2, "speckit-tasks"))
+
+
+def test_whitespace_does_not_change_the_phase_shape():
+    spaced = SPECKIT.replace("T001 Create the tree", "T001   Create the tree  ")
+    assert (specstride_spec.phase_shape(spaced, 1, "speckit-tasks")
+            == specstride_spec.phase_shape(SPECKIT, 1, "speckit-tasks"))
+    assert specstride_spec.phase_shape(SPECKIT, 9, "speckit-tasks") == ""
+
+
+def test_cli_prints_the_shape_digest(tmp_path):
+    spec = tmp_path / "tasks.md"
+    spec.write_text(SPECKIT)
+    r = subprocess.run([sys.executable, os.path.join(HERE, "specstride_spec.py"), "shape", "1",
+                        "--specs", str(spec), "--format", "speckit-tasks"],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == specstride_spec.phase_shape(SPECKIT, 1, "speckit-tasks")
+    assert len(r.stdout.strip()) == 16
