@@ -1,7 +1,7 @@
 # Learning
 
 The learning loop is the outer of Specstride's [three loops](Architecture#three-loops). The inner
-Ralph loop and the gated phase loop get a phase approved. The learning loop reads how those
+pass loop and the gated phase loop get a phase approved. The learning loop reads how those
 passes went and, across runs, suggests per-phase settings sized to what each phase actually
 measured. Without it, you get one global setting sized for the worst phase in the project.
 

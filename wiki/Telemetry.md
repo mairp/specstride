@@ -20,16 +20,16 @@ push port (or vice versa) will not work.
 ```bash
 (cd "$SPECSTRIDE_HOME/telemetry" && docker compose up -d)   # Grafana :3010, Loki :3110 (both free here)
 specstride --telemetry --loki-url http://localhost:3110 -w ./myproject
-# open http://localhost:3010 → the "Ralph Loops" dashboard
+# open http://localhost:3010 → the bundled Specstride dashboard
 ```
 
 This is an independent deployment on its own ports (the defaults deliberately avoid the common
-:3000/:3100). Every port is an `.env` variable. Shipper: [`lib/ralph_loki_ship.py`](../lib/ralph_loki_ship.py).
+:3000/:3100). Every port is an `.env` variable. The Loki shipper lives under `lib/`.
 
 ## OpenTelemetry (OTLP)
 
 `--otel` ships the *same* event stream over **OTLP/HTTP+JSON** to the bundled OTEL Collector,
-which forwards logs to the same Loki (so the "Ralph Loops" dashboard is unchanged) and turns
+which forwards logs to the same Loki (so the bundled dashboard is unchanged) and turns
 cost/tokens/duration into first-class **Prometheus** metrics (`ralph_cost_usd_total`,
 `ralph_tokens_total`, `ralph_iter_duration_ms`, …). Like `--telemetry`, it's stdlib-only — no
 OTEL SDK, no pip:
@@ -41,8 +41,8 @@ specstride --otel --otel-url http://localhost:4318 -w ./myproject
 
 The OTEL sink is driven **only** by `--otel` / `--otel-url` (env `SPECSTRIDE_OTEL_URL`) — never by
 `--loki-url`. `--otel-url` points at the **Collector** on `:4318`, not at Loki: the Collector is
-what fans OTLP out to Loki (logs) and Prometheus (metrics). Shipper:
-[`lib/ralph_otel_ship.py`](../lib/ralph_otel_ship.py).
+what fans OTLP out to Loki (logs) and Prometheus (metrics). The OTLP shipper lives under
+`lib/`.
 
 ## Dual-ship
 
@@ -56,8 +56,8 @@ specstride --telemetry --loki-url http://localhost:3110 \
 ```
 
 The OTEL shipper mirrors the Loki shipper's `add()`/`flush()` seam and is covered by unit,
-characterization, and old-vs-new **parity** tests (`python3 lib/test_ralph_otel_ship.py`,
-`lib/test_telemetry_parity.py`).
+characterization, and old-vs-new **parity** tests (`lib/test_telemetry_parity.py` and the
+shipper's own test module under `lib/`).
 
 ## Provider-neutral parity (Prime, Claude, Codex)
 
@@ -122,7 +122,7 @@ check is always the presence of the `event="agent_result"` record for `$RUN_ID`.
 
 Specstride's *bundled* stack (`telemetry/`) defaults to Grafana `:3010` / Loki `:3110`, but a host's
 *live* observability stack is often Grafana `:3000` / Loki `:3100` — point `--loki-url` at the
-live port when shipping there. The "Ralph Loops (Claude Code)" dashboard defaults to a `now-6h`
+live port when shipping there. The bundled dashboard defaults to a `now-6h`
 window; widen it to 24h if you don't see a recent run.
 
 Next: [On-Disk Contract](On-Disk-Contract) · [Configuration](Configuration)

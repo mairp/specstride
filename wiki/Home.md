@@ -1,7 +1,8 @@
 # Specstride Wiki
 
-**A spec-driven Ralph loop with a critic gate, wrapped in an outer loop that tunes its own
-budgets from its telemetry.**
+**A spec-driven agent loop with a critic gate, wrapped in an outer loop that tunes its own
+budgets from its telemetry, checks whether each change helped, and rolls it back when it did
+not.**
 
 You hand Specstride a spec — an ordered set of phases, each with acceptance criteria — and it
 drives a coding agent phase by phase. *Nothing advances until a critic approves it.* The
@@ -9,14 +10,13 @@ human who used to eyeball each phase and click "approved" is replaced by an LLM-
 critic. You stay out of the inner loop and only arbitrate the phases the machines genuinely
 can't settle.
 
-Specstride is one author's implementation and interpretation of the **"Ralph" technique** —
-automating software development by running a coding agent in a repeating, self-checking
-loop — coined by [Geoffrey Huntley](https://ghuntley.com/). It goes further than a plain Ralph
-loop in three ways:
+Specstride runs a coding agent in a repeating, self-checking loop: each pass is a fresh,
+stateless session that works until the phase's evidence file exists. On top of that plain loop
+it adds three things:
 
 - **An automated critic gate.** An LLM critic checks each phase's evidence against the spec's
   acceptance criteria and the real code. Nothing advances until the critic approves it.
-- **A diagnose-and-accelerate micro-loop for stuck phases.** A plain Ralph loop retries a
+- **A diagnose-and-accelerate micro-loop for stuck phases.** A plain retry loop retries a
   rejected phase from scratch, so a stuck phase can burn pass after pass and learn nothing
   new. When a phase stalls on a new set of unmet criteria, the **diagnostician** reads the
   full rejection history and the untruncated files, then says whether the critic simply
@@ -26,11 +26,14 @@ loop in three ways:
   turned out to be a two-file fix. See [Architecture](Architecture#the-roles).
 - **An opt-in learning loop over its own runs.** `specstride learn` reads the recorded history
   of every pass and suggests per-phase settings sized to what each phase actually measured.
-  You apply a suggestion explicitly, it is bounded, and you can revert it. It can never touch
-  anything the critic reads. See [Learning](Learning).
+  You apply a suggestion explicitly; it is bounded, keyed to the phase as written, and
+  reversible. Every closed phase then **evaluates** it against the baseline it was learned
+  from, printing the effect beside the smallest effect the data could show, and a guardrail
+  breach **reverts it automatically**. It can never touch anything the critic reads. See
+  [Learning](Learning).
 
-So is it still a Ralph loop, or a self-improving one? Both, at different layers. The inner loop
-is plain Ralph: a fresh, stateless agent per pass, with all state on disk. The agents never
+So is it a plain agent loop, or a self-improving one? Both, at different layers. The inner pass
+loop is plain: a fresh, stateless agent per pass, with all state on disk. The agents never
 improve. What improves, narrowly and only when you opt in, is how the loop drives them. See
 [Architecture: three loops](Architecture#three-loops).
 
