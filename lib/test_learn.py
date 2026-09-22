@@ -500,7 +500,8 @@ def test_learn_py_is_invoked_only_from_the_proposer_launch_path_never_the_gate()
         ("orchestrator.sh", "observe"): 1,
         ("orchestrator.sh", "evaluate --help"): 1,
         ("orchestrator.sh", "evaluate"): 2,              # the phase_done hook, and --report at exit
-        ("specstride", "evaluate"): 1,                   # --report after --show's suggestions
+        ("specstride", "evaluate"): 2,                   # --show's --report, and read-only --evaluate
+        ("specstride", "summarize"): 1,                  # read-only --summarize (MoL's retro reads it)
         # the operator's CLI
         ("specstride", "advise"): 1,
         ("specstride", "apply"): 1,
@@ -993,6 +994,23 @@ def test_a_bare_show_for_yield_poll_interval_steps_relative_to_30_not_1800(tmp_p
     # and proposer_timeout still defaults to 1800
     r = _specstride_learn(wd, "--show")
     assert "current=1800s" in r.stdout, r.stdout
+
+
+def test_specstride_learn_summarize_and_evaluate_are_read_only(tmp_path):
+    wd = _cli_workdir(tmp_path, [{k: v for k, v in e.items() if k != "_src"} for e in _baseline_events()])
+    feature = wd / ".specstride" / "features" / "tf"
+    r = _specstride_learn(wd, "--summarize")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["schema"] == learn.SCHEMA
+    applied = feature / "learning" / "applied.json"
+    entry = learn.apply_proposer_timeout(learn.summarize(_baseline_events(), phase_shapes={3: "S1"}), 3, 1800,
+                                          str(applied), run_id="learn-ro", shape="S1")
+    before = applied.read_text()
+    r = _specstride_learn(wd, "--evaluate", "--phase-shape", "S1", "--phase", "3")
+    assert r.returncode == 0, r.stderr
+    assert "[learn-ro]: insufficient" in r.stdout and entry["run_id"] == "learn-ro"
+    assert applied.read_text() == before                      # --evaluate is always --dry-run
+    assert not list(feature.glob("events.jsonl"))
 
 
 # -- proposer_cap: what each run ran a phase under ---------------------------

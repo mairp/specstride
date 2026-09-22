@@ -29,6 +29,10 @@ SPECSTRIDE_LEARNING=apply specstride run ...
 # Undo one decision, or all of them
 specstride learn --revert <run-id>
 specstride learn --off
+
+# Read-only: the metric JSON, and what evaluation would conclude now
+specstride learn --summarize
+specstride learn --evaluate
 ```
 
 | `SPECSTRIDE_LEARNING` | Observations at `phase_done` | Applied values read by the run |
