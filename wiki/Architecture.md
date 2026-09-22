@@ -23,6 +23,20 @@ orchestrator.sh   (derives the current phase N from disk; reads the spec)
            and leave everything on disk for a human.
 ```
 
+## Three loops
+
+The loop above is the middle of three nested loops:
+
+| Loop | Scope | What repeats | What carries over |
+|---|---|---|---|
+| **Ralph loop** (inner, `proposer.sh`) | one phase attempt | a fresh, stateless agent session per pass, until `GATE<N>-EVIDENCE.md` exists | only what is on disk |
+| **Gated phase loop** (middle, `orchestrator.sh`) | one run | proposer → critic → approve or retry; the diagnostician and accelerator for a stuck phase | feedback and hint files, within the run |
+| **Learning loop** (outer, `lib/learn.py`) | across runs | measure every pass, then suggest (and, opt-in, apply) per-phase settings | `learning/phase-<N>.json` observations and the `learning/applied.json` decision log |
+
+The diagnostician and accelerator adapt the next attempt, but nothing they learn outlives the
+run. Only the outer loop carries lessons forward, and only for three allowlisted settings. The
+critic is outside its reach by design. See [Learning](Learning).
+
 ## The roles
 
 Literal role names are used everywhere — code, files, flags, env vars. Three scripts, five passes:

@@ -25,6 +25,7 @@ All inspection subcommands take `--feature SLUG` and default to the **last run's
 | `specstride feedback <N> [-w DIR] [--feature S]` | `GATE<N>-FEEDBACK.md` |
 | `specstride watch [-w DIR]` | the live status card (heartbeat + run totals) |
 | `specstride stop [-w DIR] [--now]` | **(mutates)** request a clean stop — writes `stop.flag`; the run finishes its current pass and exits 6. `--now` also kill-trees the in-flight proposer pass so it stops within seconds |
+| `specstride learn [-w DIR] [--feature S] [--show\|--apply\|--revert <run-id>\|--off]` | the [learning loop](Learning) over this feature's telemetry. `--show` (default) is read-only; `--apply`, `--revert` and `--off` **(mutate)** `learning/applied.json` only |
 | `specstride resume [-w DIR] [--feature S] [overrides…]` | **(mutates)** relaunch the orchestrator from the last run's saved config (`.specstride/last-run.conf`); refuses if a run is already active. Extra args override the saved flags (last-wins) |
 
 ## Starting a run
