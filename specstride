@@ -22,7 +22,7 @@
 #                                        agent pass). Rerun/resume picks up after.
 #   specstride resume    [-w DIR] [--feature S] [overrides…]  relaunch the orchestrator
 #                                        from the saved config of the last run.
-#   specstride learn     [-w DIR] [--feature S] [--show|--apply|--revert <run-id>|--off]
+#   specstride learn     [-w DIR] [--feature S] [--show|--apply|--revert <run-id>|--off|--summarize|--evaluate]
 #                                        the self-tuning loop (roadmap/research/
 #                                        self-improvement-loops/02-wiggum-loop-design.md
 #                                        §5): --show (default) prints suggested knob
@@ -31,7 +31,9 @@
 #                                        a knob_adjusted event); --revert <run-id>
 #                                        undoes one; --off reverts everything. A
 #                                        decision only takes effect at run time under
-#                                        SPECSTRIDE_LEARNING=apply.
+#                                        SPECSTRIDE_LEARNING=apply. --summarize prints
+#                                        the metric JSON and --evaluate what evaluate
+#                                        would conclude now; both read-only.
 # Launch defaults to required verification with feature-scoped TEST_PLAN.md and
 # generated scaffolds; `--verification plan|off` changes that behavior. Explicit
 # `--test-plan`/`--generate-tests` paths override defaults, and resume preserves
@@ -565,6 +567,16 @@ for o in keep[-5:]:
         [[ -n "$EV" && -e "$EV" ]] && args+=( --events "$EV" )
         exec python3 "$LIB_DIR/learn.py" apply "${args[@]}" "${shape_args[@]}" "${PASSTHRU[@]}"
         ;;
+      --summarize)
+        # read-only: the §5.3 metric set over every run of the feature, as JSON
+        exec python3 "$LIB_DIR/learn.py" summarize --events "$EV" "${PASSTHRU[@]}"
+        ;;
+      --evaluate)
+        # read-only: what evaluate would conclude now; --dry-run writes no entry,
+        # emits no event and reverts nothing
+        exec python3 "$LIB_DIR/learn.py" evaluate --dry-run --events "$EV" "${args[@]}" \
+          "${shape_args[@]}" "${PASSTHRU[@]}"
+        ;;
       --revert)
         [[ ${#PASSTHRU[@]} -ge 1 ]] || { echo "usage: specstride learn --revert <run-id>" >&2; exit 1; }
         exec python3 "$LIB_DIR/learn.py" revert "${PASSTHRU[0]}" --feature-dir "$FEATURE_DIR" "${PASSTHRU[@]:1}"
@@ -573,7 +585,7 @@ for o in keep[-5:]:
         exec python3 "$LIB_DIR/learn.py" off --feature-dir "$FEATURE_DIR" "${PASSTHRU[@]}"
         ;;
       *)
-        echo "specstride learn: unknown option '$MODE' (expected --show|--apply|--revert <run-id>|--off)" >&2
+        echo "specstride learn: unknown option '$MODE' (expected --show|--apply|--revert <run-id>|--off|--summarize|--evaluate)" >&2
         exit 1
         ;;
     esac
