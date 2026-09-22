@@ -29,3 +29,7 @@ os.environ["SPECSTRIDE_TELEMETRY_ENABLED"] = "false"
 os.environ["SPECSTRIDE_OTEL_ENABLED"] = "false"
 # Span state files from fixture runs never touch the real ~/.cache/specstride/otel.
 os.environ.setdefault("SPECSTRIDE_OTEL_STATE_DIR", tempfile.mkdtemp(prefix="specstride-otel-test-"))
+
+# lib/fixtures/ holds test DATA, including whole fixture projects with their own
+# test_*.py files (lib/fixtures/reverse/src-mini); they are never part of this suite.
+collect_ignore_glob = ["fixtures/*"]
