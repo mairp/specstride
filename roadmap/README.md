@@ -29,10 +29,12 @@ This directory contains implementation roadmaps and operational guides for plann
 - [What Specstride and mixture-of-loops need to be a self-improving loop](self-improving-loop-plan.md) —
   the learning loop observes and applies but never checks whether a change helped, and MoL
   leaks `SPECSTRIDE_LEARNING` from the caller's shell into contract-driven runs. Ranked plan:
-  close the provenance hole, wire the unread knobs, add `learn.py evaluate`. **Planned.**
+  close the provenance hole, wire the unread knobs, add `learn.py evaluate`. **Partial**: items
+  0–7 are merged with tests; no live run has exercised an applied arm yet, and items 8–12 remain.
 - [Self-improving loop implementation prompt](prompts/self-improving-loop-implementation.md) —
   handoff prompt for the unattended agent that lands plan items 0–4 and 7, then 5–6, one PR
-  per item, with the plan's ground truth re-verified against the code. **Planned.**
+  per item, with the plan's ground truth re-verified against the code. **Done** — every item
+  it scoped merged; results in [self-improving-loop-report.md](self-improving-loop-report.md).
 
 ## Status legend
 

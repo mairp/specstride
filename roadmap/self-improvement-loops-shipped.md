@@ -59,8 +59,30 @@ then regenerate the affected contracts.
 `learn.py observe` itself is being added on another branch; until it lands the
 hook is inert by the subcommand check, which is also pinned by a test.
 
+## Closed since (the self-improving loop, 2026-09-22)
+
+Plan: `self-improving-loop-plan.md`; run report: `self-improving-loop-report.md`; design of
+`evaluate`: `research/self-improvement-loops/05-evaluate-design.md`. Commits are the squash
+merges on `main` (Specstride) and `mixture-of-loops` `main` (MoL).
+
+| Item | Commit | What changed |
+|---|---|---|
+| 0 (MoL) | 2c48401 | a `specstride` stage declares its learning mode; the runtime strips any inherited `SPECSTRIDE_LEARNING` and passes `off` explicitly; validation accepts only `off`/`suggest`/`apply`, rejects `from_env` for it and rejects `learning/` state as a contract source |
+| 1 | 19c1492 | `yield_poll_interval` is read by the run (`resolve_yield_poll`, sourced `override`/`learned`/`default`, on `proposer_cap`); `inject_yield_hint` removed from the allowlist (the yield contract is already in every prompt); `specstride learn` passes the asked knob's own default |
+| 2 | 6967005 | samples and decisions keyed on the phase's shape (`specstride_spec.py shape`), tick-invariant; `applied.json` schema `/2`; a shape-less decision is never silently applied |
+| 3 | f47deb1 | `diagnostician_done` carries `case` (`grounding`/`real_gap`/`unknown`); `summarize` counts it per phase |
+| 7 | d1a7b30 | a test locks every `learn.py` invocation site; none in `critic.py` or `verification_plan.py` |
+| 4a | a14a571 | `learn.py evaluate`: baseline recorded at apply, per-pass primaries clustered by episode, effect-versus-MDE labels (`helped`/`neutral`/`regressed`/`insufficient`), `knob_evaluated`, the `phase_done` hook |
+| 4b | 2ec5dde | guardrails (exact binomial and rank tests), automatic revert on a breach, quarantine with `--force`, the evaluation summary on every exit |
+| 4c | 5322903 | the arm on every `proposer_cap`; the prefix-immutability tamper rule and `events_tampered` |
+| 5 | c5faa5f, MoL ebaf6be | `specstride learn --summarize`/`--evaluate` (read-only); MoL `supervise.py retro` writes `runs/<id>/retrospectives/<digest>.json` and never applies or reverts |
+| 6 | 7b35f3a, MoL 415f825 | `SPECSTRIDE_LEARNING_THROUGH` bounds `resolve` to a contract; MoL's `configuration.learning` binds a hashed prefix of the decision log, with a named `learning-decisions-changed` refusal |
+
 ## Still open
 
-- Suggestion engines for `yield_poll_interval` and `inject_yield_hint`.
-- The MoL contract generator's task-tick postcondition (`[x]` vs `[X]`, F15 in
-  002's troubleshooting log) lives in the projects' regenerate scripts, not here.
+- No live run has exercised an applied arm: every evaluation path is proven by tests and
+  synthetic streams only. The first real `helped`/`regressed` label is still to come.
+- Plan items 8–12 (process lessons, cross-project priors, history-informed derivation,
+  offline prompt optimisation, harness-quality log).
+- The MoL contract generator's task-tick postcondition (`[x]` vs `[X]`, F15 in 002's
+  troubleshooting log) lives in the projects' regenerate scripts, not here.
