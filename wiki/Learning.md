@@ -42,8 +42,15 @@ specstride learn --off
 | Knob | Suggested from | Bounds | Read by a live run? |
 |---|---|---|---|
 | `proposer_timeout` | the phase's measured work time (wall time minus declared waiting) | `[900 s, 2 × default]`, at most ±50 % per step | **yes** — `resolve_proposer_timeout`, source `learned`; an operator override still wins |
-| `yield_poll_interval` | measured yield job durations, targeting about a tenth of the job's length | `[10 s, 300 s]`, at most ±50 % per step | not yet — the run uses `SPECSTRIDE_YIELD_POLL` (30 s) |
-| `inject_yield_hint` | a high median wait-call share, or a budget kill on a pass that was waiting | boolean | not yet |
+| `yield_poll_interval` | measured yield job durations, targeting about a tenth of the job's length | `[10 s, 300 s]`, at most ±50 % per step from its own default (30 s) | **yes** — `resolve_yield_poll`, source `learned`; a set `SPECSTRIDE_YIELD_POLL` still wins |
+
+Both values, with their sources, are on every `proposer_cap` event. `specstride learn` passes
+the asked knob's own default when you give no `--default`: `SPECSTRIDE_PROPOSER_TIMEOUT`
+(else 1800) or `SPECSTRIDE_YIELD_POLL` (else 30).
+
+The design's third knob, `inject_yield_hint`, was removed rather than wired: the yield
+contract is already appended to every proposer and accelerator prompt, so it had nothing to
+switch, and the only change left to make was to a prompt the critic later judges.
 
 Every knob needs at least 3 samples before a value is suggested. A pass killed for futility
 (`repeat_stall`, `progress_stall`) never counts as a sample, because its duration says nothing
@@ -51,7 +58,7 @@ about how long the work takes.
 
 ## What can never be tuned
 
-The allowlist is exactly the three knobs above, and `lib/test_learn.py` asserts it literally.
+The allowlist is exactly the two knobs above, and `lib/test_learn.py` asserts it literally.
 Out of scope, permanently:
 
 - anything the critic reads: grounding caps, backend, timeout;

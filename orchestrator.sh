@@ -1581,6 +1581,32 @@ resolve_proposer_timeout() {
   fi
 }
 
+# The yield predicate's poll interval (proposer.sh's SPECSTRIDE_YIELD_POLL) for
+# phase N, resolved once per phase beside the pass ceiling and printed the same
+# way, "<seconds>\t<source>":
+#   override  the operator set SPECSTRIDE_YIELD_POLL (set-ness, not value: the
+#             orchestrator never assigns it, only proposer.sh's `:=` default does)
+#   learned   an applied `yield_poll_interval` decision, under SPECSTRIDE_LEARNING=apply
+#   default   proposer.sh's own 30s
+resolve_yield_poll() {
+  local n="$1" fallback=30
+  if [[ -n "${SPECSTRIDE_YIELD_POLL+x}" ]]; then
+    printf '%s\t%s\n' "$SPECSTRIDE_YIELD_POLL" "override"
+    return 0
+  fi
+  if [[ "${SPECSTRIDE_LEARNING:-}" == "apply" ]]; then
+    local learned
+    learned="$(python3 "$LIB_DIR/learn.py" resolve --knob yield_poll_interval \
+                 --phase "$n" --default "$fallback" --feature-dir "$FEATURE_DIR" \
+                 2>/dev/null)" || learned=""
+    if [[ "$learned" =~ ^[0-9]+$ && "$learned" != "$fallback" ]]; then
+      printf '%s\t%s\n' "$learned" "learned"
+      return 0
+    fi
+  fi
+  printf '%s\t%s\n' "$fallback" "default"
+}
+
 # ── the phase loop ───────────────────────────────────────────────────────────
 run_phase() {
   local n="$1"
@@ -1604,6 +1630,8 @@ run_phase() {
   # This phase's pass ceiling, resolved once and named with its source.
   local phase_timeout phase_timeout_source
   IFS=$'\t' read -r phase_timeout phase_timeout_source < <(resolve_proposer_timeout "$n")
+  local phase_yield_poll phase_yield_poll_source
+  IFS=$'\t' read -r phase_yield_poll phase_yield_poll_source < <(resolve_yield_poll "$n")
   while (( attempt <= MAX_REJECTS + 1 )); do
     # stop.flag / budget checks at each phase-boundary step
     if [[ -f "$STOP_FLAG" ]]; then
@@ -1656,8 +1684,9 @@ run_phase() {
     # halted run's flags, env and documents is the expensive part of budget
     # archaeology, so it is never left implicit.
     specstride_emit proposer_cap phase "$n" attempt "$attempt" role "$role" \
-      seconds "$phase_timeout" source "$phase_timeout_source"
-    log "      pass ceiling: ${phase_timeout}s (${phase_timeout_source})"
+      seconds "$phase_timeout" source "$phase_timeout_source" \
+      yield_poll "$phase_yield_poll" yield_poll_source "$phase_yield_poll_source"
+    log "      pass ceiling: ${phase_timeout}s (${phase_timeout_source}); yield poll: ${phase_yield_poll}s (${phase_yield_poll_source})"
     prev_role="$role"
 
     local -a prop_args=(
@@ -1679,7 +1708,11 @@ run_phase() {
     [[ "$OTEL" == "true" ]] && prop_args+=( --stream-json --otel-url "$OTEL_URL" )
     [[ "$DEBUG" == "true" ]] && prop_args+=( --debug )
 
-    bash "$SCRIPT_DIR/proposer.sh" "${prop_args[@]}" 2>&1 | emit_out
+    # The resolved poll interval rides on this one command, not an `export`: an
+    # exported value would read as an operator override at the next phase's
+    # set-ness test in resolve_yield_poll.
+    SPECSTRIDE_YIELD_POLL="$phase_yield_poll" \
+      bash "$SCRIPT_DIR/proposer.sh" "${prop_args[@]}" 2>&1 | emit_out
     local prc="${PIPESTATUS[0]}"
 
     if [[ "$role" == "accelerator" ]]; then

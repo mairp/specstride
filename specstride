@@ -519,14 +519,25 @@ for o in keep[-5:]:
     PASSTHRU=("${EXTRA[@]:1}")
     EV="$(feature_events)"
     args=( --feature-dir "$FEATURE_DIR" )
-    # `advise`/`apply` need --default; fall back to orchestrator.sh's own default
-    # resolution (`SPECSTRIDE_PROPOSER_TIMEOUT`, else 1800 — orchestrator.sh:195) so a
-    # bare `specstride learn --show`/`--apply` needs no extra typing. `revert`/`off`
-    # take no --default, so this is only injected for the two modes that use it.
+    # `advise`/`apply` need --default, and it must be the default of the knob asked
+    # about: the engines step ±50 % from it, so a 1800 s default handed to the 30 s
+    # poll interval would let one apply jump it to its 300 s bound. Fall back to the
+    # same resolution the run uses: `SPECSTRIDE_PROPOSER_TIMEOUT` else 1800 for
+    # `proposer_timeout` (orchestrator.sh:195), `SPECSTRIDE_YIELD_POLL` else 30 for
+    # `yield_poll_interval` (proposer.sh). `revert`/`off` take no --default, so this
+    # is only injected for the two modes that use it.
     add_default() {
-      local a
-      for a in "${PASSTHRU[@]:-}"; do [[ "$a" == "--default" ]] && return; done
-      PASSTHRU+=( --default "${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}" )
+      local a knob="proposer_timeout" prev=""
+      for a in "${PASSTHRU[@]:-}"; do
+        [[ "$a" == "--default" || "$a" == --default=* ]] && return
+        [[ "$prev" == "--knob" ]] && knob="$a"
+        [[ "$a" == --knob=* ]] && knob="${a#--knob=}"
+        prev="$a"
+      done
+      case "$knob" in
+        yield_poll_interval) PASSTHRU+=( --default "${SPECSTRIDE_YIELD_POLL:-30}" ) ;;
+        *)                   PASSTHRU+=( --default "${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}" ) ;;
+      esac
     }
     case "$MODE" in
       --show)

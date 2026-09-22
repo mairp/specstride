@@ -54,7 +54,7 @@ in three ways:
 | **Learning loop** (outer) | across runs | measure every pass, then suggest (and, opt-in, apply) per-phase settings | a per-phase observation and an append-only decision log |
 
 The agents never improve; they stay stateless workers. What improves is how the
-loop drives them. The learning loop is deliberately narrow: it can tune three
+loop drives them. The learning loop is deliberately narrow: it can tune two
 allowlisted settings, it is off unless you turn it on, and the critic's
 independence is locked by a test. A loop that could tune its own judge would
 drift toward approving its own work.
@@ -668,7 +668,7 @@ specstride learn --off
   from before a value is shown at all; a phase killed for *futility*
   (`repeat_stall`, `progress_stall`) never contributes a sample to any of the
   three, because that failure's duration means nothing about how long the work
-  (or the wait) actually takes. All three allowlisted knobs have a suggestion
+  (or the wait) actually takes. Both allowlisted knobs have a suggestion
   engine:
   - `proposer_timeout` — from the phase's measured `work_sec` (wall time minus
     declared wait/sleep), clamped to `[900 s, 2×default]` and to no more than a
@@ -676,14 +676,16 @@ specstride learn --off
   - `yield_poll_interval` — from the phase's measured yield job durations
     (`yield_resume`), targeting roughly a tenth of the job's own length so a
     missed tick wastes a small fraction of it rather than a fixed cost; clamped
-    to `[10 s, 300 s]` and the same ±50%-per-step window.
-  - `inject_yield_hint` — a boolean: ON when a phase's passes show either a high
-    median wait-call share, or a `hard_cap` (budget) kill that landed on a pass
-    that was busy waiting on something rather than working. Either signal alone
-    is sufficient; there is no numeric bound to clamp to.
+    to `[10 s, 300 s]` and the same ±50%-per-step window, stepped from the poll
+    interval's own default (`SPECSTRIDE_YIELD_POLL`, else 30 s).
+
+  `specstride learn --show`/`--apply` pass the default of the knob you ask about
+  when you give no `--default`: `SPECSTRIDE_PROPOSER_TIMEOUT` (else 1800) for
+  `proposer_timeout`, `SPECSTRIDE_YIELD_POLL` (else 30) for `yield_poll_interval`.
 - **What can never move.** The adjustable-knob allowlist is exactly
-  `proposer_timeout`, `yield_poll_interval`, `inject_yield_hint` — nothing else,
-  ever. Grounding caps, the critic's backend/timeout, `--max-rejects`, anything in
+  `proposer_timeout` and `yield_poll_interval` — nothing else, ever. (The design's
+  third knob, `inject_yield_hint`, was removed: the yield contract is already
+  appended to every proposer and accelerator prompt, so it had nothing to switch.) Grounding caps, the critic's backend/timeout, `--max-rejects`, anything in
   `verification-commands.json`, and every breaker setting
   (`SPECSTRIDE_PROPOSER_MAX_ERRORS`/`MAX_NOPROGRESS`/`MAX_CAPS`, `REPEAT_LIMIT`) are
   permanently out of scope: a breaker must never be able to relax itself, and
@@ -695,8 +697,7 @@ specstride learn --off
   in effect — a self-tuner cannot run away in one step even if the telemetry
   that produced the suggestion was noisy.
 - **Applying, and undoing it.** `specstride learn --apply --knob <knob> --phase N
-  --default S` (`--default` is unused for `inject_yield_hint` but still required
-  by the shared flag) appends one decision to
+  [--default S]` appends one decision to
   `.specstride/features/<slug>/learning/applied.json` (a separate, append-only file
   from the plain observations below — decisions and observations are never
   conflated) with full provenance: the run ids the samples came from, the sample
@@ -709,12 +710,13 @@ specstride learn --off
   is launched with `SPECSTRIDE_LEARNING=apply` in its environment — **unset, `off`,
   or any other value is a total no-op**: the applied log isn't even opened, and
   behaviour is byte-identical to a project that has never used `learn` at all.
-- **What a live run reads today.** All three knobs can be suggested and applied,
-  but only `proposer_timeout` is read back by a run (`orchestrator.sh`, the
-  `learned` source of `resolve_proposer_timeout`). A value applied for
-  `yield_poll_interval` or `inject_yield_hint` is recorded in the decision log
-  and shown by `--show`; no run acts on it yet. The yield poll interval a run
-  uses is still `SPECSTRIDE_YIELD_POLL` (default 30 s).
+- **What a live run reads.** Under `SPECSTRIDE_LEARNING=apply` a run reads both
+  knobs back, once per phase: `proposer_timeout` as the `learned` source of
+  `resolve_proposer_timeout`, and `yield_poll_interval` as the poll interval the
+  phase's proposer passes run with (`resolve_yield_poll`). An operator's own setting
+  still wins over either: `--proposer-timeout-phase` / `SPECSTRIDE_PROPOSER_TIMEOUT_PHASE_<N>`
+  for the ceiling, and a set `SPECSTRIDE_YIELD_POLL` (set at all, even to 30) for the
+  poll. Both values and their sources are on every `proposer_cap` event.
 - **The integration point.** The one place a learned value can reach a live run is
   `lib/learn.py resolve`, a small shell-callable entry point — not a change to
   `orchestrator.sh` itself:
@@ -725,8 +727,6 @@ specstride learn --off
 
   prints one integer to stdout: the applied value for that phase if
   `SPECSTRIDE_LEARNING=apply` and one has been applied, else `<S>` unchanged.
-  `resolve --knob inject_yield_hint` prints `1`/`0` rather than a Python-style
-  `True`/`False`, so a shell caller never has to branch on type.
 
 ### Observations (`learn.py observe`)
 
@@ -827,7 +827,7 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
-| `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `declared` \| `global`). An unsourced budget is what makes budget archaeology expensive six hours in |
+| `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. An unsourced budget is what makes budget archaeology expensive six hours in |
 | `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `SPECSTRIDE_PROPOSER_MAX_CAPS`. A budget signal, not an error |
 | `pass_cost_unknown` | proposer | a killed pass reports NO usage or cost (the kill severs the provider stream); this says "unmeasured", never "cheap" |
 | `pass_yield` | proposer | a pass ended cleanly while a job it depends on runs — `reason`, `predicate_kind`, `deadline_sec`, `job_mode`, `job_log`, `yield_index` |
@@ -1065,11 +1065,13 @@ Key knobs (see `.env.example` for all of them): `SPECSTRIDE_MAX_REJECTS` (3),
 `--verification-commands` document — first of those three wins, else the global
 value. `--proposer-timeout` and the overrides now round-trip through
 `last-run.conf`, so `specstride resume` keeps the budget the run was planned for),
-`SPECSTRIDE_YIELD_POLL` (30s), `SPECSTRIDE_YIELD_MAX_PER_ATTEMPT` (4),
-`SPECSTRIDE_YIELD_ALLOW_COMMAND` (false), `SPECSTRIDE_YIELD_COUNTS_AS_ITER` (false),
+`SPECSTRIDE_YIELD_POLL` (30s; setting it at all overrides a learned poll interval),
+`SPECSTRIDE_YIELD_MAX_PER_ATTEMPT` (4), `SPECSTRIDE_YIELD_ALLOW_COMMAND` (false), `SPECSTRIDE_YIELD_COUNTS_AS_ITER` (false),
 `SPECSTRIDE_PROMPT_MAX_BYTES` (180000),
 `SPECSTRIDE_MAX_WALL_MIN` (0 = unlimited),
-`SPECSTRIDE_CRITIC_GROUNDING` (on), `SPECSTRIDE_GIT_COMMITS` (auto).
+`SPECSTRIDE_CRITIC_GROUNDING` (on), `SPECSTRIDE_GIT_COMMITS` (auto),
+`SPECSTRIDE_LEARNING` (unset, which is `off`: `off` | `suggest` | `apply`; see
+[Learning](#learning-self-tuning-knobs)).
 
 ## Hardening
 
