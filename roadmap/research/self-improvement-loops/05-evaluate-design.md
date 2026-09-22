@@ -271,6 +271,11 @@ What it does **not** cover:
 - **`verdicts/*.txt`, `verification/*.json` and `GATE<n>-EVIDENCE.md`**, which the gate
   owns and item 4 only reads (the critic-input-size guardrail reads the transcripts).
 - **Spec edits**, which item 2's shape detects but does not prevent.
+- **Appended decisions.** Growth of `learning/applied.json` during a pass is an append like
+  any other, because an operator may run `specstride learn --apply` while a run is live. A
+  pass that appends a forged `apply` entry is therefore not flagged; it takes effect only
+  under `SPECSTRIDE_LEARNING=apply`, it is bounded like any decision, and its provenance
+  (`source_runs`, `baseline`) is visible in the log.
 - A tamper in the last pass of a run's last attempt that also removes the orchestrator's
   ability to write afterwards (for instance by deleting the run directory): there is no
   later writer, and nothing in the stream records it.
