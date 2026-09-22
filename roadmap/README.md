@@ -35,6 +35,9 @@ This directory contains implementation roadmaps and operational guides for plann
   handoff prompt for the unattended agent that lands plan items 0–4 and 7, then 5–6, one PR
   per item, with the plan's ground truth re-verified against the code. **Done** — every item
   it scoped merged; results in [self-improving-loop-report.md](self-improving-loop-report.md).
+- [Reverse-engineer a codebase into Spec Kit artifacts](prompts/reverse-engineer-to-speckit.md) —
+  handoff prompt for `specstride --reverse <folder>`: deterministic inventory, a generated driver
+  spec, and a deterministic Spec Kit linter as each phase's verification command. **Planned.**
 
 ## Status legend
 
