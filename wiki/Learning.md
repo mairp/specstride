@@ -90,6 +90,12 @@ is `unknown`, never `ok`. The reverted value is quarantined for its phase, shape
 `--apply` refuses it (exit 4) until 6 new samples exist, unless `--force`. `specstride learn --show`
 and every run's exit print each active decision's latest evaluation.
 
+Every `proposer_cap` records its `arm` (`applied` while a decision is in effect, even one equal to
+the default, else `baseline`); arms are compared before/after, never alternated. With the layer
+on, the orchestrator brackets each proposer pass and emits `events_tampered` if the pass
+shortened or rewrote bytes of `events.jsonl`, `applied.json` or `phase-<N>.json` that predated
+it; such a run is excluded from every evaluation. Appends are normal and not flagged.
+
 ## What can never be tuned
 
 The allowlist is exactly the two knobs above, and `lib/test_learn.py` asserts it literally.
