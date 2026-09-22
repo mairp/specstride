@@ -29,7 +29,7 @@ The loop above is the middle of three nested loops:
 
 | Loop | Scope | What repeats | What carries over |
 |---|---|---|---|
-| **Ralph loop** (inner, `proposer.sh`) | one phase attempt | a fresh, stateless agent session per pass, until `GATE<N>-EVIDENCE.md` exists | only what is on disk |
+| **Pass loop** (inner, `proposer.sh`) | one phase attempt | a fresh, stateless agent session per pass, until `GATE<N>-EVIDENCE.md` exists | only what is on disk |
 | **Gated phase loop** (middle, `orchestrator.sh`) | one run | proposer → critic → approve or retry; the diagnostician and accelerator for a stuck phase | feedback and hint files, within the run |
 | **Learning loop** (outer, `lib/learn.py`) | across runs | measure every pass, suggest (and, opt-in, apply) per-phase settings, then evaluate each applied one against its baseline, reverting it if a guardrail breaks | `learning/phase-<N>.json` observations and the `learning/applied.json` log of decisions, baselines and evaluations |
 
@@ -148,7 +148,7 @@ All Python lives under [`lib/`](../lib); the Bash entry points stay at the top l
 | `lib/verification_plan.py` | Pre-loop `VerificationPlan v1` derivation + test scaffolding |
 | `lib/agent_stream.py` | The proposer's stream-json tap that emits `agent_*` events |
 | `lib/present.py` | The live presenter (inline timeline + status card) |
-| `lib/ralph_loki_ship.py` / `lib/ralph_otel_ship.py` | The two telemetry shippers |
+| `lib/*_loki_ship.py` / `lib/*_otel_ship.py` | The two telemetry shippers (Loki push, OTLP) |
 | `lib/verdict_pins.py` | Verdict-parsing pins/guards |
 
 Next: [On-Disk Contract](On-Disk-Contract) · [Hardening](Hardening)

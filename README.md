@@ -2,14 +2,14 @@
 
 **Specstride** (formerly Wiggum). From specs to tested code. An autonomous coding
 orchestrator that steers your agent through implementation, critic review, and
-verification, phase by phase: a spec-driven **Ralph loop** with a critic gate,
-wrapped in an outer loop that tunes its own budgets from its telemetry.
+verification, phase by phase: a spec-driven agent loop with a critic gate,
+wrapped in an outer loop that tunes its own budgets from its telemetry, checks
+whether each change helped, and rolls it back when it did not.
 
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Bash](https://img.shields.io/badge/Bash-orchestrator-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/deps-stdlib_only-2ea44f?style=for-the-badge&logo=gnu&logoColor=white)
 ![LLM](https://img.shields.io/badge/LLM-Claude_·_Codex_·_bebop_·_Prime_Agent-8A3FFC?style=for-the-badge&logo=anthropic&logoColor=white)
-![Ralph](https://img.shields.io/badge/Ralph-loop-F2A900?style=for-the-badge&logo=cycling&logoColor=white)
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)
 ![Events](https://img.shields.io/badge/Events-JSONL_stream-000000?style=for-the-badge&logo=json&logoColor=white)
 
@@ -19,16 +19,14 @@ until a critic approves it*. The human who used to eyeball each phase and click
 "approved" is replaced by an LLM-backed critic. You stay out of the inner loop;
 you only arbitrate the phases the machines genuinely can't settle.
 
-The deterministic-loop approach — automating software development by running a
-coding agent in a repeating, self-checking loop — is the **"Ralph" technique**
-coined by [Geoffrey Huntley](https://ghuntley.com/). Specstride is **my
-implementation** of that technique, and it goes further than a plain Ralph loop
-in three ways:
+Specstride runs a coding agent in a repeating, self-checking loop: each pass is
+a fresh, stateless session that works until the phase's evidence file exists.
+On top of that plain loop it adds three things:
 
 - **An automated critic gate.** An LLM critic checks each phase's evidence
   against the spec's acceptance criteria and the real code. Nothing advances
   until the critic approves it.
-- **A diagnose-and-accelerate micro-loop for stuck phases.** A plain Ralph loop
+- **A diagnose-and-accelerate micro-loop for stuck phases.** A plain retry loop
   retries a rejected phase from scratch, so a stuck phase can burn pass after
   pass and learn nothing new. When a phase stalls on a new set of unmet
   criteria, Specstride runs the [diagnostician](#diagnostician-stuck-loop-mitigation).
@@ -41,15 +39,22 @@ in three ways:
 - **An opt-in learning loop over its own runs.** Every pass is recorded in
   `events.jsonl`. `specstride learn` reads that history and suggests per-phase
   settings sized to what each phase actually measured, instead of one global
-  setting sized for the worst phase. You apply a suggestion explicitly, it is
-  bounded, and you can revert it. It can never touch anything the critic reads.
-  See [Learning](#learning-self-tuning-knobs).
+  setting sized for the worst phase. You apply a suggestion explicitly; it is
+  bounded, keyed to the phase as written (edit the phase and the old decision
+  stops applying), and reversible. After it is applied, every closed phase
+  **evaluates** it against the baseline it was learned from — `helped`,
+  `neutral`, `regressed` or `insufficient`, always printed beside the smallest
+  effect the data could show — and a guardrail breach (more MALFORMED verdicts, a
+  new verification failure, a shift in first-attempt approval, …) **reverts it
+  automatically** and quarantines the value. A pass that rewrites the telemetry
+  it is judged by is excluded. It can never touch anything the critic reads. See
+  [Learning](#learning-self-tuning-knobs).
 
 ### Three loops, one of them self-tuning
 
 | Loop | Scope | What repeats | What carries over |
 |---|---|---|---|
-| **Ralph loop** (inner) | one phase attempt | a fresh, stateless agent session per pass, until the phase's evidence file exists | only what is on disk |
+| **Pass loop** (inner) | one phase attempt | a fresh, stateless agent session per pass, until the phase's evidence file exists | only what is on disk |
 | **Gated phase loop** (middle) | one run | proposer → critic → approve or retry; a stuck phase gets the diagnostician and a narrowed accelerator retry | the feedback and hint files, within the run |
 | **Learning loop** (outer) | across runs | measure every pass, suggest (and, opt-in, apply) per-phase settings, then evaluate each applied one against the baseline it was learned from, reverting it automatically if a guardrail breaks | a per-phase observation and an append-only log of decisions, their baselines and their evaluations |
 
@@ -102,8 +107,9 @@ The compatibility rules:
    `.specstride/`. To migrate a quiet workdir by hand, stop the run and
    `mv .wiggum .specstride`.
 
-Telemetry identity is unchanged: Loki queries and dashboards still key on
-`job=ralph` and `service.name=ralph`.
+Telemetry identity is unchanged: Loki queries and the bundled dashboards still
+key on the labels `job="ralph"` and `service.name="ralph"`, so existing queries keep
+working.
 
 ## Specstride is a utility; your project lives elsewhere
 
@@ -267,8 +273,8 @@ Planning can also be run independently, before any loop:
 ```
 
 The Bash entry points (`orchestrator.sh`, `proposer.sh`, `specstride`) sit at the top
-level; all Python components live under **`lib/`** (`lib/critic.py`,
-`lib/present.py`, `lib/ralph_loki_ship.py`, `lib/ralph_otel_ship.py`).
+level; all Python components live under **`lib/`** (`lib/critic.py`, `lib/learn.py`,
+`lib/present.py`, and the Loki and OTLP shippers).
 
 ### Install it permanently (one `specstride` command)
 
@@ -562,7 +568,7 @@ the run is resumable with `specstride resume -w /root/image_generator`. **Teleme
 specstride's *bundled* stack (`telemetry/`) defaults to Grafana `:3010` / Loki `:3110`,
 but this host's *live* observability stack is Grafana **`:3000`** / Loki **`:3100`** —
 so point `--loki-url` at **`:3100`**. Runs then land under `task="image_generator"` in
-`{job="ralph"}`. The **"Ralph Loops (Claude Code)"** dashboard defaults to a `now-6h`
+`{job="ralph"}`. The bundled Grafana dashboard defaults to a `now-6h`
 window — widen it to **24h** if you don't see a recent run.
 
 ## Live visibility (on by default)
@@ -1289,7 +1295,7 @@ The two are wired separately: `--loki-url` **only** configures the Loki sink and
 ```bash
 (cd "$SPECSTRIDE_HOME/telemetry" && docker compose up -d)   # Grafana :3010, Loki :3110 (both free here)
 specstride --telemetry --loki-url http://localhost:3110 -w ./myproject
-# open http://localhost:3010 → the "Ralph Loops" dashboard
+# open http://localhost:3010 → the bundled Specstride dashboard
 ```
 
 This is an independent deployment on its own ports (the defaults deliberately
@@ -1298,7 +1304,7 @@ avoid the common :3000/:3100). Every port is an `.env` variable.
 ### OpenTelemetry (OTLP)
 
 `--otel` ships the *same* event stream over **OTLP/HTTP+JSON** to the bundled OTEL
-Collector, which forwards logs to the same Loki (so the "Ralph Loops" dashboard is
+Collector, which forwards logs to the same Loki (so the bundled dashboard is
 unchanged) and turns cost/tokens/duration into first-class **Prometheus** metrics
 (`ralph_cost_usd_total`, `ralph_tokens_total`, `ralph_iter_duration_ms`, …). Like
 `--telemetry`, it's stdlib-only — no OTEL SDK, no pip:
@@ -1323,9 +1329,9 @@ specstride --telemetry --loki-url http://localhost:3110 \
        --otel      --otel-url http://localhost:4318 -w ./myproject      # both (dual-ship)
 ```
 
-The shipper `lib/ralph_otel_ship.py` mirrors the Loki shipper's `add()`/`flush()`
-seam and is covered by unit, characterization, and old-vs-new **parity** tests
-(`python3 lib/test_ralph_otel_ship.py`, `lib/test_telemetry_parity.py`).
+The OTLP shipper mirrors the Loki shipper's `add()`/`flush()` seam and is covered
+by unit, characterization, and old-vs-new **parity** tests
+(`lib/test_telemetry_parity.py` and the shipper's own test module under `lib/`).
 
 ## Branches
 
