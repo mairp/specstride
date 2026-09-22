@@ -1,6 +1,6 @@
 # On-Disk Contract
 
-The spec (`SPECS.md` or a Spec Kit `tasks.md`) is the one input **you** write; it can live
+The spec (a Spec Kit feature's `tasks.md`; a legacy `SPECS.md` is still read) is the one input **you** write; it can live
 anywhere. Everything else Specstride generates lives under `.specstride/`, **namespaced per feature**,
 so the workdir root stays clean — only your real project artifacts sit there.
 
@@ -8,7 +8,7 @@ so the workdir root stays clean — only your real project artifacts sit there.
 
 | File | Written by | Meaning |
 |---|---|---|
-| `SPECS.md` / `tasks.md` | you | Ordered phases + acceptance criteria (the input) |
+| `specs/<feature>/tasks.md` | you (via Spec Kit) | Ordered phases and their tasks (the input). A legacy `SPECS.md` is still read |
 | `.specstride/features/<slug>/PROGRESS.md` | proposer | Durable state; read first each iteration |
 | `.specstride/features/<slug>/gates/GATE<N>-EVIDENCE.md` | proposer | Evidence phase N's criteria are met. Written atomically |
 | `.specstride/features/<slug>/gates/GATE<N>-APPROVED` | **critic** | Empty marker; unblocks phase N+1 |
