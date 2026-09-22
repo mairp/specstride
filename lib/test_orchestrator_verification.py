@@ -65,6 +65,8 @@ else
   # $FAKE_PROPOSER_SLEEP (default 0 — the original behaviour) stalls the pass so a
   # pass-ceiling test can drive it into the watchdog instead of writing evidence.
   sleep "${FAKE_PROPOSER_SLEEP:-0}"
+  # $YIELD_POLL_WITNESS records the poll interval the proposer handed down to us.
+  [[ -n "${YIELD_POLL_WITNESS:-}" ]] && printf '%s\n' "${SPECSTRIDE_YIELD_POLL:-unset}" >> "$YIELD_POLL_WITNESS"
   rel="$(printf '%s\n' "$prompt" \
     | grep -oE '\.specstride/features/[^ ]*/gates/GATE[0-9]+-EVIDENCE\.md' | head -1)"
   mkdir -p "$(dirname "$WORKDIR_ABS/$rel")"
@@ -1014,6 +1016,55 @@ def test_an_explicit_override_outranks_a_learned_value(tmp_path):
         extra_env={"SPECSTRIDE_LEARNING": "apply"})
     caps = {c["phase"]: c for c in _caps(events)}
     assert caps["1"]["seconds"] == "777" and caps["1"]["source"] == "override"
+
+
+# ── the learned yield poll interval, resolved beside the ceiling ─────────────
+def _seed_applied_yield_poll(tmp_path, phase, value):
+    learning = tmp_path / "work" / ".specstride" / "features" / "obs-lifecycle" / "learning"
+    learning.mkdir(parents=True, exist_ok=True)
+    with (learning / "applied.json").open("a") as handle:
+        handle.write(json.dumps({"knob": "yield_poll_interval", "phase": phase, "value": value,
+                                 "previous": 30, "samples": 3, "action": "apply", "run_id": "seed"}) + "\n")
+
+
+def _witnessed_polls(tmp_path):
+    witness = tmp_path / "yield-poll-witness"
+    return witness.read_text().split() if witness.exists() else []
+
+
+def test_an_applied_yield_poll_reaches_the_proposer_only_when_applying(tmp_path):
+    """Under SPECSTRIDE_LEARNING=apply phase 1's applied poll interval is what the
+    proposer runs with, sourced `learned`; phase 2, with no decision, gets 30."""
+    _seed_applied_yield_poll(tmp_path, 1, 45)
+    _result, _workdir, events = _run_orchestrator(
+        tmp_path, extra_env={"SPECSTRIDE_LEARNING": "apply",
+                             "YIELD_POLL_WITNESS": str(tmp_path / "yield-poll-witness")})
+    caps = {c["phase"]: c for c in _caps(events)}
+    assert caps["1"]["yield_poll"] == "45" and caps["1"]["yield_poll_source"] == "learned"
+    assert caps["2"]["yield_poll"] == "30" and caps["2"]["yield_poll_source"] == "default"
+    assert _witnessed_polls(tmp_path) == ["45", "30"]
+
+
+def test_learning_unset_never_reads_an_applied_yield_poll(tmp_path):
+    _seed_applied_yield_poll(tmp_path, 1, 45)
+    _result, _workdir, events = _run_orchestrator(
+        tmp_path, extra_env={"YIELD_POLL_WITNESS": str(tmp_path / "yield-poll-witness")})
+    caps = _caps(events)
+    assert caps and all(c["yield_poll"] == "30" and c["yield_poll_source"] == "default" for c in caps)
+    assert _witnessed_polls(tmp_path) == ["30", "30"]
+
+
+def test_an_operator_yield_poll_outranks_a_learned_one(tmp_path):
+    """Set-ness, not value: an explicit SPECSTRIDE_YIELD_POLL wins for every phase,
+    even one equal to the default, and is sourced `override`."""
+    _seed_applied_yield_poll(tmp_path, 1, 45)
+    _result, _workdir, events = _run_orchestrator(
+        tmp_path, extra_env={"SPECSTRIDE_LEARNING": "apply", "SPECSTRIDE_YIELD_POLL": "30",
+                             "YIELD_POLL_WITNESS": str(tmp_path / "yield-poll-witness")})
+    caps = {c["phase"]: c for c in _caps(events)}
+    assert caps["1"]["yield_poll"] == "30" and caps["1"]["yield_poll_source"] == "override"
+    assert caps["2"]["yield_poll_source"] == "override"
+    assert _witnessed_polls(tmp_path) == ["30", "30"]
 
 
 # ── the phase_done observation hook (design §5.4) ────────────────────────────
