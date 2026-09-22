@@ -126,6 +126,21 @@ contract instead of slipping into a relaunch.
 Details, formulas and file formats: [Learning](#learning-self-tuning-knobs) below and
 [`wiki/Learning.md`](./wiki/Learning.md).
 
+### Under mixture-of-loops: who decides what
+
+When a [mixture-of-loops](https://github.com/mairp/mixture-of-loops) contract drives the run,
+the harness running the skill does **not** decide how the loop improves. It records two
+choices when it derives the contract, and after that it only reads:
+
+| Step | Who decides | Where it shows |
+|---|---|---|
+| Learning mode (`off`, `suggest`, `apply`) | the operator, in the request; the deriving harness writes it literally into each `specstride` stage's `env` (default `off`; a value left in the shell is stripped) | the contract, so its digest records it |
+| Which applied decisions the run may use | bound at derivation: `configuration.learning` pins the decision log up to one run id, with a hash (`SPECSTRIDE_LEARNING_THROUGH`) | the contract; a later `--apply` waits for a new contract |
+| Measure, suggest, evaluate, auto-revert on a guardrail breach | Specstride itself, inside the run | `learning/`, `knob_evaluated`, `knob_auto_reverted` |
+| Applying a new decision | the operator (`specstride learn --apply`); never the harness, never automatic | `learning/applied.json` |
+| Relaunching after a transient stop | the supervisor, within the contract's budget; refused with `learning-decisions-changed` if the bound decisions changed | the supervisor's report |
+| Retrospective | `supervise.py retro` reads what Specstride measured and may *suggest* `specstride learn --revert`; it never applies or reverts | `runs/<id>/retrospectives/<digest>.json` |
+
 ## Specstride is a utility; your project lives elsewhere
 
 Install Specstride once (clone it wherever you keep tools); it is *not* the working

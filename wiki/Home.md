@@ -4,7 +4,7 @@
 budgets from its telemetry, checks whether each change helped, and rolls it back when it did
 not.**
 
-You hand Specstride a spec — an ordered set of phases, each with acceptance criteria — and it
+You hand Specstride a [Spec Kit](https://github.com/github/spec-kit) feature's `tasks.md` — an ordered set of phases, each a list of tasks — and it
 drives a coding agent phase by phase. *Nothing advances until a critic approves it.* The
 human who used to eyeball each phase and click "approved" is replaced by an LLM-backed
 critic. You stay out of the inner loop and only arbitrate the phases the machines genuinely

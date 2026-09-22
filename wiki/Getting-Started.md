@@ -18,16 +18,18 @@ cp .env.example .env          # then edit: set ANTHROPIC_API_KEY
 # one-time: add the thin specstride() pointer to ~/.bashrc (see below), then:
 source ~/.bashrc
 
-mkdir -p /tmp/specstride-demo && cp SPECS.example.md /tmp/specstride-demo/SPECS.md
-specstride run -w /tmp/specstride-demo
+mkdir -p /tmp/specstride-demo/specs/001-greeting
+cp examples/speckit-tasks.example.md /tmp/specstride-demo/specs/001-greeting/tasks.md
+specstride run -w /tmp/specstride-demo       # discovers specs/001-greeting/tasks.md
 ```
 
 Not set up the alias yet? Call the script directly:
 `"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo`, or `./specstride run -w /tmp/specstride-demo` from
 inside the clone.
 
-The bundled `SPECS.example.md` is two trivial, verifiable phases so you can watch the whole
-loop — including a reject-and-fix — end to end.
+The bundled `examples/speckit-tasks.example.md` is a small, verifiable Spec Kit task list, so
+you can watch the whole loop end to end. In a real project, generate the feature with Spec Kit
+(`/speckit.specify`, `/speckit.plan`, `/speckit.tasks`) and point Specstride at it.
 
 ## Install it permanently (one `specstride` command)
 
@@ -66,9 +68,9 @@ specstride stop   -w ~/projects/foo                             # clean halt
 
 - **`-w/--workdir DIR`** — where the proposer works. All generated state lives under
   `.specstride/features/<slug>/`, so the workdir root holds only your real artifacts. Default: `$PWD`.
-- **`-s/--specs FILE`** — the spec, **any name, any location**. A relative path resolves
-  against the directory you launched from, not the workdir. Default: `<workdir>/SPECS.md`, or
-  auto-discovered inside a Spec Kit project.
+- **`-s/--specs FILE`** — the spec, normally a Spec Kit feature's `specs/<feature>/tasks.md`.
+  Inside a Spec Kit project `run` discovers it, so you can leave `-s` out. A relative path
+  resolves against the directory you launched from, not the workdir.
 - **`--feature SLUG`** — the feature namespace for durable state, for repos with more than one
   Spec Kit feature. Default: the feature dir's basename, or `default`.
 

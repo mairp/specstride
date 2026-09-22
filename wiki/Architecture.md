@@ -62,7 +62,7 @@ sequenceDiagram
     participant D as lib/critic.py --diagnose<br/>(diagnostician · same backend, no budget)
     participant FS as .specstride/gates/<br/>(on-disk contract)
 
-    Human->>O: run -w WORKDIR -s SPECS.md
+    Human->>O: run -w WORKDIR -s specs/<feature>/tasks.md
     O->>FS: derive phase N from GATE* markers
     Note over O: no stored counter — phase is derived
 
