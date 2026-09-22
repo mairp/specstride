@@ -6,13 +6,16 @@ Run:  python3 -m pytest lib/test_learn.py -q
 """
 import json
 import os
+import re
 import subprocess
 import sys
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import learn  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
 FIXTURE = os.path.join(HERE, "fixtures", "learn", "events.jsonl")
 
 
@@ -444,6 +447,65 @@ def test_knob_allowlist_is_locked_so_a_critic_facing_knob_can_never_be_added():
         "inject_yield_hint",
     }
     assert never_allowed.isdisjoint(learn.ADJUSTABLE_KNOBS)
+
+
+# The allowlist above locks WHAT the loop may tune; this locks WHERE learn.py can
+# act on a run. Every invocation of it from tracked shell or Python code is
+# listed, with its subcommand and how many call sites use it. The run path may
+# resolve two knobs for the proposer launch and observe a closed phase; the CLI
+# dispatcher may advise/apply/revert/off. Nothing in the gate (critic.py,
+# verification_plan.py) may call it at all. Widening this set is a design
+# decision about who may act on learned state, and must be made here, visibly.
+_LEARN_INVOCATION = re.compile(r"python3\s+\S*learn\.py[\"']?\s+([a-z]+)(\s+--help)?")
+
+
+def _learn_invocations(paths):
+    found = Counter()
+    for rel in paths:
+        text = open(os.path.join(REPO, rel), encoding="utf-8", errors="replace").read()
+        for line in text.splitlines():
+            for m in _LEARN_INVOCATION.finditer(line):
+                found[(rel, m.group(1) + (" --help" if m.group(2) else ""))] += 1
+    return found
+
+
+def _tracked_code():
+    tracked = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True, text=True,
+                             check=True).stdout.split()
+    out = []
+    for rel in tracked:
+        path = os.path.join(REPO, rel)
+        if not os.path.isfile(path) or os.path.islink(path):
+            continue
+        if rel.endswith((".sh", ".py")):
+            out.append(rel)
+            continue
+        with open(path, "rb") as fh:
+            head = fh.readline()
+        if head.startswith(b"#!") and (b"sh" in head or b"python" in head):
+            out.append(rel)
+    return out
+
+
+def test_learn_py_is_invoked_only_from_the_proposer_launch_path_never_the_gate():
+    code = [rel for rel in _tracked_code() if rel not in ("lib/learn.py", "lib/test_learn.py")]
+    assert "orchestrator.sh" in code and "specstride" in code and "lib/critic.py" in code
+    assert _learn_invocations(code) == Counter({
+        # the run: two knobs resolved per phase before the proposer launches ...
+        ("orchestrator.sh", "resolve"): 2,
+        # ... and one observation of a phase that has already closed
+        ("orchestrator.sh", "observe --help"): 1,
+        ("orchestrator.sh", "observe"): 1,
+        # the operator's CLI
+        ("specstride", "advise"): 1,
+        ("specstride", "apply"): 1,
+        ("specstride", "revert"): 1,
+        ("specstride", "off"): 1,
+    })
+    for gate in ("lib/critic.py", "lib/verification_plan.py"):
+        assert _learn_invocations([gate]) == Counter(), gate
+        text = open(os.path.join(REPO, gate), encoding="utf-8").read()
+        assert not re.search(r"^\s*(import learn\b|from learn import)", text, re.M), gate
 
 
 # -- suggestion: bounds, the evidence floor, futility exclusion ---------------

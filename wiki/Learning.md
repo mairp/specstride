@@ -73,7 +73,9 @@ Out of scope, permanently:
 
 A breaker must never be able to relax itself, and a loop that could tune its own judge would
 drift toward approving its own work. Adding a name to the allowlist means editing the test that
-says why it must not be there.
+says why it must not be there. A second test locks every place `learn.py` is invoked: the run's resolve
+and observe calls in `orchestrator.sh` and the `specstride learn` dispatcher, never the critic or
+the verification plan.
 
 ## On disk
 
