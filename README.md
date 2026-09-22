@@ -1,6 +1,6 @@
 # Specstride
 
-**Specstride** (formerly Wiggum). From specs to tested code. An autonomous coding
+**Specstride**. From specs to tested code. An autonomous coding
 orchestrator that steers your agent through implementation, critic review, and
 verification, phase by phase: a spec-driven agent loop with a critic gate,
 wrapped in an outer loop that tunes its own budgets from its telemetry, checks
@@ -74,42 +74,55 @@ the phases the machines genuinely can't settle.
 > [on-disk contract](./wiki/On-Disk-Contract.md), [hardening](./wiki/Hardening.md),
 > [telemetry](./wiki/Telemetry.md), and [configuration](./wiki/Configuration.md).
 
-## Migrating from Wiggum
+## How it improves itself
 
-Specstride was called Wiggum until September 2026. Nothing that worked under the
-old name breaks; each old name below still works and prints a one-line
-deprecation notice. The old names will be removed in a future release.
+Specstride gets better at driving its agents by learning from its own runs, and it
+checks every change it learns before keeping it. The agents themselves never change;
+what improves is how the loop sizes and paces their work. The whole layer is off
+unless you set `SPECSTRIDE_LEARNING`.
 
-| What | Old name | New name |
-|---|---|---|
-| CLI command | `wiggum` | `specstride` |
-| Shared bash library | `wiggum-lib.sh` | `specstride-lib.sh` |
-| Phase-8 digest script | `wiggum-digest.sh` | `specstride-digest.sh` |
-| Spec parser module | `lib/wiggum_spec.py` | `lib/specstride_spec.py` |
-| Environment variables | `WIGGUM_*` | `SPECSTRIDE_*` |
-| State directory | `<workdir>/.wiggum/` | `<workdir>/.specstride/` |
-| GitHub repository | `mairp/wiggum` | `mairp/specstride` (the old URL redirects) |
+```mermaid
+flowchart LR
+    O[Observe<br/>every pass → events.jsonl] --> S[Suggest<br/>per-phase value + evidence]
+    S --> A[Apply<br/>you opt in; bounded, reversible]
+    A --> E[Evaluate<br/>at every closed phase,<br/>against the recorded baseline]
+    E -->|guardrail breach| R[Auto-revert<br/>+ quarantine]
+    E -->|helped / neutral / regressed| K[Keep, and report]
+    R --> O
+    K --> O
+```
 
-The compatibility rules:
+1. **Observe.** Every pass is measured: wall time, time spent waiting, cost, how it
+   ended. At each approved phase, a per-phase observation is written next to the
+   feature's state.
+2. **Suggest.** `specstride learn --show` proposes a value for each phase from what that
+   phase actually measured, with the sample count behind it. It needs at least three
+   samples, and ignores passes killed for going nowhere.
+3. **Apply.** You apply one suggestion at a time (`specstride learn --apply`). Each
+   decision is clamped to a hard range, moves at most ±50 % per step, is filed under the
+   phase *as written* (edit the phase and the decision stops applying), and records the
+   baseline it was learned from. `--revert` and `--off` undo it.
+4. **Evaluate.** After every approved phase, each applied decision is compared with its
+   baseline and labelled `helped`, `neutral`, `regressed` or `insufficient`. The effect
+   is always printed beside the smallest effect the data could have shown, because runs
+   are few and a small change is invisible at that scale.
+5. **Keep or roll back.** Guardrails can veto a decision even when it made things
+   cheaper: more malformed critic verdicts, more ungrounded citations, a new
+   verification failure, bigger critic inputs, more phases handed back to a human, or a
+   shift in first-attempt approval in either direction. A breach reverts the decision
+   automatically, the only change the loop ever makes on its own, and blocks that value
+   until there is fresh evidence.
 
-1. **Old command names keep working.** `wiggum …` prints the notice to stderr and
-   runs `specstride …` with the same arguments. A script that sources
-   `wiggum-lib.sh` gets `specstride-lib.sh`, and the old `wiggum_<name>` function
-   names still resolve.
-2. **Old environment variables keep working.** For every `WIGGUM_<X>`: if
-   `SPECSTRIDE_<X>` is set it wins; otherwise `WIGGUM_<X>` is used; otherwise the
-   built-in default applies. One deprecation line prints per process when an old
-   name was used. `.env` files go through the same mapping.
-3. **Old state directories keep working.** When `<workdir>/.specstride/` does not
-   exist but `<workdir>/.wiggum/` does, Specstride reads and writes `.wiggum/` in
-   place and logs a one-line notice. It never moves or renames an existing state
-   directory, because a live run commits into it. A fresh workdir gets
-   `.specstride/`. To migrate a quiet workdir by hand, stop the run and
-   `mv .wiggum .specstride`.
+Two knobs can move: the per-phase pass ceiling (`proposer_timeout`) and the yield poll
+interval (`yield_poll_interval`). Nothing the critic reads, no breaker, and nothing in the
+verification commands can ever be tuned; tests lock both the list of knobs and every
+place the learning code is called from. A pass that rewrites the telemetry it is judged
+by is excluded from every evaluation. Run through a mixture-of-loops contract, the
+decisions a run may use are bound into the contract, so a later change waits for a new
+contract instead of slipping into a relaunch.
 
-Telemetry identity is unchanged: Loki queries and the bundled dashboards still
-key on the labels `job="ralph"` and `service.name="ralph"`, so existing queries keep
-working.
+Details, formulas and file formats: [Learning](#learning-self-tuning-knobs) below and
+[`wiki/Learning.md`](./wiki/Learning.md).
 
 ## Specstride is a utility; your project lives elsewhere
 
@@ -646,7 +659,7 @@ that phase has actually measured, instead of one global setting sized for the
 worst phase in the project. This is deliberately narrow: **suggest is the
 default, nothing is ever applied silently, and the set of knobs it may ever touch
 is a locked allowlist that can never include anything the critic reads.** Full
-design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5.
+design: `roadmap/research/self-improvement-loops/` (the loop design, §5).
 
 In practice:
 
@@ -909,7 +922,7 @@ once on the next run).
 | `.specstride/features/<slug>/gates/` (+ `gates/proofs/`) | per-feature | all the phase-control files above — where to look for what the loop produced |
 | `.specstride/features/<slug>/runs/<run-id>/{run.log,events.jsonl}` | per-feature | each run isolated |
 | `.specstride/features/<slug>/learning/phase-<N>.json` | per-feature | the phase's latest observation ([Learning](#learning-self-tuning-knobs)) |
-| `.specstride/features/<slug>/learning/applied.json` | per-feature | the append-only decision log: `apply` entries (value, shape, provenance, `baseline`), `revert` entries, and `evaluate` entries (label, `r`/`MDE`/`n` per primary). Design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5 and `05-evaluate-design.md` |
+| `.specstride/features/<slug>/learning/applied.json` | per-feature | the append-only decision log: `apply` entries (value, shape, provenance, `baseline`), `revert` entries, and `evaluate` entries (label, `r`/`MDE`/`n` per primary). Design: `roadmap/research/self-improvement-loops/` (the loop design §5, and `05-evaluate-design.md`) |
 | `.specstride/features/<slug>/{verdicts,attempts,debug}/` | per-feature | critic transcripts, archived rejected attempts (`attempts/phase<N>/attempt<M>/`), debug dumps |
 | `.specstride/features/<slug>/debug/invocations/<run-id>/<role>/phase-<N>/attempt-<M>/iter-<I>/<invocation-id>/` | per-feature | one reconstructable proposer/critic invocation: `metadata.json` (contract `specstride-invocation/v1`) + a terminal `result.json` (`specstride-invocation-result/v1`), and — **only when raw capture is explicitly enabled** — `prompt.txt` / `provider.jsonl` / `events.jsonl` / `response.txt`. Every field is routed through `lib/observability_policy.py` first: secrets redacted, thinking dropped, oversized payloads truncated with `truncated=true`. Raw content expires after 7 days; redacted metadata + terminal result are kept 30 (the summary always outlives the raw it describes) |
 | `.specstride/features/<slug>/PROGRESS.md`, `last-run.conf` | per-feature | proposer notes; that feature's resume config |
