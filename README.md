@@ -696,12 +696,24 @@ specstride learn --off
   bound (above) and to no more than a ±50% step from whatever value is currently
   in effect — a self-tuner cannot run away in one step even if the telemetry
   that produced the suggestion was noisy.
+- **Keyed on the phase's shape.** Every sample and every decision is filed under
+  the phase's *shape*: a digest of its number, title and criteria text
+  (`python3 lib/specstride_spec.py shape N --specs <spec>`), recorded on each
+  `phase_start`. Ticking a checkbox or reflowing whitespace does not change it;
+  editing a criterion or the title does. After an edit, samples from the old
+  phase stop counting toward the 3-sample floor and a decision learned for it
+  stops applying — the run resolves the default again. A decision or a run
+  recorded before shapes existed matches no shape: it is never silently applied,
+  and `resolve`/`--show`/`--apply` print a one-line notice saying so (the run's
+  notice goes to its `run.log`). `specstride learn` computes the shapes from the
+  feature's spec (`-s`, else the saved `SPECS=`).
 - **Applying, and undoing it.** `specstride learn --apply --knob <knob> --phase N
   [--default S]` appends one decision to
   `.specstride/features/<slug>/learning/applied.json` (a separate, append-only file
   from the plain observations below — decisions and observations are never
-  conflated) with full provenance: the run ids the samples came from, the sample
-  count, the previous value, and a timestamp; it also emits a `knob_adjusted`
+  conflated) with full provenance: the phase shape, the run ids the samples came
+  from, the sample count, the previous value, and a timestamp
+  (`specstride.learn.applied/2`; `/1` entries are still read); it also emits a `knob_adjusted`
   event. `specstride learn --revert <run-id>` undoes exactly that one decision,
   restoring the value from just before it (refused if a later decision has
   already superseded it — reverting a stale one would silently clobber the newer
@@ -824,7 +836,7 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 |---|---|---|
 | `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`) |
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
-| `phase_start` / `phase_done` | orchestrator | phase N entered / approved |
+| `phase_start` / `phase_done` | orchestrator | phase N entered / approved. `phase_start` carries `shape`, the phase-shape digest learned state is keyed on |
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. An unsourced budget is what makes budget archaeology expensive six hours in |
