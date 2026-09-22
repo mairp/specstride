@@ -51,7 +51,7 @@ in three ways:
 |---|---|---|---|
 | **Ralph loop** (inner) | one phase attempt | a fresh, stateless agent session per pass, until the phase's evidence file exists | only what is on disk |
 | **Gated phase loop** (middle) | one run | proposer → critic → approve or retry; a stuck phase gets the diagnostician and a narrowed accelerator retry | the feedback and hint files, within the run |
-| **Learning loop** (outer) | across runs | measure every pass, suggest (and, opt-in, apply) per-phase settings, then evaluate each applied one against the baseline it was learned from | a per-phase observation and an append-only log of decisions, their baselines and their evaluations |
+| **Learning loop** (outer) | across runs | measure every pass, suggest (and, opt-in, apply) per-phase settings, then evaluate each applied one against the baseline it was learned from, reverting it automatically if a guardrail breaks | a per-phase observation and an append-only log of decisions, their baselines and their evaluations |
 
 The agents never improve; they stay stateless workers. What improves is how the
 loop drives them. The learning loop is deliberately narrow: it can tune two
@@ -711,7 +711,7 @@ specstride learn --off
   notice goes to its `run.log`). `specstride learn` computes the shapes from the
   feature's spec (`-s`, else the saved `SPECS=`).
 - **Applying, and undoing it.** `specstride learn --apply --knob <knob> --phase N
-  [--default S]` appends one decision to
+  [--default S] [--force]` appends one decision to
   `.specstride/features/<slug>/learning/applied.json` (a separate, append-only file
   from the plain observations below — decisions and observations are never
   conflated) with full provenance: the phase shape, the run ids the samples came
@@ -822,6 +822,38 @@ entries) and emits `knob_evaluated`. `learn.py evaluate --dry-run` prints withou
 `--report` prints the last recorded evaluation of every active decision. Design:
 `roadmap/research/self-improvement-loops/05-evaluate-design.md`.
 
+**Guardrails veto, even when a primary improved.** Each is computed per arm and is
+`ok`, `breach` or `unknown` — below its minimum n it is `unknown`, never `ok`:
+
+| Guardrail | From | Breach |
+|---|---|---|
+| `grounding_gap` rate per verdict | `grounding_gap` | exact one-sided binomial tail p < 0.01 against the baseline rate, ≥ 10 applied verdicts |
+| MALFORMED verdict rate | `verdict.result` | same, ≥ 10 applied verdicts |
+| declared verification | `verification_failed` | any failure in the applied arm where the baseline had none, at any n |
+| diagnostician GROUNDING share | `diagnostician_done.case` | binomial, ≥ 10 applied cases |
+| critic input size | the PROMPT section of `verdicts/phase<N>.attempt<A>.<ts>.txt` (no event carries it) | exact rank test p < 0.01, ≥ 6 prompts per arm |
+| human arbitration — a **proxy** | `run_stop.reason` ∈ `max_rejects`, `gate_oscillation`, `critic_config`, `proposer_no_progress` (no event records arbitration) | binomial, ≥ 10 applied episodes |
+| first-attempt approval rate | `verdict` on attempt 1 | an alarm in **both** directions (either tail p < 0.01), ≥ 10 verdicts; never a reward and never part of a label |
+
+False-MISSING rate is not a guardrail: no event carries it, and parsing the critic's prose
+into a score would make its output an optimization input. It stays an offline release check
+on `critic.py`.
+
+**Auto-revert and quarantine.** On a breach `evaluate` re-reads `applied.json` and reverts
+the decision through the normal revert path — the only automatic write to a decision the
+loop makes, since it only moves a knob back toward its default — and emits
+`knob_auto_reverted` naming the guardrail. If a manual `--apply` overtook the decision
+meanwhile, the revert is skipped (`knob_evaluated action=skipped_superseded`) and never
+retried; after `--off` it is a silent no-op. The auto-revert entry quarantines the reverted
+value for its `(knob, phase, shape, backend)`: `--show` still prints the suggestion, marked
+QUARANTINED, and `--apply` refuses a value within ±10 % of it (exit 4, naming the auto-revert)
+until 6 new billed non-futility samples have accrued since; `--apply --force` overrides and is
+recorded (`force: true`). A shape or backend change clears it.
+
+**Where it is shown.** `specstride learn --show` prints each active decision's latest
+evaluation after the suggestions, and every run prints the same lines on exit — on
+`run_end` and on each `run_stop` path — when the layer is on.
+
 ## The on-disk contract
 
 `SPECS.md` (or a Spec Kit `tasks.md`) is the one input you write; it can live
@@ -880,7 +912,8 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved. `phase_start` carries `shape`, the phase-shape digest learned state is keyed on |
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
-| `knob_evaluated` | learn.py (at `phase_done`) | an active decision was labelled — `knob`, `phase`, `label` (`helped` \| `neutral` \| `regressed` \| `insufficient`), `cost_r`/`cost_mde`, `wall_r`/`wall_mde`, `n_applied`/`n_baseline`, `reset`, `evaluates_run_id`. Emitted only when the result changed |
+| `knob_evaluated` | learn.py (at `phase_done`) | an active decision was labelled — `knob`, `phase`, `label` (`helped` \| `neutral` \| `regressed` \| `insufficient`), `cost_r`/`cost_mde`, `wall_r`/`wall_mde`, `n_applied`/`n_baseline`, `reset`, `action` (`evaluated` \| `auto_reverted` \| `skipped_superseded`), `evaluates_run_id`. Emitted only when the result changed |
+| `knob_auto_reverted` | learn.py (at `phase_done`) | a guardrail breached, so the decision was reverted — `knob`, `phase`, `guardrail`, `from`, `to`, `reverts_run_id`. The only automatic write the loop makes to a decision |
 | `proposer_start` | orchestrator | a proposer pass for phase N begins |
 | `proposer_cap` | orchestrator | the pass ceiling this attempt runs under — `seconds` + `source` (`override` \| `learned` \| `declared` \| `global`), and the yield poll interval its passes use — `yield_poll` + `yield_poll_source` (`override` \| `learned` \| `default`). Both are resolved once per phase; the event repeats them per attempt. An unsourced budget is what makes budget archaeology expensive six hours in |
 | `iter_cap` | proposer | a pass was killed at the ceiling — `reason` (`hard_cap`), `elapsed`, `consec`/`max` against `SPECSTRIDE_PROPOSER_MAX_CAPS`. A budget signal, not an error |

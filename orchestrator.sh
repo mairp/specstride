@@ -480,6 +480,13 @@ mkdir -p "$STATE_DIR"
 LOCK="$STATE_DIR/lock"
 # ── single-run lock (flock if available, else mkdir) ─────────────────────────
 LOCK_FD=""
+# EXIT hooks: every piece of end-of-run work registers here, so installing one
+# never replaces another (a bare `trap … EXIT` overwrites the previous one).
+EXIT_HOOKS=()
+run_exit_hooks() { local h; for h in "${EXIT_HOOKS[@]}"; do "$h" || true; done; }
+add_exit_hook() { EXIT_HOOKS+=( "$1" ); trap run_exit_hooks EXIT; }
+release_lock_dir() { rmdir "$LOCK.d" 2>/dev/null || true; }
+
 acquire_lock() {
   if command -v flock >/dev/null 2>&1; then
     exec {LOCK_FD}>"$LOCK"
@@ -493,7 +500,7 @@ acquire_lock() {
       echo "orchestrator.sh: another run holds the lock on $WORKDIR ($LOCK.d). Exiting." >&2
       exit "$E_LOCK"
     fi
-    trap 'rmdir "$LOCK.d" 2>/dev/null || true' EXIT
+    add_exit_hook release_lock_dir
     echo "$SPECSTRIDE_RUN_ID $(date -Is)" > "$LOCK.d/owner"
   fi
 }
@@ -730,7 +737,7 @@ start_presenter() {
   [[ "$LIVE" == "true" && -f "$LIB_DIR/present.py" ]] || return 0
   python3 "$LIB_DIR/present.py" --events "$SPECSTRIDE_EVENTS" --mode timeline --follow &
   PRESENTER_PID="$!"
-  trap 'stop_presenter' EXIT
+  add_exit_hook stop_presenter
 }
 # In live mode, keep the raw command output OUT of the terminal — route it to the
 # log file only. `emit_out` is where proposer/critic output goes.
@@ -1607,6 +1614,20 @@ resolve_yield_poll() {
   fi
   printf '%s\t%s\n' "$fallback" "default"
 }
+
+# One line per active learned decision — its latest evaluation, with the MDE
+# beside the effect — on EVERY exit: run_end fires in a minority of real runs, and
+# each run_stop path exits on its own, so this hangs on the EXIT trap. Read-only;
+# only with the learning layer on and a learn.py that has `evaluate`.
+learning_exit_summary() {
+  [[ -n "${SPECSTRIDE_LEARNING:-}" && "${SPECSTRIDE_LEARNING}" != "off" ]] || return 0
+  [[ -f "$FEATURE_DIR/learning/applied.json" ]] || return 0
+  local line
+  while IFS= read -r line; do
+    printf '%s\n' "$line" | tee -a "$LOG"
+  done < <(python3 "$LIB_DIR/learn.py" evaluate --report --feature-dir "$FEATURE_DIR" 2>/dev/null)
+}
+add_exit_hook learning_exit_summary
 
 # ── the phase loop ───────────────────────────────────────────────────────────
 run_phase() {

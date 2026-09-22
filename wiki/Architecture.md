@@ -31,7 +31,7 @@ The loop above is the middle of three nested loops:
 |---|---|---|---|
 | **Ralph loop** (inner, `proposer.sh`) | one phase attempt | a fresh, stateless agent session per pass, until `GATE<N>-EVIDENCE.md` exists | only what is on disk |
 | **Gated phase loop** (middle, `orchestrator.sh`) | one run | proposer → critic → approve or retry; the diagnostician and accelerator for a stuck phase | feedback and hint files, within the run |
-| **Learning loop** (outer, `lib/learn.py`) | across runs | measure every pass, suggest (and, opt-in, apply) per-phase settings, then evaluate each applied one against its baseline | `learning/phase-<N>.json` observations and the `learning/applied.json` log of decisions, baselines and evaluations |
+| **Learning loop** (outer, `lib/learn.py`) | across runs | measure every pass, suggest (and, opt-in, apply) per-phase settings, then evaluate each applied one against its baseline, reverting it if a guardrail breaks | `learning/phase-<N>.json` observations and the `learning/applied.json` log of decisions, baselines and evaluations |
 
 The diagnostician and accelerator adapt the next attempt, but nothing they learn outlives the
 run. Only the outer loop carries lessons forward, and only for two allowlisted settings. The

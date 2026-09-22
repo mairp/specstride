@@ -80,6 +80,16 @@ printed beside the effect: at 6 passes per arm only a change of roughly ×2–3 
 visible, so `neutral` does not mean "no effect". No significance test is run; none is
 attainable at these run counts. Design: `roadmap/research/self-improvement-loops/05-evaluate-design.md`.
 
+Guardrails veto a decision even when it helped, and a breach **reverts it automatically** — the
+only automatic write the loop makes, because it only moves a knob back toward its default:
+`grounding_gap` rate, MALFORMED rate, a new `verification_failed`, the diagnostician's GROUNDING
+share, critic input size (read from the verdict transcripts), a human-arbitration **proxy** (the
+stop reasons that hand a phase back), and first-attempt approval rate as an alarm in both
+directions. Rates use exact binomial tails (p < 0.01, at least 10 trials); below that a guardrail
+is `unknown`, never `ok`. The reverted value is quarantined for its phase, shape and backend:
+`--apply` refuses it (exit 4) until 6 new samples exist, unless `--force`. `specstride learn --show`
+and every run's exit print each active decision's latest evaluation.
+
 ## What can never be tuned
 
 The allowlist is exactly the two knobs above, and `lib/test_learn.py` asserts it literally.
@@ -104,4 +114,4 @@ the verification plan.
 
 Observations and decisions are kept in separate files so a measurement can never be mistaken
 for a decision. Events: `learning_observed` (an observation was written), `knob_adjusted`
-(a decision was applied or reverted) and `knob_evaluated` (a decision was labelled). See [On-Disk Contract](On-Disk-Contract).
+(a decision was applied or reverted) `knob_evaluated` (a decision was labelled) and `knob_auto_reverted` (a guardrail reverted one). See [On-Disk Contract](On-Disk-Contract).
