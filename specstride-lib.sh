@@ -200,6 +200,12 @@ specstride_spec_phase_title() {
   _specstride_spec_py title "$2" --specs "$1"
 }
 
+# Print phase N's shape digest (number + title + criteria text, tick-invariant):
+# the key the learning layer files its samples and decisions under.
+specstride_spec_phase_shape() {
+  _specstride_spec_py shape "$2" --specs "$1"
+}
+
 # Print the full section text for phase N (heading → next "## " heading or EOF).
 # This whole slice is handed to the critic as the requirements for that phase.
 specstride_spec_slice() {
