@@ -8,7 +8,7 @@ measured. Without it, you get one global setting sized for the worst phase in th
 The agents never improve; they stay stateless workers. What improves is how the loop drives
 them. The critic is never tuned.
 
-Full design: `roadmap/research/self-improvement-loops/02-wiggum-loop-design.md` §5. Reference:
+Full design: `roadmap/research/self-improvement-loops/` (the loop design, §5). Reference:
 [README → Learning](../README.md#learning-self-tuning-knobs).
 
 ## Turning it on
