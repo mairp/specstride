@@ -691,7 +691,10 @@ specstride learn --off
   permanently out of scope: a breaker must never be able to relax itself, and
   nothing that changes what a verdict means may be tuned. `lib/test_learn.py`
   asserts this set literally, so adding a name to it means deliberately editing a
-  test that explains why that must not happen.
+  test that explains why that must not happen. A second test locks where `learn.py` may be
+  invoked at all: exactly the two `resolve` calls and the `observe` hook in
+  `orchestrator.sh`, and the `specstride learn` dispatcher — and never from
+  `lib/critic.py` or `lib/verification_plan.py`.
 - **Bounded and reversible.** Every numeric suggestion is clamped to its hard
   bound (above) and to no more than a ±50% step from whatever value is currently
   in effect — a self-tuner cannot run away in one step even if the telemetry
