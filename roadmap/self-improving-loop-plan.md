@@ -1,6 +1,6 @@
 # What Specstride and mixture-of-loops need to be a self-improving loop
 
-**Status: Planned.** Written 2026-09-22 against `main` 3e5cf47 of this repository and the
+**Status: Partial** (items 0–7 shipped 2026-09-22; see *Corrections* at the end and `self-improving-loop-report.md`). Written 2026-09-22 against `main` 3e5cf47 of this repository and the
 `mixture-of-loops` (MoL) skill at `/root/mixture-of-loops`. Three read-only research passes
 fed it: an audit of this repository, an audit of the MoL skill, and a literature survey. The
 `file:line` references were verified against those checkouts; items marked *(inferred)*
@@ -177,3 +177,66 @@ Reflexion (<https://arxiv.org/abs/2303.11366>), Agent Workflow Memory
 (<https://arxiv.org/abs/2406.11695>), OPRO (<https://arxiv.org/abs/2309.03409>), TextGrad
 (<https://arxiv.org/abs/2406.07496>), Gödel Agent (<https://arxiv.org/abs/2410.04444>),
 reward-hacking generalization (<https://arxiv.org/abs/2511.18397>).
+
+## Corrections (2026-09-22)
+
+Added at the end of the implementation run (`self-improving-loop-report.md`). The plan
+above is left as written; where it and the shipped code disagree, the code and this list
+win.
+
+- **The MDE estimate is wrong by more than an order of magnitude.** "Expect to detect only
+  changes of roughly 25–30 % in cost per approved phase" does not hold: with the within-phase
+  sd of log pass cost this corpus shows (0.506–0.654 in the prompt's audit; 0.554 median,
+  0.735 pooled over 94 phase keys in this run's measurement), the MDE at 3 passes per arm is
+  ≈ +218 %, and detecting 30 % needs 58–97 passes per arm. `evaluate` therefore labels by
+  effect-versus-MDE and prints both; it runs no significance test.
+- **McNemar on approved/not scores approval rate**, which *What not to do* forbids. Neither
+  McNemar nor Wilcoxon is implemented (minimum attainable two-sided p at 3 pairs is 0.25).
+- **"Compare cost per approved phase over the whole run"** is not a usable primary:
+  `cost_per_approved_phase` is undefined in 62 % of real runs. The primaries are per-pass log
+  cost and log wall-clock, clustered by phase episode.
+- **ABAB alternation is unreachable at this N and contradicts item 6.** Only 8 of 248 real
+  phase keys ever saw ≥ 6 runs; a resumed run splits one episode across arms; a pinned
+  contract value that silently reverts on alternate runs breaks MoL's promise. Version 1
+  records the arm and compares before/after, and only reverting is automatic.
+- **"Record the model and version"**: nothing records a model version. Baseline-reset
+  granularity is the `run_start.backend` label.
+- **Two guardrails have no event and one is dropped.** Critic input size is read from the
+  verdict transcripts; human-arbitration rate is replaced by a named proxy (the stop reasons
+  that hand a phase back); false-MISSING rate has no event and is not an item-4 guardrail
+  (it stays an offline release check on `critic.py`).
+- **`inject_yield_hint`'s "give it priority" option is not implementable** as a priority
+  change: the yield contract is already the only budgeted block and is appended last to both
+  prompts. The knob was removed from the allowlist instead.
+- **Item 7 as specified cannot be written**: `learn.py` appears in comment lines across the
+  tree and `resolve_knob` is called nowhere outside `learn.py`. The lock is on invocation
+  lines, as a `(file, subcommand)` multiset.
+- **The `append_budgeted_block` sites in the *Where it stands* table are swapped**:
+  `orchestrator.sh:1195` closes `build_accelerator_prompt`, `:1522` closes
+  `build_proposer_prompt`.
+- **Risk 3 is answered: the proposer can write both files.** Every backend runs with
+  permissions disabled in the project directory, and the proposer appends to the same
+  `events.jsonl` by design. Item 4c's tamper rule is prefix immutability per proposer
+  invocation; what it does not cover is listed in `05-evaluate-design.md` §4.
+- **Unset `SPECSTRIDE_LEARNING` is `off`, not `suggest`**, contrary to design §5.5
+  invariant 5; MoL now passes `off` explicitly to every stage that declares nothing.
+- **Item 1's default bug changed the applied value, not only the display**: with
+  `--default 1800` the poll interval's ±50 % window missed its `[10, 300]` bound, the
+  degenerate branch dropped the step cap, and one apply could move 30 → 300.
+- **Item 6: re-hashing under `check_sources` does not reach the relaunch classifier.**
+  `supervise.py` reads bundles with `check_sources=False`, so `read_bundle` never raises there
+  and the bundle is not turned into `None`. The named `learning-decisions-changed` refusal is
+  therefore an explicit check in `classify_relaunch` (and a distinct exception at the gate,
+  which reads with source checks).
+- **Item 5's output path**: `runs/<id>/retrospective.json` would be overwritten on every
+  relaunch and re-derivation (`runs/<id>` is keyed on the pipeline); it is
+  `runs/<id>/retrospectives/<contract-digest>.json`.
+
+Found during the run, not in the prompt's list:
+
+- `orchestrator.sh`'s two `trap … EXIT` sites overwrote each other (the mkdir-lock release
+  at the old `:496` and the presenter's at `:733`), so a live run on a host without `flock`
+  left `lock.d` behind. Fixed in item 4b by registering exit work through `add_exit_hook`,
+  because the learning summary needed an exit hook of its own.
+- The corpus glob `/root/*/.wiggum/features/*/runs/*/events.jsonl` matches 232 streams on
+  this host today (231 readable once the 35 MB stream is skipped), not 235.
