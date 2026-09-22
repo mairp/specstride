@@ -13,9 +13,11 @@ whether each change helped, and rolls it back when it did not.
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)
 ![Events](https://img.shields.io/badge/Events-JSONL_stream-000000?style=for-the-badge&logo=json&logoColor=white)
 
-You hand it a `SPECS.md` — an ordered set of phases, each with acceptance
-criteria — and it drives a coding agent phase by phase, but *nothing advances
-until a critic approves it*. The human who used to eyeball each phase and click
+You hand it a [GitHub Spec Kit](https://github.com/github/spec-kit) feature — its
+`tasks.md`, an ordered set of phases, each a list of tasks — and it drives a coding
+agent phase by phase, but *nothing advances until a critic approves it*. The
+feature's `spec.md`, `plan.md` and contracts ride along as read-only context for both
+the agent and the critic. The human who used to eyeball each phase and click
 "approved" is replaced by an LLM-backed critic. You stay out of the inner loop;
 you only arbitrate the phases the machines genuinely can't settle.
 
@@ -132,10 +134,10 @@ directory. Each run points at your project:
 - **`-w/--workdir DIR`** — where the proposer works. All generated state lives
   under `.specstride/features/<slug>/` (gates, evidence, PROGRESS.md, verdicts), so the
   workdir root holds only your real artifacts. Default: `$PWD`.
-- **`-s/--specs FILE`** — the spec, **any name, any location** (`SPECS.md`,
-  `ROADMAP.md`, `plan.md`, …). A relative path resolves against the directory you
-  launched from, not the workdir. Default: `<workdir>/SPECS.md` — or, inside a Spec
-  Kit project, [auto-discovered](#spec-resolution-zero-flag-start) with no `-s`.
+- **`-s/--specs FILE`** — the spec, normally a Spec Kit feature's
+  `specs/<feature>/tasks.md`. Inside a Spec Kit project you can leave it out: the
+  feature is [auto-discovered](#spec-resolution-zero-flag-start). A relative path
+  resolves against the directory you launched from, not the workdir.
 - **`--feature SLUG`** — the feature namespace for durable state
   (`.specstride/features/<slug>/`), for repos with more than one Spec Kit feature. Also
   `SPECSTRIDE_FEATURE`. Default: the feature dir's basename, or `default`.
@@ -143,7 +145,8 @@ directory. Each run points at your project:
 So the same installed Specstride drives any project:
 
 ```bash
-specstride run -w ~/projects/foo -s ~/projects/foo/ROADMAP.md
+specstride run -w ~/projects/foo                                   # one Spec Kit feature: discovered
+specstride run -w ~/projects/foo -s ~/projects/foo/specs/002-billing/tasks.md
 ```
 
 (`specstride` is the single front-door command — see **Install it permanently**
@@ -257,8 +260,8 @@ run against Lisa is:
 SPECSTRIDE_AGENT_STREAM=true SPECSTRIDE_LIVE_DETAIL=full \
 /home/marlon.lopez/specstride/specstride run \
   --workdir /home/marlon.lopez/lisa \
-  --specs /home/marlon.lopez/lisa/SPECS.md \
-  --spec-format native \
+  --specs /home/marlon.lopez/lisa/specs/specification-bundle-v2/tasks.md \
+  --spec-format speckit-tasks \
   --feature specification-bundle-v2 \
   --verification required \
   --test-plan /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/TEST_PLAN.md \
@@ -277,8 +280,8 @@ Planning can also be run independently, before any loop:
 /usr/bin/python3 \
   /home/marlon.lopez/specstride/lib/verification_plan.py create \
   --workdir /home/marlon.lopez/lisa \
-  --specs /home/marlon.lopez/lisa/SPECS.md \
-  --format native \
+  --specs /home/marlon.lopez/lisa/specs/specification-bundle-v2/tasks.md \
+  --format speckit-tasks \
   --output /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/TEST_PLAN.md \
   --json-output /home/marlon.lopez/lisa/.specstride/verification/verification-plan.json \
   --generate-tests /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/generated \
@@ -345,7 +348,7 @@ verbs work the same way.
 ## How it works
 
 ```
-orchestrator.sh   (derives the current phase N from disk; reads SPECS.md)
+orchestrator.sh   (derives the current phase N from disk; reads the feature's tasks.md)
   │
   ├─(1) PROPOSER — run a headless coding-agent loop for phase N until it writes
   │       .specstride/gates/GATE<N>-EVIDENCE.md (written atomically), then the loop exits.
@@ -392,7 +395,7 @@ sequenceDiagram
     participant D as lib/critic.py --diagnose<br/>(diagnostician · same backend, no budget)
     participant FS as .specstride/gates/<br/>(on-disk contract)
 
-    Human->>O: run -w WORKDIR -s SPECS.md
+    Human->>O: run -w WORKDIR -s specs/<feature>/tasks.md
     O->>FS: derive phase N from GATE* markers
     Note over O: no stored counter — phase is derived
 
@@ -551,8 +554,9 @@ cp .env.example .env          # then edit: set ANTHROPIC_API_KEY
 # pointer to ~/.bashrc, pointing SPECSTRIDE_HOME at this clone, then reload:
 source ~/.bashrc
 
-mkdir -p /tmp/specstride-demo && cp SPECS.example.md /tmp/specstride-demo/SPECS.md
-specstride run -w /tmp/specstride-demo
+mkdir -p /tmp/specstride-demo/specs/001-greeting
+cp examples/speckit-tasks.example.md /tmp/specstride-demo/specs/001-greeting/tasks.md
+specstride run -w /tmp/specstride-demo       # discovers specs/001-greeting/tasks.md
 ```
 
 (Not set up yet? The one-off equivalent calls the script directly:
@@ -561,8 +565,10 @@ specstride run -w /tmp/specstride-demo
 
 The proposer defaults to **`dsh`**, using DeepSeek Harness's headless profile and
 its configured default model (SOL through Compass STAGE on this installation).
-The critic remains independently configurable and defaults to **`claude`**. The bundled `SPECS.example.md` is two trivial, verifiable phases
-so you can watch the whole loop — including a reject-and-fix — end to end.
+The critic remains independently configurable and defaults to **`claude`**. The bundled
+`examples/speckit-tasks.example.md` is a small, verifiable Spec Kit task list, so you can
+watch the whole loop end to end. In a real project, generate the feature with Spec Kit
+(`/speckit.specify`, `/speckit.plan`, `/speckit.tasks`) and point Specstride at it.
 
 ### Default run (this install)
 
@@ -572,7 +578,7 @@ telemetry to the host's Grafana:
 ```bash
 SPECSTRIDE_LIVE_DETAIL=full specstride run \
     -w /root/image_generator \
-    -s /root/image_generator/SPECS.md \
+    -s /root/image_generator/specs/<feature>/tasks.md \
     --telemetry --loki-url http://localhost:3100
 ```
 
@@ -895,14 +901,14 @@ evaluation after the suggestions, and every run prints the same lines on exit �
 
 ## The on-disk contract
 
-`SPECS.md` (or a Spec Kit `tasks.md`) is the one input you write; it can live
-anywhere (`-s`, or discovered — see [Spec resolution](#spec-resolution-zero-flag-start)).
+The Spec Kit feature (its `tasks.md`, generated from `spec.md` and `plan.md`) is the one
+input you write; it can live anywhere (`-s`, or discovered — see [Spec resolution](#spec-resolution-zero-flag-start)).
 Everything else Specstride generates lives under `.specstride/`, **namespaced per feature**,
 so the workdir root stays clean — only your real project artifacts sit there.
 
 | File | Written by | Meaning |
 |---|---|---|
-| `SPECS.md` / `tasks.md` | you | Ordered phases + acceptance criteria (the input). |
+| `specs/<feature>/tasks.md` | you (via Spec Kit) | Ordered phases and their tasks (the input). A legacy `SPECS.md` is still read. |
 | `.specstride/features/<slug>/PROGRESS.md` | proposer | Durable state; read first each iteration. |
 | `.specstride/features/<slug>/gates/GATE<N>-EVIDENCE.md` | proposer | Evidence phase N's criteria are met. Written atomically. |
 | `.specstride/features/<slug>/gates/GATE<N>-APPROVED` | **critic** | Empty marker; unblocks phase N+1. |
@@ -985,23 +991,13 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 ### Spec formats
 
 Specstride parses the spec through a single pluggable layer (`lib/specstride_spec.py` —
-the one source of truth both the bash side and the critic call). Three formats ship;
-the format is **auto-detected**, or forced with `--spec-format` /
-`SPECSTRIDE_SPEC_FORMAT`.
+the one source of truth both the bash side and the critic call). **Spec Kit `tasks.md` is
+the input to use.** OpenSpec changes are also supported, and the older hand-written
+`SPECS.md` format still works but will be deprecated soon. The format is
+**auto-detected**, or forced with `--spec-format` / `SPECSTRIDE_SPEC_FORMAT`.
 
-**`native`** (the default) — each phase is a level-2 heading whose text starts with
-`Phase <N>`, containing an `### Acceptance criteria` block:
 
-```markdown
-## Phase 0 — <title>
-<description of the work>
-
-### Acceptance criteria
-- [ ] criterion one
-- [ ] criterion two
-```
-
-**`speckit-tasks`** — a [GitHub Spec Kit](https://github.com/github/spec-kit)
+**`speckit-tasks`** (recommended) — a [GitHub Spec Kit](https://github.com/github/spec-kit)
 `tasks.md`. Each `## Phase N:` heading becomes a Specstride phase, and every `- [ ]`
 task line under it becomes a required deliverable the critic gates on (the task's
 cited file paths are exactly what the grounding pass verifies):
@@ -1071,12 +1067,27 @@ Canonical OpenSpec paths are detected before the generic `tasks.md` filename rul
 The numbered task shape is also content-detected when the file has another name.
 A standalone example is available at `examples/openspec-tasks.example.md`.
 
+**`native`** (legacy; **to be deprecated soon**) — a hand-written `SPECS.md` where each
+phase is a level-2 heading whose text starts with `Phase <N>`, containing an
+`### Acceptance criteria` block. It is still the fallback when nothing else is detected, so
+existing `SPECS.md` projects keep running; new work should use a Spec Kit feature:
+
+```markdown
+## Phase 0 — <title>
+<description of the work>
+
+### Acceptance criteria
+- [ ] criterion one
+- [ ] criterion two
+```
+
 #### Spec resolution (zero-flag start)
 
 Inside a Spec Kit or OpenSpec project you rarely need `-s`. When it is omitted,
 Specstride resolves the spec in this order (never picking silently between candidates):
 
-1. `<workdir>/SPECS.md` — unchanged precedence, so native users are unaffected.
+1. `<workdir>/SPECS.md`, if a legacy one exists — checked first so existing projects
+   are unaffected; remove it once the work has moved to a Spec Kit feature.
 2. `<workdir>/.specify/feature.json` → its `feature_directory` → `<dir>/tasks.md`.
 3. discover `<workdir>/specs/*/tasks.md` and
    `<workdir>/openspec/changes/*/tasks.md` — exactly one match is used; two or more
@@ -1107,20 +1118,20 @@ specstride run    -w ./ --feature 002-billing   # then the next — independent 
 specstride status -w ./ --all                    # see both, side by side
 ```
 
-#### `SPECS.md` vs `tasks.md`: which is the source of truth?
+#### `tasks.md` is the source of truth
 
-Never keep both for the same work — gate approvals live in `.specstride/`, not in
-either markdown, so a hand-written `SPECS.md` beside a `tasks.md` becomes a second,
-un-reconciled source of truth and the `tasks.md` checkboxes silently drift.
+Write the work as a Spec Kit feature and let Spec Kit own its `tasks.md`; it is generated
+from the feature's `spec.md` and `plan.md`. Never keep a hand-written `SPECS.md` beside
+it for the same work: `SPECS.md` would be checked first and become a second,
+un-reconciled source of truth. `SPECS.md` remains readable for existing projects, but it
+will be deprecated soon; move non-feature work (migrations, refactors, ops roadmaps) into
+a Spec Kit feature too.
 
-- **Inside a `.specify` project → `tasks.md` is the SoT.** It is generated from the
-  feature's `spec.md`/`plan.md`; let Spec Kit own it.
-- **For non-feature-shaped work → `SPECS.md` (native) is the SoT.** Migrations,
-  refactors, ops roadmaps, this repo's own specs — anything not a Spec Kit feature.
-
-Specstride never writes checkbox state back into `tasks.md`; approvals stay in
-`.specstride/features/<slug>/gates/`, so there is exactly one source of truth for
-"is phase N done".
+Gate approvals live in `.specstride/features/<slug>/gates/`, which is what "is phase N
+done" means. When the critic approves a phase, Specstride also ticks that phase's task
+checkboxes in `tasks.md`, so the task list reads done as the feature completes
+(`SPECSTRIDE_TICK_TASKS=false` turns that off). Checkbox state is outside the plan hash
+and never re-plans anything.
 
 > **Runtime is bash + python3 stdlib** — no pip, no dependency manager,
 > clone-and-run. Contributors run the test suite with the stdlib runner:
