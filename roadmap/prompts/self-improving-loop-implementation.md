@@ -646,6 +646,53 @@ Follow the plan's *Interface* section with these corrections.
   pins it with a stub. Schema, both reference docs, tests on both sides, rename-guard
   allowlist lines for any legacy spelling added.
 
+## Documentation lands with the code
+
+Every item's PR updates the user-facing docs in the same PR, or the PR is not done. The
+docs describe what ships, not what is planned, so each PR rewrites the sentences its
+change makes false rather than appending a note.
+
+**Specstride.** `README.md` is the front door and `wiki/` mirrors it; the pages that
+repeat learning facts are `wiki/Learning.md`, `wiki/Configuration.md` and
+`wiki/On-Disk-Contract.md`. Keep README and wiki saying the same thing. The sections that
+go stale:
+
+- *Three loops, one of them self-tuning* (`README.md:48-70`): "it can tune three
+  allowlisted settings" becomes two after item 1; after item 4 the outer loop also
+  evaluates and auto-reverts, and the table's "what carries over" column gains the
+  evaluation entries.
+- *Learning (self-tuning knobs)* (`README.md:636-772`): the three-knob list loses
+  `inject_yield_hint` (item 1); *What a live run reads today* is rewritten when
+  `yield_poll_interval` is consumed (item 1); the `--apply` paragraph gains the shape
+  key, the baseline, the quarantine and `--force` (items 2, 4); a new subsection
+  documents `evaluate`, the four labels, the MDE printed beside the effect, the
+  guardrails and their proxies, auto-revert, the arm field and the tamper rule (item 4),
+  in the same register as *Observations*; the `learn` CLI row (`:634`) and the
+  `specstride learn` usage block gain `--summarize`/`--evaluate` (item 5) and lose
+  nothing else.
+- *The event stream* (`README.md:815-856`): `proposer_cap` gains `learned` in its source
+  list, the arm field, and the poll-interval sibling (items 1, 4c); `diagnostician_done`
+  gains `case` (item 3); new rows for `knob_evaluated`, `knob_auto_reverted` and
+  `events_tampered` (item 4).
+- *Configuration* (`README.md:1001-1073`): `SPECSTRIDE_LEARNING`'s three values and the
+  fact that unset is `off`, `SPECSTRIDE_YIELD_POLL` as the operator override that still
+  wins (item 1), and `SPECSTRIDE_LEARNING_THROUGH` (item 6).
+- *The on-disk contract*: the new `applied.json` entry kinds (`evaluate`, auto-revert
+  fields) and `05-evaluate-design.md` as the design pointer beside `02-…` §5.
+
+**MoL.** `README.md` and the two reference docs already named per item. Add to *Three
+modes* / the supervision section: that a `specstride` stage declares its learning mode
+in `env` and inherits none (item 0); `supervise.py retro`, what it reads, where it
+writes, and that it never applies or reverts (item 5); the `configuration.learning`
+block, its five fields, and the `learning-decisions-changed` refusal (item 6). Keep the
+mermaid diagrams accurate if a step changes; do not add a diagram.
+
+**Roadmap.** In the final docs-only PR, flip the two roadmap README entries for the plan
+and this prompt from **Planned** to **Done** (or **Partial**, listing what remains), and
+update `roadmap/self-improvement-loops-shipped.md` with a dated table of what this run
+shipped, in the same format as its existing tables, replacing its stale *Still open*
+list.
+
 ## Working rules
 
 - One repo per commit. `/root/specstride` and `/root/mixture-of-loops` have distinct CI.
@@ -698,7 +745,8 @@ its own PR**, as `roadmap/rename-specstride-report.md` was. Print it as well. It
 contain:
 
 1. Per item: status (merged / PR open / draft / not started / blocked and why), every
-   decision you made that this prompt left open, and test files added or changed.
+   decision you made that this prompt left open, test files added or changed, and the
+   README and wiki sections rewritten.
 2. **An evidence table, one row per PR:** item | PR URL | CI run URL and conclusion
    (`gh run view <id> --json conclusion,url`) | `shellcheck -S error` result for every
    shell file touched | the verbatim pytest or unittest summary line, with the
