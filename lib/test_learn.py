@@ -825,7 +825,9 @@ def _cli_workdir(tmp_path, events):
 
 
 def _specstride_learn(wd, *args, env=None):
-    base = {k: v for k, v in os.environ.items() if not k.startswith(("SPECSTRIDE_", "WIGGUM_"))}
+    import specstride_env
+    prefixes = (specstride_env.ENV_PREFIX, specstride_env.LEGACY_ENV_PREFIX)
+    base = {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
     base.update(env or {})
     return subprocess.run(["bash", os.path.join(os.path.dirname(HERE), "specstride"), "learn",
                            "-w", str(wd), "--feature", "tf", *args],
