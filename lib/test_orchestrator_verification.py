@@ -1308,3 +1308,35 @@ def test_a_failing_evaluate_never_fails_the_phase(tmp_path):
     run_log = sorted((workdir / ".specstride" / "features" / "obs-lifecycle" / "runs")
                      .rglob("run.log"))[-1].read_text()
     assert "evaluating phase 1 failed" in run_log
+
+
+# ── the learning summary on every exit (item 4b) ─────────────────────────────
+def _run_logs(workdir):
+    runs = workdir / ".specstride" / "features" / "obs-lifecycle" / "runs"
+    return "\n".join(p.read_text() for p in sorted(runs.rglob("run.log")))
+
+
+def test_the_learning_summary_prints_on_run_end_and_on_run_stop(tmp_path):
+    _seed_applied(tmp_path, 1, 1234)
+    result, workdir, events = _run_orchestrator(
+        tmp_path, proposer_timeout=900, extra_env={"SPECSTRIDE_LEARNING": "suggest"})
+    assert _names(events)[-1] == "run_end", result.stdout + result.stderr
+    # phase 1 closed, so its hook evaluated the seed: no baseline was recorded with it
+    line = "learn: phase 1 proposer_timeout 900s→1234s [seed]: insufficient (no baseline recorded"
+    assert line in _run_logs(workdir) and line in result.stdout
+
+    stopped = tmp_path / "stopped"
+    stopped.mkdir()
+    _seed_applied(stopped, 1, 1234)
+    result, workdir, events = _run_orchestrator(
+        stopped, verdict="REJECTED", max_rejects="0", proposer_timeout=900,
+        extra_env={"SPECSTRIDE_LEARNING": "suggest"})
+    assert "run_stop" in _names(events), result.stdout + result.stderr
+    # phase 1 never closed: nothing evaluated the seed, and the summary says so
+    assert "learn: phase 1 proposer_timeout 900s→1234s [seed]: not evaluated yet" in _run_logs(workdir)
+
+
+def test_learning_off_prints_no_learning_summary(tmp_path):
+    _seed_applied(tmp_path, 1, 1234)
+    result, workdir, _events = _run_orchestrator(tmp_path, proposer_timeout=900)
+    assert "learn: phase 1" not in _run_logs(workdir) and "learn: phase 1" not in result.stdout

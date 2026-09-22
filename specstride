@@ -554,7 +554,11 @@ for o in keep[-5:]:
       --show)
         add_default
         [[ -n "$EV" && -e "$EV" ]] && args+=( --events "$EV" )
-        exec python3 "$LIB_DIR/learn.py" advise "${args[@]}" "${shape_args[@]}" "${PASSTHRU[@]}"
+        rc=0
+        python3 "$LIB_DIR/learn.py" advise "${args[@]}" "${shape_args[@]}" "${PASSTHRU[@]}" || rc=$?
+        # ... then where each applied decision stands: its latest evaluation, read-only
+        python3 "$LIB_DIR/learn.py" evaluate --report --feature-dir "$FEATURE_DIR" || true
+        exit "$rc"
         ;;
       --apply)
         add_default

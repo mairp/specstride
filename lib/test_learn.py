@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import time
 from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -498,7 +499,8 @@ def test_learn_py_is_invoked_only_from_the_proposer_launch_path_never_the_gate()
         ("orchestrator.sh", "observe --help"): 1,
         ("orchestrator.sh", "observe"): 1,
         ("orchestrator.sh", "evaluate --help"): 1,
-        ("orchestrator.sh", "evaluate"): 1,
+        ("orchestrator.sh", "evaluate"): 2,              # the phase_done hook, and --report at exit
+        ("specstride", "evaluate"): 1,                   # --report after --show's suggestions
         # the operator's CLI
         ("specstride", "advise"): 1,
         ("specstride", "apply"): 1,
@@ -1233,6 +1235,139 @@ def test_cli_evaluate_over_a_runs_tree(tmp_path):
     report = subprocess.run([sys.executable, os.path.join(HERE, "learn.py"), "evaluate", "--report",
                              "--feature-dir", str(tmp_path)], capture_output=True, text=True)
     assert "helped" in report.stdout and "MDE ±" in report.stdout
+
+
+# -- guardrails, auto-revert, quarantine (item 4b) ----------------------------
+def test_binomial_tails_are_exact():
+    assert abs(learn.binom_upper(0, 5, 0.3) - 1.0) < 1e-12
+    assert abs(learn.binom_upper(10, 10, 0.5) - 0.5 ** 10) < 1e-12
+    assert abs(learn.binom_lower(0, 10, 0.5) - 0.5 ** 10) < 1e-12
+
+
+def test_a_rate_guardrail_is_unknown_below_ten_never_ok():
+    g = learn._rate_guard(9, 9, 0, 6)
+    assert g["state"] == "unknown"
+    assert learn._rate_guard(1, 10, 2, 10)["state"] == "ok"
+    assert learn._rate_guard(8, 10, 0, 10)["state"] == "breach"
+
+
+def test_first_attempt_approval_alarms_in_both_directions():
+    assert learn._rate_guard(10, 10, 4, 10, both=True)["state"] == "breach"   # approval jumped
+    assert learn._rate_guard(0, 10, 8, 10, both=True)["state"] == "breach"    # approval collapsed
+    assert learn._rate_guard(4, 10, 4, 10, both=True)["state"] == "ok"
+
+
+def test_critic_input_size_uses_an_exact_rank_test():
+    base = [100, 110, 120, 130, 140, 150]
+    assert learn._size_guard([200] * 5 + [90], base)["state"] == "breach"    # 5 of 6 above: p = 0.0076
+    assert learn._size_guard([200] * 4 + [90, 90], base)["state"] == "ok"    # 4 of 6: p = 0.030
+    assert learn._size_guard([200] * 5, base)["state"] == "unknown"
+
+
+def test_critic_prompt_bytes_come_from_the_verdict_transcripts(tmp_path):
+    verdicts = tmp_path / "verdicts"
+    verdicts.mkdir()
+    when = time.strftime("%Y%m%d-%H%M%S", time.localtime(2000.0))
+    (verdicts / f"phase3.attempt1.{when}.txt").write_text(
+        "# Specstride critic transcript\nphase: 3\n\n═══════════ PROMPT ═══════════\nabcdé\n\n"
+        "═══════════ REPLY ═══════════\nVERDICT x: APPROVED\n")
+    events = _episode("r1", 3, [1.0], t0=1990.0)
+    s = learn.summarize(events, verdicts_dir=str(verdicts))
+    assert _attempt(s, "r1", 3, 1)["critic_prompt_bytes"] == len("abcdé".encode())
+
+
+def _verification_failed(phase, attempt):
+    return {"event": "verification_failed", "phase": phase, "attempt": attempt, "rc": 1}
+
+
+def test_a_guardrail_breach_reverts_even_when_the_primary_improved(tmp_path):
+    applied, events_file, entry = _applied_decision(tmp_path)
+    arm = (_arm(entry, [0.1] * 3, extra=[_verification_failed(3, 3)])
+           + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0))
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert result["label"] == "helped"
+    assert learn.breaches(result) == ["verification"]
+    revert = learn.act_on_evaluation(result, applied, events_file)
+    assert revert["auto"] is True and revert["guardrail"] == ["verification"]
+    assert revert["quarantined_value"] == entry["value"] and revert["backend"] == "prime:sol"
+    assert learn.effective_value(applied, "proposer_timeout", 3, "S1") == entry["previous"]
+    kinds = [e["action"] for e in learn._read_jsonl(applied)]
+    assert kinds == ["apply", "evaluate", "revert"]
+    assert learn._read_jsonl(applied)[1]["action_taken"] == "auto_reverted"
+    assert revert["evaluated_from"] == learn._read_jsonl(applied)[1]["run_id"]
+    names = [e["event"] for e in learn._read_jsonl(events_file)]
+    assert "knob_auto_reverted" in names and "knob_evaluated" in names
+
+
+def test_a_superseded_decision_skips_the_revert_instead_of_raising(tmp_path):
+    applied, events_file, entry = _applied_decision(tmp_path)
+    arm = (_arm(entry, [0.1] * 3, extra=[_verification_failed(3, 3)])
+           + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0))
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    # a manual apply lands between the read and the revert
+    newer = learn.apply_proposer_timeout(learn.summarize(_baseline_events(), phase_shapes={3: "S1"}), 3, 1800,
+                                          applied, run_id="learn-manual", shape="S1")
+    out = learn.act_on_evaluation(result, applied, events_file)
+    assert out["action"] == "evaluate" and out["action_taken"] == "skipped_superseded"
+    assert learn.effective_value(applied, "proposer_timeout", 3, "S1") == newer["value"]
+    assert [e for e in learn._read_jsonl(applied) if e["action"] == "revert"] == []
+
+
+def test_after_off_an_auto_revert_is_a_silent_no_op(tmp_path):
+    applied, events_file, entry = _applied_decision(tmp_path)
+    arm = (_arm(entry, [0.1] * 3, extra=[_verification_failed(3, 3)])
+           + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0))
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    learn.revert_all(applied)
+    before = learn._read_jsonl(applied)
+    assert learn.act_on_evaluation(result, applied, events_file) is None
+    assert learn._read_jsonl(applied) == before
+
+
+def _quarantined(tmp_path):
+    applied, events_file, entry = _applied_decision(tmp_path)
+    arm = (_arm(entry, [0.1] * 3, extra=[_verification_failed(3, 3)])
+           + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0))
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    learn.act_on_evaluation(result, applied, events_file)
+    return applied, entry, arm
+
+
+def test_quarantine_blocks_a_re_apply_and_force_overrides_it(tmp_path):
+    applied, entry, arm = _quarantined(tmp_path)
+    summary = learn.summarize(_baseline_events() + arm, phase_shapes={3: "S1"})
+    import pytest
+    with pytest.raises(learn.QuarantinedError) as err:
+        learn.apply_proposer_timeout(summary, 3, 1800, applied, shape="S1")
+    assert "learn-eval" in str(err.value)
+    forced = learn.apply_proposer_timeout(summary, 3, 1800, applied, shape="S1", force=True)
+    assert forced["force"] is True and forced["forced_over"]
+    # a different shape is a different key: no quarantine there
+    other = learn.summarize(_episode("b1", 3, _BASE_COSTS[:3], secs=1200.0, shape="S2")
+                            + _episode("b2", 3, _BASE_COSTS[3:], secs=1300.0, shape="S2", t0=2000.0),
+                            phase_shapes={3: "S2"})
+    assert learn.quarantine_block(applied, other, "proposer_timeout", 3, "S2", "prime:sol", entry["value"]) is None
+
+
+def test_quarantine_lifts_after_six_new_samples(tmp_path):
+    applied, entry, arm = _quarantined(tmp_path)
+    fresh = [_episode("new-1", 3, [1.0] * 3, t0=time.time() + 10),
+             _episode("new-2", 3, [1.0] * 3, t0=time.time() + 100)]
+    summary = learn.summarize(_baseline_events() + arm + fresh[0] + fresh[1], phase_shapes={3: "S1"})
+    assert learn.quarantine_block(applied, summary, "proposer_timeout", 3, "S1", "prime:sol",
+                                  entry["value"]) is None
+
+
+def test_cli_apply_exits_four_on_quarantine(tmp_path):
+    applied, entry, arm = _quarantined(tmp_path)
+    events = _write_events(tmp_path, [{k: v for k, v in e.items() if k != "_src"}
+                                      for e in _baseline_events() + arm])
+    cmd = [sys.executable, os.path.join(HERE, "learn.py"), "apply", "--events", events, "--phase", "3",
+           "--default", "1800", "--feature-dir", str(tmp_path), "--phase-shape", "S1"]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    assert r.returncode == 4 and "quarantined" in r.stderr and "learn-eval" in r.stderr
+    r = subprocess.run(cmd + ["--force"], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
 
 
 # -- observe: the §5.4 per-phase observation document ------------------------
