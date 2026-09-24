@@ -1384,6 +1384,21 @@ def grounding_snapshot(paths, workdir, search_dirs=None, priority=None, anchors=
                     "file is missing from disk)" % omitted)
             break
         full = _resolve_cited(p, workdir, search_dirs, members=members, hint=hint)
+        if full is None and workdir and any(ch in p for ch in "*?["):
+            # A wildcard citation (`examples/migrations/*.yaml`, a task's own path)
+            # names every file it matches; taken literally it exists nowhere and the
+            # snapshot said MISSING for files that were all on disk (agentic-netops-srl
+            # 004 phases 7 and 10, 2026-09-24: false rejections).
+            matches = sorted(m for m in glob.glob(os.path.join(workdir, p))
+                             if os.path.isfile(m))
+            if matches:
+                rels = [os.path.relpath(m, workdir) for m in matches]
+                lines.append(
+                    "- `%s` — present: wildcard matches %d file(s) on disk: %s" % (
+                        p, len(rels), ", ".join("`%s`" % r for r in rels[:20])
+                        + (" …" if len(rels) > 20 else "")))
+                shown += 1
+                continue
         if full is None:
             # W11: a cited path that is a DECLARED build export of a workspace member but
             # does not resolve is a build that did not run — an actionable grounding gap,
