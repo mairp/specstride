@@ -1392,3 +1392,21 @@ def test_diagnostician_done_carries_the_case(tmp_path, monkeypatch):
         done = [json.loads(l) for l in events.read_text().splitlines()
                 if json.loads(l)["event"] == "diagnostician_done"][-1]
         assert done["case"] == case   # a literal string, never dropped as None
+
+
+# ── a wildcard citation names every file it matches ─────────────────────────
+def test_wildcard_citation_grounds_its_matches():
+    """A task path such as `examples/migrations/*.yaml` exists nowhere literally, and
+    the snapshot said MISSING for four files that were all on disk (agentic-netops-srl
+    004 phases 7 and 10, 2026-09-24: false rejections). A wildcard that matches must
+    read present and name its matches; one that matches nothing still reads MISSING."""
+    with tempfile.TemporaryDirectory() as d:
+        os.makedirs(os.path.join(d, "examples", "migrations"))
+        for name in ("vpls-plan.yaml", "irb-plan.yaml"):
+            open(os.path.join(d, "examples", "migrations", name), "w").write("a: 1\n")
+        snap = grounding_snapshot(["examples/migrations/*.yaml", "examples/none/*.yaml"], d)
+        assert "`examples/migrations/*.yaml` — **MISSING**" not in snap, snap
+        assert "wildcard matches 2 file(s)" in snap, snap
+        assert "`examples/migrations/irb-plan.yaml`" in snap
+        assert "`examples/migrations/vpls-plan.yaml`" in snap
+        assert "- `examples/none/*.yaml` — **MISSING**" in snap, snap
