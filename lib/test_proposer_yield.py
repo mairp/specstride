@@ -451,3 +451,83 @@ def test_the_orchestrator_tells_the_proposer_the_protocol_exists(tmp_path):
     # The point of the block, stated where the agent will read it.
     assert "Do NOT sleep, poll, tail" in out
     assert "exit_code_file" in out and "file_stable" in out
+
+
+# ── the agent is never left without the protocol ────────────────────────────
+def _budget_script(tmp_path, name, *, assembled=200_000, protected=None):
+    """Drive the real append_budgeted_block against a prompt that is already over
+    budget, as it was for every phase from 5 on in agentic-netops-srl 004."""
+    orchestrator = Path(__file__).parents[1] / "orchestrator.sh"
+    source = orchestrator.read_text()
+    body = source.split("append_budgeted_block() {", 1)[1].split("\n}\n", 1)[0]
+    out = tmp_path / "prompt.md"
+    out.write_text("x" * assembled)
+    events = tmp_path / "events.log"
+    env_line = (f"SPECSTRIDE_PROMPT_PROTECTED_BLOCKS='{protected}'\n"
+                if protected is not None else "")
+    script = (
+        "set -uo pipefail\n"
+        "SPECSTRIDE_PROMPT_MAX_BYTES=180000\n"
+        + env_line
+        + ': "${SPECSTRIDE_PROMPT_PROTECTED_BLOCKS=yield_contract}"\n'
+        "log() { echo \"$*\" >&2; }\n"
+        f"specstride_emit() {{ echo \"$1\" >> {events}; }}\n"
+        "block() { echo 'THE BLOCK BODY'; }\n"
+        "append_budgeted_block() {" + body + "\n}\n"
+        f"append_budgeted_block {out} {name} block\n"
+    )
+    result = subprocess.run(["bash", "-c", script], text=True, capture_output=True)
+    emitted = events.read_text().split() if events.exists() else []
+    return out.read_text(), result.stderr, emitted
+
+
+def test_the_yield_contract_is_kept_even_over_the_prompt_budget(tmp_path):
+    """Appended last, it was the block dropped whenever the rest of the prompt was
+    already over budget. That was every phase from 5 on in agentic-netops-srl 004,
+    and it cost phase 15 nineteen of its thirty iterations."""
+    prompt, log, emitted = _budget_script(tmp_path, "yield_contract")
+    assert prompt.endswith("THE BLOCK BODY\n")
+    assert "kept over budget (protected)" in log
+    assert emitted == ["prompt_block_protected"]
+
+
+def test_an_unprotected_block_is_still_dropped_over_budget(tmp_path):
+    prompt, log, emitted = _budget_script(tmp_path, "design_context")
+    assert "THE BLOCK BODY" not in prompt
+    assert "dropped" in log
+    assert emitted == ["prompt_block_dropped"]
+
+
+def test_the_protected_list_is_configurable(tmp_path):
+    prompt, _, emitted = _budget_script(tmp_path, "yield_contract", protected="")
+    assert "THE BLOCK BODY" not in prompt
+    assert emitted == ["prompt_block_dropped"]
+
+
+def test_short_passes_in_a_row_are_told_to_yield(tmp_path):
+    """Passes that end within seconds with no evidence and no yield are an agent
+    waiting on a job by ending its turn. No breaker sees them, so the next pass
+    is told how to yield, including this attempt's artifact path."""
+    result, events = _run(tmp_path, _agent(tmp_path, "exit 0\n"), max_iter=3)
+    prompts = (tmp_path / "prompts.log").read_text().split("===PASS-END===")
+    assert "short passes in a row" in result.stderr
+    assert [e["consec"] for e in events if e["event"] == "iter_short_pass"] == ["2", "3"] \
+        or [e["consec"] for e in events if e["event"] == "iter_short_pass"] == [2, 3]
+    # Passes 1 and 2 carry no nudge; pass 3 does, with the real artifact path.
+    assert "without evidence" not in prompts[0] and "without evidence" not in prompts[1]
+    assert "You have ended 2 passes in a row" in prompts[2]
+    assert "phase1-attempt1-run-yield.json" in prompts[2]
+    assert "specstride-pass-yield/v1" in prompts[2]
+
+
+def test_the_short_pass_nudge_can_be_switched_off(tmp_path):
+    result, events = _run(tmp_path, _agent(tmp_path, "exit 0\n"), max_iter=3,
+                          env_extra={"SPECSTRIDE_SHORT_PASS_NUDGE_AFTER": "0"})
+    assert "iter_short_pass" not in _names(events)
+    assert "You have ended" not in (tmp_path / "prompts.log").read_text()
+
+
+def test_a_long_pass_resets_the_short_pass_count(tmp_path):
+    result, events = _run(tmp_path, _agent(tmp_path, "exit 0\n"), max_iter=3,
+                          env_extra={"SPECSTRIDE_SHORT_PASS_SEC": "0"})
+    assert "iter_short_pass" not in _names(events)

@@ -1357,7 +1357,17 @@ emit_evidence_contract() {
 # window together. A new block is therefore appended only when the prompt it is
 # joining still has room for it, and a block that does not fit is SAID OUT LOUD —
 # an agent that silently never learned it could yield is the failure this guards.
+#
+# Saying it out loud was not enough. The yield contract is appended LAST, so once
+# the unbudgeted parts of the prompt alone exceed the budget, it is the one block
+# that is always dropped (agentic-netops-srl 004, 2026-09-24/25: every phase from
+# 5 on assembled 190-293 KB, so `yield_contract` was dropped every phase). The
+# agent never learned it could yield. In phase 15 it spent passes 9-17 ending
+# after ~30 s "to wait on the chain", 19 of 30 iterations. A protected block is
+# about 2 KB and costs nothing next to what it prevents, so it is kept over budget
+# (and said out loud) instead of dropped.
 : "${SPECSTRIDE_PROMPT_MAX_BYTES:=180000}"
+: "${SPECSTRIDE_PROMPT_PROTECTED_BLOCKS=yield_contract}"   # set it empty to protect nothing
 append_budgeted_block() {
   local out="$1" name="$2"; shift 2
   local block have need
@@ -1365,7 +1375,12 @@ append_budgeted_block() {
   [[ -n "$block" ]] || return 0
   have="$(wc -c < "$out" 2>/dev/null || echo 0)"
   need="$(printf '%s' "$block" | wc -c)"
-  if (( SPECSTRIDE_PROMPT_MAX_BYTES > 0 && have + need > SPECSTRIDE_PROMPT_MAX_BYTES )); then
+  if (( SPECSTRIDE_PROMPT_MAX_BYTES > 0 && have + need > SPECSTRIDE_PROMPT_MAX_BYTES )) \
+     && [[ " ${SPECSTRIDE_PROMPT_PROTECTED_BLOCKS//,/ } " == *" $name "* ]]; then
+    log ">>> prompt block '$name' kept over budget (protected): ${have}B already assembled + ${need}B exceeds SPECSTRIDE_PROMPT_MAX_BYTES=${SPECSTRIDE_PROMPT_MAX_BYTES}"
+    specstride_emit prompt_block_protected block "$name" assembled_bytes "$have" \
+      block_bytes "$need" budget_bytes "$SPECSTRIDE_PROMPT_MAX_BYTES"
+  elif (( SPECSTRIDE_PROMPT_MAX_BYTES > 0 && have + need > SPECSTRIDE_PROMPT_MAX_BYTES )); then
     log ">>> prompt block '$name' dropped: ${have}B already assembled + ${need}B exceeds SPECSTRIDE_PROMPT_MAX_BYTES=${SPECSTRIDE_PROMPT_MAX_BYTES}"
     specstride_emit prompt_block_dropped block "$name" assembled_bytes "$have" \
       block_bytes "$need" budget_bytes "$SPECSTRIDE_PROMPT_MAX_BYTES"
