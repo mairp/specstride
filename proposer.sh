@@ -1649,6 +1649,42 @@ watchdog_kill_class() {
 # (PROGRESS.md and the loop's state) does NOT count as progress -- only real work does.
 : "${SPECSTRIDE_PROPOSER_MAX_NOPROGRESS:=3}"
 consec_noprogress=0
+# Short-pass nudge. A pass that ends cleanly within seconds, with no evidence and no
+# yield, is almost always an agent ending its turn to WAIT on a background job. None
+# of the breakers sees it: it is not an error, it is not killed, and the job it waits
+# on keeps writing files, so the no-progress breaker counts it as progress. Each one
+# still burns an iteration (agentic-netops-srl 004 phase 15, 2026-09-25: passes 9-11
+# and 13-17 lasted ~30 s each, 19 of 30 iterations gone before the agent was told
+# about the yield by hand). After SPECSTRIDE_SHORT_PASS_NUDGE_AFTER such passes in a
+# row, the next pass is told, in its own prompt, to yield instead. This is advice, not
+# a breaker: nothing halts on it.
+: "${SPECSTRIDE_SHORT_PASS_SEC:=180}"
+: "${SPECSTRIDE_SHORT_PASS_NUDGE_AFTER:=2}"
+consec_short=0
+SHORT_PASS_BLOCK=""
+short_pass_nudge_block() {
+  local count="$1"
+  cat <<EOF
+## You have ended ${count} passes in a row within ${SPECSTRIDE_SHORT_PASS_SEC}s without evidence
+Each of those passes cost an iteration of this attempt. If you are ending passes to
+WAIT for a job that is still running, stop doing that: end THIS pass with a YIELD so
+specstride waits with no model session open and gives the iteration back.
+Write this file atomically (tmp then \`mv\`), then stop without writing evidence:
+  ${YIELD_ARTIFACT}
+\`\`\`json
+{"contract": "specstride-pass-yield/v1",
+ "reason": "one line: what you are waiting on and why the evidence needs it",
+ "job": {"mode": "adopt", "pid": 12345},
+ "resume_when": {"kind": "pid"},
+ "deadline_sec": 7200,
+ "on_resume": "exactly what the next pass should do with the result"}
+\`\`\`
+Use \`"mode": "launch"\` with an \`argv\` to have specstride start the job itself, or
+\`"adopt"\` with the pid of a job you already started under \`setsid\`. \`resume_when.kind\`
+can also be exit_code_file, file_exists, file_stable or grep (+ \`path\`, \`pattern\`).
+\`deadline_sec\` is REQUIRED and must cover the whole wait.
+EOF
+}
 FINALIZER="$LIB_DIR/finalize_invocation.py"
 BREAKER_STATE="$STATE_DIR/.breaker-state.$RUN_ID.json"
 rm -f "$BREAKER_STATE"
@@ -1695,6 +1731,10 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   if [[ -n "$YIELD_RESUME_BLOCK" ]]; then
     pass_prompt="${pass_prompt}"$'\n\n'"${YIELD_RESUME_BLOCK}"
     YIELD_RESUME_BLOCK=""
+  fi
+  if [[ -n "$SHORT_PASS_BLOCK" ]]; then
+    pass_prompt="${pass_prompt}"$'\n\n'"${SHORT_PASS_BLOCK}"
+    SHORT_PASS_BLOCK=""
   fi
   # Consumed: the sidecar describes the pass that just ended, never an older one.
   rm -f "$KILL_SIDECAR" "$KILL_SIDECAR.path"
@@ -1845,6 +1885,21 @@ for (( i=1; i<=MAX_ITER; i++ )); do
     specstride_emit evidence_written file "$(basename "$EVIDENCE")" iters "$i"
     echo "proposer.sh: evidence appeared after pass $i ($EVIDENCE)." >&2
     exit 0
+  fi
+
+  # A yield `continue`d above, so only passes that neither yielded nor produced
+  # evidence get here. A watchdog kill is not voluntary, so it never counts.
+  pass_elapsed=$(( $(date +%s) - pass_started_at - 1 ))
+  if (( SPECSTRIDE_SHORT_PASS_NUDGE_AFTER > 0 )) && [[ -z "$pass_kill_reason" ]] \
+     && (( pass_elapsed < SPECSTRIDE_SHORT_PASS_SEC )); then
+    consec_short=$(( consec_short + 1 ))
+    if (( consec_short >= SPECSTRIDE_SHORT_PASS_NUDGE_AFTER )); then
+      echo "proposer.sh: pass $i ended after ${pass_elapsed}s with no evidence and no yield — $consec_short short passes in a row; the next pass is told to yield instead of waiting." >&2
+      specstride_emit iter_short_pass iter "$i" elapsed "$pass_elapsed" consec "$consec_short"
+      SHORT_PASS_BLOCK="$(short_pass_nudge_block "$consec_short")"
+    fi
+  else
+    consec_short=0
   fi
 
   # Structured Prime path: consume THIS exact invocation's durable result.json,
