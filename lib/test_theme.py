@@ -130,3 +130,15 @@ def test_forbidden_glyphs():
         assert T.forbidden(ch), ch
     for ch in "━╍┿✓✗•·→›⠹┏┛│":
         assert not T.forbidden(ch), ch
+
+
+def test_terminal_sources_draw_no_forbidden_glyph():
+    import os
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("banner.py", "present.py", "theme.py"):
+        with open(os.path.join(here, name), encoding="utf-8") as fh:
+            for n, line in enumerate(fh, 1):
+                if "_EMOJI_BMP" in line or line.lstrip().startswith(('"©', '"✂')):
+                    continue  # the forbidden table itself
+                bad = [ch for ch in line if T.forbidden(ch)]
+                assert not bad, (name, n, bad)

@@ -873,6 +873,12 @@ else
   CUR_PHASE="$(derive_phase)"
 fi
 
+# Detect the terminal background once, while this script still owns the terminal:
+# banner.py and the backgrounded present.py both read SPECSTRIDE_BANNER_BG.
+if [[ -t 1 && -z "${SPECSTRIDE_BANNER_BG:-}" && -f "$LIB_DIR/theme.py" ]]; then
+  SPECSTRIDE_BANNER_BG="$(python3 "$LIB_DIR/theme.py" bg)" || SPECSTRIDE_BANNER_BG=""
+  export SPECSTRIDE_BANNER_BG
+fi
 print_banner
 log ""
 log "specstride orchestrator start $(date -Is)"

@@ -31,14 +31,37 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
-RESET = "\033[0m"; BOLD = "\033[1m"; DIM = "\033[2m"; ITALIC = "\033[3m"
-GREEN = "\033[32m"; RED = "\033[31m"; YELLOW = "\033[33m"; CYAN = "\033[36m"
-MAGENTA = "\033[35m"; BLUE = "\033[34m"; GRAY = "\033[90m"
-# Bright variants — the workhorses of the timeline: they pop against the gray
-# timestamps so the eye lands on the *action*, not the clock.
-BGREEN = "\033[92m"; BRED = "\033[91m"; BYELLOW = "\033[93m"; BCYAN = "\033[96m"
-BMAGENTA = "\033[95m"; BBLUE = "\033[94m"; BWHITE = "\033[97m"
+import theme  # noqa: E402  (color roles, depth and glyphs: lib/theme.py)
+import banner  # noqa: E402  (the gate rail the card shares with the splash)
+
+# The names below are kept so every narrate() line reads as before, but each
+# one is now a theme ROLE: verdicts map to approved/reject/warn, the phase
+# diamond and active marks to accent, timestamps and dividers to muted, and
+# everything else to ink. apply_theme() (re)binds them for the resolved depth.
+_ROLE_OF = {
+    "GREEN": "approved", "BGREEN": "approved",
+    "RED": "reject", "BRED": "reject",
+    "YELLOW": "warn", "BYELLOW": "warn",
+    "CYAN": "accent", "BCYAN": "accent",
+    "GRAY": "muted", "DIM": "muted",
+    "MAGENTA": "brand", "BMAGENTA": "brand", "BLUE": "brand", "BBLUE": "brand",
+    "BWHITE": "brand",
+}
+THEME = theme.Theme("16", "dark")
 CLEAR = "\033[2J\033[H"; CLR_EOL = "\033[K"
+
+
+def apply_theme(th):
+    global THEME, RESET, BOLD, ITALIC
+    THEME = th
+    for name, role in _ROLE_OF.items():
+        globals()[name] = th.sgr(role)
+    RESET = th.reset
+    BOLD = th.bold
+    ITALIC = "\033[3m" if th.on else ""
+
+
+apply_theme(THEME)
 
 SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 # A small "pulse" ramp used to breathe the heartbeat line so an idle-but-working
@@ -46,15 +69,10 @@ SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 PULSE = "▁▂▃▄▅▆▇█▇▆▅▄▃▂"
 DETAILS = ("milestones", "tools", "full")
 
-_COLOR_KEYS = ("RESET", "BOLD", "DIM", "ITALIC", "GREEN", "RED", "YELLOW", "CYAN",
-               "MAGENTA", "BLUE", "GRAY", "BGREEN", "BRED", "BYELLOW", "BCYAN",
-               "BMAGENTA", "BBLUE", "BWHITE")
-
 
 def color(on):
     if not on:
-        for k in _COLOR_KEYS:
-            globals()[k] = ""
+        apply_theme(theme.Theme("none"))
 
 
 def tool_style(name):
@@ -73,14 +91,14 @@ def tool_style(name):
     if n in ("grep", "glob", "ls"):
         return (BBLUE, "❍")
     if n in ("task", "agent"):
-        return (MAGENTA, "⚑")
+        return (MAGENTA, "»")
     if n in ("webfetch", "websearch"):
         return (BLUE, "⇆")
     if n in ("todowrite", "taskcreate", "taskupdate", "taskget", "tasklist"):
-        return (GRAY, "☑")
+        return (GRAY, "≡")
     if n.startswith("mcp__"):
-        return (CYAN, "⚙")
-    return (CYAN, "⚒")
+        return (CYAN, "◇")
+    return (CYAN, "›")
 
 
 def hhmmss(ev):
@@ -196,8 +214,8 @@ class Totals:
             status = ev.get("status")
             target = _summary(ev, "target", "summary", "targets")
             action = " %s" % status if status else ""
-            self._set_activity("⚒ %s%s %s" % (tool, action, target[:40]) if target
-                               else "⚒ %s%s" % (tool, action))
+            self._set_activity("› %s%s %s" % (tool, action, target[:40]) if target
+                               else "› %s%s" % (tool, action))
         elif e == "agent_text":
             self._set_activity("agent responding")
         elif e == "evidence_writing":
@@ -260,7 +278,7 @@ def narrate(ev, detail="tools", debug=False):
     if e == "_reopen":
         return f"{BCYAN}── new run detected — following it ──{RESET}"
     if e == "run_start":
-        return f"{stamp}  {BOLD}{BWHITE}▶ run start{RESET} {DIM}—{RESET} " \
+        return f"{stamp}  {BOLD}{BWHITE}┏ run start{RESET} {DIM}—{RESET} " \
                f"{BCYAN}{ev.get('phases','?')}{RESET} phases · " \
                f"{BMAGENTA}{ev.get('proposer','?')}{RESET}{DIM}→{RESET}{BYELLOW}{ev.get('critic','?')}{RESET} · " \
                f"resume @ phase {BOLD}{ev.get('resume','?')}{RESET}"
@@ -334,11 +352,11 @@ def narrate(ev, detail="tools", debug=False):
         if lvl < 2:
             return None
         fragment = "final" if _event_bool(ev.get("final_fragment")) else "partial"
-        return f"{stamp}  {BWHITE}💬{RESET} {DIM}{fragment}{RESET} {ITALIC}{GRAY}{ev.get('text','')}{RESET}"
+        return f"{stamp}  {GRAY}│{RESET} {DIM}{fragment}{RESET} {ITALIC}{GRAY}{ev.get('text','')}{RESET}"
     if e == "evidence_writing":
         exact = ev.get("match") or ev.get("detection_reason")
         suffix = f" {DIM}· {exact}{RESET}" if exact else ""
-        return f"{stamp}  {BOLD}{BMAGENTA}⬆ evidence being written{RESET} " \
+        return f"{stamp}  {BOLD}{BMAGENTA}↑ evidence being written{RESET} " \
                f"{DIM}({ev.get('tool','?')} {ev.get('target','')}){RESET}{suffix}"
     if e == "agent_diagnostic":
         if lvl < 1:
@@ -379,7 +397,7 @@ def narrate(ev, detail="tools", debug=False):
         if not failed and lvl < 2:
             return None
         col = BRED if failed else BGREEN
-        glyph = "⚠" if failed else "✓"
+        glyph = "!" if failed else "✓"
         bits = []
         if _present(ev.get("http_status")):
             bits.append(f"{DIM}HTTP {ev['http_status']}{RESET}")
@@ -397,7 +415,7 @@ def narrate(ev, detail="tools", debug=False):
         status = ev.get("status")
         err = _event_bool(ev.get("is_error")) or status in ("error", "timeout", "cancelled", "degraded")
         label = status or ("error" if err else "success")
-        mark = f"{BRED}⏺ pass {label}{RESET}" if err else f"{GREEN}⏺ pass done{RESET}"
+        mark = f"{BRED}◦ pass {label}{RESET}" if err else f"{GREEN}◦ pass done{RESET}"
         bits = []
         cost_value = ev.get("cost") if _present(ev.get("cost")) else ev.get("cost_usd")
         if _present(cost_value):
@@ -426,7 +444,7 @@ def narrate(ev, detail="tools", debug=False):
     if e == "evidence_present":
         return f"{stamp}  {BOLD}{BGREEN}✓ evidence present{RESET} {DIM}(resume → critic){RESET}"
     if e == "critic_start":
-        return f"{stamp}  {BYELLOW}⚖ critic judging{RESET} {DIM}phase {p}, {ev.get('provider','?')}{RESET}"
+        return f"{stamp}  {BWHITE}┿ critic judging{RESET} {DIM}phase {p}, {ev.get('provider','?')}{RESET}"
     if e == "verdict":
         res = ev.get("result", "?")
         if res == "APPROVED":
@@ -610,7 +628,7 @@ def run_timeline(path, follow, detail, debug):
                 frame = SPINNER[spin_i % len(SPINNER)]
                 pulse = PULSE[spin_i % len(PULSE)]
                 if stop_requested(path):
-                    status = f"{BOLD}{BYELLOW}⏸ stop requested — finishing current pass…{RESET}"
+                    status = f"{BOLD}{BYELLOW}‖ stop requested — finishing current pass…{RESET}"
                 else:
                     dwell = fmt_secs(time.time() - tr.activity_since)
                     status = f"{BWHITE}{tr.activity}{RESET} {DIM}·{RESET} {BYELLOW}{dwell}{RESET}"
@@ -634,7 +652,7 @@ class State:
         self.phases_total = None
         self.cur_phase = None
         self.cur_title = ""
-        self.last_verdict = {}     # phase -> "✓"/"✗n"
+        self.last_verdict = {}     # phase -> "A" approved / "R" rejected
         self.attempt = {}          # phase -> attempt
         self.proposer = self.critic = "?"
         self.last_reason = ""
@@ -676,10 +694,8 @@ class State:
         elif e == "verdict":
             res = ev.get("result")
             ph = str(ev.get("phase"))
-            if res == "APPROVED":
-                self.last_verdict[ph] = f"{GREEN}✓{RESET}"
-            else:
-                self.last_verdict[ph] = f"{RED}✗{ev.get('attempt','?')}{RESET}"
+            self.last_verdict[ph] = "A" if res == "APPROVED" else "R"
+            if res != "APPROVED":
                 self.last_reason = ev.get("reason", "")
         elif e == "run_stop":
             self.outcome = "STOPPED — resume with: specstride resume" \
@@ -687,25 +703,38 @@ class State:
         elif e == "run_end":
             self.outcome = ev.get("outcome", "done")
 
+    def rail_states(self):
+        """The banner's A/R/C/P states, one per phase (1..total), or None."""
+        total = self.phases_total
+        if not str(total).isdigit() or int(total) < 1:
+            return None
+        out = []
+        for i in range(1, int(total) + 1):
+            v = self.last_verdict.get(str(i))
+            if v:
+                out.append(v)
+            elif str(i) == str(self.cur_phase):
+                out.append("C")
+            else:
+                out.append("P")
+        return out
+
+    def _rail_lines(self, cols):
+        """The same rail the splash printed, so startup and live read as one object."""
+        states = self.rail_states()
+        if not states:
+            return []
+        rail = banner.render_rail(states, max(20, cols - 3), THEME, theme.ascii_mode())
+        return ["  " + ln if ln else "" for ln in rail] + [""]
+
     def _header_lines(self, spin_frame):
         lines = []
         total = self.phases_total
-        bar = ""
-        if str(total).isdigit():
-            # Phases are numbered contiguously 1..total; the trail has one dot
-            # per executable phase and the denominator is `total` (not total-1).
-            for i in range(1, int(total) + 1):
-                mark = self.last_verdict.get(str(i))
-                if mark:
-                    bar += mark + " "
-                elif str(i) == str(self.cur_phase):
-                    bar += f"{YELLOW}●{RESET} "
-                else:
-                    bar += f"{DIM}·{RESET} "
+        att = self.attempt.get(str(self.cur_phase))
+        attempt = f" {DIM}(attempt {att}){RESET}" if att and str(att) not in ("1", "None") else ""
         cur = self.cur_phase if self.cur_phase is not None else "?"
         head = f"{BOLD}{cur}{RESET}" + (f"/{int(total)}" if str(total).isdigit() else "")
-        trail = f"  {bar.strip()}" if bar else ""
-        lines.append(f"  phase {head}{trail}  {DIM}{self.cur_title[:40]}{RESET}")
+        lines.append(f"  phase {head}{attempt}  {DIM}{self.cur_title[:40]}{RESET}")
         idle = int(time.time() - self.last_event_epoch)
         heartbeat = f" {DIM}(+{idle}s){RESET}" if idle > 2 else ""
         lines.append(f"  {BCYAN}{spin_frame}{RESET} {BWHITE}{self.totals.activity}{RESET}"
@@ -717,9 +746,7 @@ class State:
         cols = shutil.get_terminal_size((100, 24)).columns
         rows = shutil.get_terminal_size((100, 24)).lines
         feed_rows = max(4, rows - 9)
-        title = f"─ specstride · {self.proposer}→{self.critic} "
-        lines = [f"{BOLD}{CYAN}┌{title}{'─' * max(0, cols - len(title) - 2)}┐{RESET}"]
-        lines += self._header_lines(spin_frame)
+        lines = [""] + self._rail_lines(cols) + self._header_lines(spin_frame)
         lines.append(f"{DIM}  {'┄' * max(10, cols - 4)}{RESET}")
         for ts, text in self.feed[-feed_rows:]:
             lines.append(f"  {DIM}{ts}{RESET} {text}"[: cols + 30])  # +30 slack for codes
@@ -760,13 +787,28 @@ def run_card(path, detail):
                 spin_i += 1
                 frame = SPINNER[spin_i % len(SPINNER)] if not st.outcome else "■"
                 if stop_requested(path) and not st.outcome:
-                    st.totals._set_activity("⏸ stop requested — finishing current pass…")
+                    st.totals._set_activity("‖ stop requested — finishing current pass…")
                 sys.stdout.write(CLEAR + st.render(frame) + "\n")
                 sys.stdout.flush()
                 last_render = now
             time.sleep(0.25)
     except KeyboardInterrupt:
         sys.stdout.write("\n")
+
+
+def resolve_theme(args, environ=None):
+    """Color through lib/theme.py: --no-color, NO_COLOR and FORCE_COLOR are honored;
+    card mode redraws a screen, so it stays colored off a TTY unless told not to.
+    The background comes from SPECSTRIDE_BANNER_BG (the orchestrator exports what
+    it detected once) or COLORFGBG; a presenter running in the background must
+    never query the terminal itself."""
+    environ = os.environ if environ is None else environ
+    arg = "never" if args.no_color else None
+    if arg is None and args.mode == "card" and not environ.get("NO_COLOR"):
+        arg = "always"
+    depth = theme.resolve_depth(arg, sys.stdout, environ)
+    bg = theme.detect_bg(sys.stdout, environ, query=lambda: None)
+    return theme.Theme(depth, bg)
 
 
 def main():
@@ -783,8 +825,7 @@ def main():
     ap.add_argument("--no-color", action="store_true")
     args = ap.parse_args()
 
-    if args.no_color or (not sys.stdout.isatty() and args.mode != "card"):
-        color(False)
+    apply_theme(resolve_theme(args))
     if args.detail not in DETAILS:
         args.detail = "tools"
 

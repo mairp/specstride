@@ -309,3 +309,16 @@ def forbidden(ch):
     cp = ord(ch)
     return (0x1FB00 <= cp <= 0x1FBFF or 0x1F000 <= cp <= 0x1FAFF
             or 0x2600 <= cp <= 0x26FF or cp == 0xFE0F or ch in _EMOJI_BMP)
+
+
+if __name__ == "__main__":
+    # `theme.py bg`: detect the background once for a whole run. The orchestrator
+    # exports the answer as SPECSTRIDE_BANNER_BG before the presenter starts,
+    # because a background job must never query the terminal itself.
+    if sys.argv[1:] == ["bg"]:
+        class _Interactive:
+            def isatty(self):
+                return sys.stdin.isatty() or sys.stderr.isatty()
+        print(detect_bg(_Interactive()))
+    else:
+        sys.exit("usage: theme.py bg")
