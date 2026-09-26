@@ -1,5 +1,11 @@
 # Specstride
 
+[![CI](https://img.shields.io/github/actions/workflow/status/mairp/specstride/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white)](https://github.com/mairp/specstride/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=for-the-badge)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Dependencies](https://img.shields.io/badge/deps-stdlib_only-2ea44f?style=for-the-badge)
+[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)](wiki/Telemetry.md)
+
 **Specstride**. From specs to tested code. An autonomous coding
 orchestrator that steers your agent through implementation, critic review, and
 verification, phase by phase: a spec-driven agent loop with a critic gate,
@@ -14,13 +20,6 @@ it shows the feature's real phases, and each gate opens only on approved evidenc
 ([animated version](docs/media/specstride.gif)). The inner loop is the Ralph
 technique (fresh context every pass); Specstride adds the gate that holds each
 phase until its evidence is approved.
-
-![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Bash](https://img.shields.io/badge/Bash-orchestrator-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)
-![Dependencies](https://img.shields.io/badge/deps-stdlib_only-2ea44f?style=for-the-badge&logo=gnu&logoColor=white)
-![LLM](https://img.shields.io/badge/LLM-Claude_·_Codex_·_bebop_·_Prime_Agent-8A3FFC?style=for-the-badge&logo=anthropic&logoColor=white)
-![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)
-![Events](https://img.shields.io/badge/Events-JSONL_stream-000000?style=for-the-badge&logo=json&logoColor=white)
 
 **Try it in a minute** (needs Python 3.13, Bash, the [Claude Code](https://docs.anthropic.com/claude-code) CLI for
 the proposer and `ANTHROPIC_API_KEY` for the critic, or swap in `codex` and `OPENAI_API_KEY`):
@@ -95,6 +94,35 @@ the phases the machines genuinely can't settle.
 > the [CLI](./wiki/CLI-Reference.md), [spec formats](./wiki/Spec-Formats.md), the
 > [on-disk contract](./wiki/On-Disk-Contract.md), [hardening](./wiki/Hardening.md),
 > [telemetry](./wiki/Telemetry.md), and [configuration](./wiki/Configuration.md).
+
+## Pair it with mixture-of-loops
+
+[mixture-of-loops](https://github.com/mairp/mixture-of-loops) (MoL) is an Agent Skills
+package for Claude Code, Codex, dsh, pi and prime. You point it at a Spec Kit feature, it
+reads all of the feature's artifacts, and it writes a **launch contract** plus an
+unattended Bash launcher that runs Specstride for you:
+
+```text
+/mixture-of-loops derive a pipeline for specs/007-example            # generate only
+/mixture-of-loops derive a pipeline for specs/007-example and run it # generate, gate, run
+```
+
+Specstride answers "is this phase really done?". MoL answers "is this the right run to
+start, and did it finish?". Together:
+
+| On its own, Specstride… | With MoL on top |
+|---|---|
+| runs whatever verification commands you pass it | the commands come only from what `plan.md` and `tasks.md` literally declare, each traced from source phase to Specstride gate, so a check the plan named can't be silently skipped. Ambiguous or conflicting declarations become blockers, not guesses |
+| starts from the flags you type | starts from a validated contract that hashes every source file; a changed spec makes the launcher refuse instead of running against stale inputs |
+| stops on a transient failure and waits for you to `specstride resume` | a supervisor relaunches only stops the run's own records classify as transient, within a budget the contract declares, and announces each relaunch |
+| leaves you to read `run.log` or `specstride watch` | the harness reports progress read from the run's telemetry (`[MOL-STATE]`), never from the model's narration, and ends with one digest: stage, evidence paths, next action |
+| applies learned settings from `learning/applied.json` | the contract pins which learned decisions the run may use; a newer `specstride learn --apply` waits for a new contract, and `supervise.py retro` reports how they evaluated without ever changing them |
+
+The split keeps judgment where it can be checked: MoL records facts from the files and
+refuses to render a launcher from an unvalidated contract, and Specstride's critic still
+decides every phase. Install the skill with `./bin/onboard-skill --harness all --scope user`
+from a MoL checkout. How learning is shared between the two is described in
+[Under mixture-of-loops: who decides what](#under-mixture-of-loops-who-decides-what).
 
 ## How it improves itself
 
