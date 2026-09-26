@@ -76,29 +76,30 @@ def color(on):
 
 
 def tool_style(name):
-    """(accent, glyph) for a tool call — a distinct color+icon per tool family so
-    a long proposer pass reads as a legible, colorful trace instead of gray mush.
+    """(color, glyph) for a tool call. The glyph tells tool families apart; the
+    color is ink, because verdict colors (green, red, yellow) and the accent
+    carry meaning elsewhere and a tool call is none of those.
     Reads the color globals at call time, so --no-color still works (they're "")."""
     n = (name or "").lower()
     if n == "read":
-        return (BCYAN, "◎")
+        return (BWHITE, "◎")
     if n == "write":
-        return (BGREEN, "✚")
+        return (BWHITE, "✚")
     if n in ("edit", "multiedit", "notebookedit"):
-        return (BYELLOW, "✎")
+        return (BWHITE, "✎")
     if n == "bash":
-        return (BMAGENTA, "❯")
+        return (BWHITE, "❯")
     if n in ("grep", "glob", "ls"):
-        return (BBLUE, "❍")
+        return (BWHITE, "❍")
     if n in ("task", "agent"):
-        return (MAGENTA, "»")
+        return (BWHITE, "»")
     if n in ("webfetch", "websearch"):
-        return (BLUE, "⇆")
+        return (BWHITE, "⇆")
     if n in ("todowrite", "taskcreate", "taskupdate", "taskget", "tasklist"):
         return (GRAY, "≡")
     if n.startswith("mcp__"):
-        return (CYAN, "◇")
-    return (CYAN, "›")
+        return (BWHITE, "◇")
+    return (BWHITE, "›")
 
 
 def hhmmss(ev):
@@ -280,7 +281,7 @@ def narrate(ev, detail="tools", debug=False):
     if e == "run_start":
         return f"{stamp}  {BOLD}{BWHITE}┏ run start{RESET} {DIM}—{RESET} " \
                f"{BCYAN}{ev.get('phases','?')}{RESET} phases · " \
-               f"{BMAGENTA}{ev.get('proposer','?')}{RESET}{DIM}→{RESET}{BYELLOW}{ev.get('critic','?')}{RESET} · " \
+               f"{BMAGENTA}{ev.get('proposer','?')}{RESET}{DIM}→{RESET}{BWHITE}{ev.get('critic','?')}{RESET} · " \
                f"resume @ phase {BOLD}{ev.get('resume','?')}{RESET}"
     if e == "phase_start":
         tot = ev.get("total", "?")
@@ -439,10 +440,13 @@ def narrate(ev, detail="tools", debug=False):
             bits.append(f"{DIM}{ev['source']}{RESET}")
         return f"{stamp}  {mark}" + ((f" {DIM}·{RESET} " + f" {DIM}·{RESET} ".join(bits)) if bits else "")
     if e == "evidence_written":
-        return f"{stamp}  {BOLD}{BGREEN}✓ evidence{RESET} {DIM}→{RESET} {GREEN}{ev.get('file','?')}{RESET}  " \
+        return f"{stamp}  {BOLD}{BWHITE}◇ evidence{RESET} {DIM}→{RESET} {BWHITE}{ev.get('file','?')}{RESET}  " \
                f"{DIM}({ev.get('iters','?')} iter){RESET}"
     if e == "evidence_present":
-        return f"{stamp}  {BOLD}{BGREEN}✓ evidence present{RESET} {DIM}(resume → critic){RESET}"
+        return f"{stamp}  {BOLD}{BWHITE}◇ evidence present{RESET} {DIM}(resume → critic){RESET}"
+    if e == "diagnostician_trigger":
+        return f"{stamp}  {BYELLOW}! diagnosing{RESET} {DIM}phase {p}, after attempt " \
+               f"{ev.get('attempt','?')} — writing a hint for the next pass{RESET}"
     if e == "critic_start":
         return f"{stamp}  {BWHITE}┿ critic judging{RESET} {DIM}phase {p}, {ev.get('provider','?')}{RESET}"
     if e == "verdict":
