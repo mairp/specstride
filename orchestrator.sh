@@ -106,7 +106,12 @@ OPTIONS
                         environment. Fails closed: an unresolvable executable, a
                         missing cwd or a phase the spec does not define aborts the
                         preflight rather than dropping the command. The document's
-                        hash is bound into the plan hash. Also
+                        hash is bound into the plan hash. Optional top-level
+                        keys: "phaseTimeouts": {"N": SECONDS} (per-phase pass
+                        ceilings, see --proposer-timeout-phase) and
+                        "discovery": "none" (gates run ONLY the declared
+                        commands, never the discovered ones; every phase then
+                        needs a declared command). Also
                         SPECSTRIDE_VERIFICATION_COMMANDS.
   --generate-tests DIR  Safely scaffold tests below this absolute directory (default:
                          <workdir>/testautomation/<feature>/generated).
