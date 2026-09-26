@@ -20,10 +20,8 @@ OLD = re.compile("wiggum", re.IGNORECASE)
 # Historical records: never rewritten, so they keep the old name.
 # The one-off run scripts and recorded run state that used to be listed here are
 # no longer tracked (see .gitignore, "One-off operational artifacts").
+# roadmap/, reversed/ and specs/ are local working folders, no longer tracked either.
 HISTORICAL = [
-    "reversed/*",                     # reverse-engineered spec of the pre-rename tree
-    "roadmap/*",                      # dated notes, research, prompts, the naming decision
-    "specs/*",                        # the completed 001 feature's Spec Kit record
     "lib/fixtures/*",                 # recorded agent transcripts (test data)
 ]
 
