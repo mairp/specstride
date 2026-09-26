@@ -95,6 +95,35 @@ the phases the machines genuinely can't settle.
 > [on-disk contract](./wiki/On-Disk-Contract.md), [hardening](./wiki/Hardening.md),
 > [telemetry](./wiki/Telemetry.md), and [configuration](./wiki/Configuration.md).
 
+## Pair it with mixture-of-loops
+
+[mixture-of-loops](https://github.com/mairp/mixture-of-loops) (MoL) is an Agent Skills
+package for Claude Code, Codex, dsh, pi and prime. You point it at a Spec Kit feature, it
+reads all of the feature's artifacts, and it writes a **launch contract** plus an
+unattended Bash launcher that runs Specstride for you:
+
+```text
+/mixture-of-loops derive a pipeline for specs/007-example            # generate only
+/mixture-of-loops derive a pipeline for specs/007-example and run it # generate, gate, run
+```
+
+Specstride answers "is this phase really done?". MoL answers "is this the right run to
+start, and did it finish?". Together:
+
+| On its own, Specstride… | With MoL on top |
+|---|---|
+| runs whatever verification commands you pass it | the commands come only from what `plan.md` and `tasks.md` literally declare, each traced from source phase to Specstride gate, so a check the plan named can't be silently skipped. Ambiguous or conflicting declarations become blockers, not guesses |
+| starts from the flags you type | starts from a validated contract that hashes every source file; a changed spec makes the launcher refuse instead of running against stale inputs |
+| stops on a transient failure and waits for you to `specstride resume` | a supervisor relaunches only stops the run's own records classify as transient, within a budget the contract declares, and announces each relaunch |
+| leaves you to read `run.log` or `specstride watch` | the harness reports progress read from the run's telemetry (`[MOL-STATE]`), never from the model's narration, and ends with one digest: stage, evidence paths, next action |
+| applies learned settings from `learning/applied.json` | the contract pins which learned decisions the run may use; a newer `specstride learn --apply` waits for a new contract, and `supervise.py retro` reports how they evaluated without ever changing them |
+
+The split keeps judgment where it can be checked: MoL records facts from the files and
+refuses to render a launcher from an unvalidated contract, and Specstride's critic still
+decides every phase. Install the skill with `./bin/onboard-skill --harness all --scope user`
+from a MoL checkout. How learning is shared between the two is described in
+[Under mixture-of-loops: who decides what](#under-mixture-of-loops-who-decides-what).
+
 ## How it improves itself
 
 Specstride gets better at driving its agents by learning from its own runs, and it
