@@ -65,3 +65,8 @@ crash_incident
 # Launcher scripts for the completed 001 feature (its Spec Kit record stays).
 specs/*/run-ralph.sh
 specs/*/check-done.sh
+
+# Local working folders: planning notes, reverse-engineered specs, feature specs.
+roadmap/
+reversed/
+specs/
