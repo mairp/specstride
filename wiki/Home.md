@@ -64,6 +64,7 @@ Literal role names are used everywhere — code, files, flags, env vars. The
 | [Getting Started](Getting-Started) | Clone, key, alias, first run; the bundled two-phase demo |
 | [CLI Reference](CLI-Reference) | The single `specstride` front door: `run` + every inspection verb |
 | [Spec Formats](Spec-Formats) | `native`, `speckit-tasks`, `openspec-change`; auto-detection and resolution |
+| [Reverse Engineering](Reverse-Engineering) | `specstride reverse`: an existing codebase → an evidence-backed, linted Spec Kit feature describing it as-is |
 | [On-Disk Contract](On-Disk-Contract) | `.specstride/` layout, feature-scoped state, the event stream |
 | [Hardening](Hardening) | Nonce-bound verdicts, grounded critic, stale-evidence rule, exit codes |
 | [Learning](Learning) | The opt-in outer loop: observations, suggestions, applied decisions, what can never be tuned |
