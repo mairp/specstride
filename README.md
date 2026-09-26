@@ -13,6 +13,17 @@ whether each change helped, and rolls it back when it did not.
 ![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)
 ![Events](https://img.shields.io/badge/Events-JSONL_stream-000000?style=for-the-badge&logo=json&logoColor=white)
 
+**Try it in a minute** (needs Python 3.13, Bash, the [Claude Code](https://docs.anthropic.com/claude-code) CLI for
+the proposer and `ANTHROPIC_API_KEY` for the critic, or swap in `codex` and `OPENAI_API_KEY`):
+
+```bash
+git clone https://github.com/mairp/specstride && cd specstride
+mkdir -p /tmp/demo/specs/001-greeting && cp examples/speckit-tasks.example.md /tmp/demo/specs/001-greeting/tasks.md
+SPECSTRIDE_PROPOSER=claude SPECSTRIDE_CRITIC=claude ./specstride run -w /tmp/demo
+```
+
+Then run `./specstride watch -w /tmp/demo` in another terminal to follow it. The full setup is in [Quick start](#quick-start).
+
 You hand it a [GitHub Spec Kit](https://github.com/github/spec-kit) feature — its
 `tasks.md`, an ordered set of phases, each a list of tasks — and it drives a coding
 agent phase by phase, but *nothing advances until a critic approves it*. The
@@ -309,7 +320,7 @@ level; all Python components live under **`lib/`** (`lib/critic.py`, `lib/learn.
 
 ### Install it permanently (one `specstride` command)
 
-Typing `/root/specstride/orchestrator.sh …` every run gets old fast. The **`specstride`
+Typing `~/specstride/orchestrator.sh …` every run gets old fast. The **`specstride`
 script is already the single front door for *everything*** — it owns the routing
 itself: `specstride run …` (or a leading `-w/-s/--flag`) **starts** the loop by
 `exec`ing `orchestrator.sh`, while `specstride status`, `specstride watch`, `specstride stop`,
@@ -320,7 +331,7 @@ Add this to `~/.bashrc` (or `~/.zshrc`):
 
 ```bash
 # ── Specstride ─────────────────────────────────────────────────────────────
-export SPECSTRIDE_HOME="/root/specstride"          # wherever you cloned it — set once
+export SPECSTRIDE_HOME="$HOME/specstride"         # wherever you cloned it — set once
 export SPECSTRIDE_LIVE_DETAIL=full             # richest live view — narrates assistant text + every tool call
 
 # `specstride` owns its own run-vs-inspect routing, so this is just a pointer.
@@ -578,32 +589,12 @@ specstride run -w /tmp/specstride-demo       # discovers specs/001-greeting/task
 `"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo` — or `./specstride run -w
 /tmp/specstride-demo` from inside the clone.)
 
-The proposer defaults to **`dsh`**, using DeepSeek Harness's headless profile and
-its configured default model (SOL through Compass STAGE on this installation).
-The critic remains independently configurable and defaults to **`claude`**. The bundled
+Pick the backends with `SPECSTRIDE_PROPOSER` and `SPECSTRIDE_CRITIC` (in `.env` or the
+environment): `claude`, `codex`, `dsh`, or `bebop` (see **Configuration**). The two roles are
+independent, so a cheap model can propose while a stronger one judges. The bundled
 `examples/speckit-tasks.example.md` is a small, verifiable Spec Kit task list, so you can
 watch the whole loop end to end. In a real project, generate the feature with Spec Kit
 (`/speckit.specify`, `/speckit.plan`, `/speckit.tasks`) and point Specstride at it.
-
-### Default run (this install)
-
-Drive the local `image_generator` spec with the most detailed live view, shipping
-telemetry to the host's Grafana:
-
-```bash
-SPECSTRIDE_LIVE_DETAIL=full specstride run \
-    -w /root/image_generator \
-    -s /root/image_generator/specs/<feature>/tasks.md \
-    --telemetry --loki-url http://localhost:3100
-```
-
-`SPECSTRIDE_LIVE_DETAIL=full` is the most detailed live view (see **Live visibility**);
-the run is resumable with `specstride resume -w /root/image_generator`. **Telemetry note:**
-specstride's *bundled* stack (`telemetry/`) defaults to Grafana `:3010` / Loki `:3110`,
-but this host's *live* observability stack is Grafana **`:3000`** / Loki **`:3100`** —
-so point `--loki-url` at **`:3100`**. Runs then land under `task="image_generator"` in
-`{job="ralph"}`. The bundled Grafana dashboard defaults to a `now-6h`
-window — widen it to **24h** if you don't see a recent run.
 
 ## Live visibility (on by default)
 
