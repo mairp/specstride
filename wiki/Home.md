@@ -39,6 +39,12 @@ improve. What improves, narrowly and only when you opt in, is how the loop drive
 
 You write the spec; the loop takes it to verified code.
 
+**The mark.** Specstride's terminal identity is the track folded into an S, with gate posts
+along it. Under it, the same rail runs straight and shows the feature's real phases, so the
+splash doubles as status; the live card is headed by the same rail. Tagline: *Every step,
+signed off.* The switches that control it (banner, motion, color, ASCII, background) are in
+[CLI Reference: Appearance](CLI-Reference#appearance).
+
 > **Runtime is bash + python3 stdlib** — no pip, no dependency manager, clone-and-run.
 
 ## The roles
