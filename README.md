@@ -4,6 +4,7 @@
 [![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=for-the-badge)](LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/deps-stdlib_only-2ea44f?style=for-the-badge)
+[![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)](wiki/Telemetry.md)
 
 **Specstride**. From specs to tested code. An autonomous coding
 orchestrator that steers your agent through implementation, critic review, and
