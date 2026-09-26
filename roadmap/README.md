@@ -38,6 +38,23 @@ This directory contains implementation roadmaps and operational guides for plann
 - [Reverse-engineer a codebase into Spec Kit artifacts](prompts/reverse-engineer-to-speckit.md) —
   handoff prompt for `specstride --reverse <folder>`: deterministic inventory, a generated driver
   spec, and a deterministic Spec Kit linter as each phase's verification command. **Planned.**
+- [New harness backends: research prompt](prompts/new-harness-backends-research.md) —
+  handoff prompt that sends Opus/Sonnet research agents over OpenCode, Cursor and Google
+  Antigravity, then writes one spec-sized roadmap per harness. **Done** — the roadmaps below.
+- [New harness backends: overview and shared prerequisites](harnesses/README.md) —
+  comparison of the three harnesses against the backend contract, the shared `SH-1…SH-7`
+  items (backend registry, config-home overlay, stream-adapter seam, auth preflight,
+  version drift, hang classification, critic context lookup) and the recommended order.
+  Gemini CLI was not researched: Antigravity can run headless, and Google has retired
+  Gemini CLI for consumer accounts. **Planned.**
+- [OpenCode as a backend](harnesses/opencode.md) — `opencode[:provider/model]`: proven live
+  end to end on v1.18.32; critic through direct HTTP. Items `OC-1…OC-7`. **Planned.**
+- [Cursor as a backend](harnesses/cursor.md) — `cursor[:slug]`: headless `agent -p` proven
+  up to the auth check; blocked on a credentialed spike (CU-0); the critic can only use the CLI.
+  Items `CU-0…CU-5`. **Planned.**
+- [Google Antigravity as a backend](harnesses/antigravity.md) — `antigravity[:slug]` through
+  the `agy` CLI, plus a `gemini` critic through the Gemini API. The headless path is proven up
+  to the model call. Items `AG-0…AG-5`. **Planned.**
 
 ## Status legend
 
