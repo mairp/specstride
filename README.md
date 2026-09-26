@@ -1,5 +1,10 @@
 # Specstride
 
+[![CI](https://img.shields.io/github/actions/workflow/status/mairp/specstride/ci.yml?branch=main&style=for-the-badge&label=CI&logo=githubactions&logoColor=white)](https://github.com/mairp/specstride/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache_2.0-blue?style=for-the-badge)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
+![Dependencies](https://img.shields.io/badge/deps-stdlib_only-2ea44f?style=for-the-badge)
+
 **Specstride**. From specs to tested code. An autonomous coding
 orchestrator that steers your agent through implementation, critic review, and
 verification, phase by phase: a spec-driven agent loop with a critic gate,
@@ -14,13 +19,6 @@ it shows the feature's real phases, and each gate opens only on approved evidenc
 ([animated version](docs/media/specstride.gif)). The inner loop is the Ralph
 technique (fresh context every pass); Specstride adds the gate that holds each
 phase until its evidence is approved.
-
-![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
-![Bash](https://img.shields.io/badge/Bash-orchestrator-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)
-![Dependencies](https://img.shields.io/badge/deps-stdlib_only-2ea44f?style=for-the-badge&logo=gnu&logoColor=white)
-![LLM](https://img.shields.io/badge/LLM-Claude_·_Codex_·_bebop_·_Prime_Agent-8A3FFC?style=for-the-badge&logo=anthropic&logoColor=white)
-![OpenTelemetry](https://img.shields.io/badge/OpenTelemetry-OTLP-425CC7?style=for-the-badge&logo=opentelemetry&logoColor=white)
-![Events](https://img.shields.io/badge/Events-JSONL_stream-000000?style=for-the-badge&logo=json&logoColor=white)
 
 **Try it in a minute** (needs Python 3.13, Bash, the [Claude Code](https://docs.anthropic.com/claude-code) CLI for
 the proposer and `ANTHROPIC_API_KEY` for the critic, or swap in `codex` and `OPENAI_API_KEY`):
