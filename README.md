@@ -6,6 +6,15 @@ verification, phase by phase: a spec-driven agent loop with a critic gate,
 wrapped in an outer loop that tunes its own budgets from its telemetry, checks
 whether each change helped, and rolls it back when it did not.
 
+<!-- Rendered from docs/media/specstride.tape: `vhs docs/media/specstride.tape` from the repo root. -->
+![specstride run: the folded-track mark above a live gate rail (phases 1 and 2 approved, phase 3 current), then phase 3 rejected, diagnosed, accelerated and approved](docs/media/specstride.png)
+
+*Every step, signed off.* The mark is the track folded into an S; the rail under
+it shows the feature's real phases, and each gate opens only on approved evidence
+([animated version](docs/media/specstride.gif)). The inner loop is the Ralph
+technique (fresh context every pass); Specstride adds the gate that holds each
+phase until its evidence is approved.
+
 ![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=for-the-badge&logo=python&logoColor=white)
 ![Bash](https://img.shields.io/badge/Bash-orchestrator-4EAA25?style=for-the-badge&logo=gnubash&logoColor=white)
 ![Dependencies](https://img.shields.io/badge/deps-stdlib_only-2ea44f?style=for-the-badge&logo=gnu&logoColor=white)
