@@ -215,6 +215,28 @@ specstride run -w ~/projects/foo -s ~/projects/foo/specs/002-billing/tasks.md
 (`specstride` is the single front-door command — see **Install it permanently**
 just below.)
 
+### No spec yet? Reverse-engineer one
+
+An existing codebase can be turned into the Spec Kit feature Specstride takes as
+input, describing the system **as it is**:
+
+```bash
+specstride reverse ~/projects/foo --dry-run    # inventory, output dir, phases, argv; no LLM
+specstride reverse ~/projects/foo              # writes ~/projects/foo/specs/NNN-as-is-foo/
+```
+
+It reads the source and never changes it. A deterministic inventory settles what
+exists; a generated five-phase driver writes `spec.md`, `plan.md`, `research.md`,
+`data-model.md`, `contracts/`, `quickstart.md` and `tasks.md` one gate at a time; and
+every gate runs a deterministic Spec Kit linter plus a guard that fails if anything
+outside the output and `.specstride/` changed. Every requirement cites the lines it
+came from in an invisible `<!-- evidence: path:40-88 | kind=observed | … -->`
+comment the linter resolves. Discovery (the target's own tests) and git checkpoints
+are off for these runs. With `--tasks done` (the default) every task is ticked, so
+the result is a baseline a later run extends; `--tasks open` gives a rebuild plan.
+`specstride reverse --lint DIR` lints any Spec Kit directory, hand-written ones
+included. See the wiki's [Reverse Engineering](wiki/Reverse-Engineering.md) page.
+
 ### Pre-loop test automation
 
 Specstride can derive a Lisa-compatible `VerificationPlan v1` before the first
@@ -270,6 +292,12 @@ release suite:
   invalidates the plan rather than quietly changing what a gate checks.
 - Declared commands satisfy `--verification required` on their own: a project with
   nothing discoverable is no longer refused when it has declared commands to run.
+- A top-level `"discovery": "none"` turns the discovered commands off: every gate
+  runs the declared list and nothing else (the fingerprint and frameworks are still
+  recorded, and the plan says discovery was disabled). Every phase then needs a
+  declared command, which the preflight enforces. `specstride reverse` sets it, so a
+  run over a repo it only reads never executes that repo's tests. Beside it, an
+  optional top-level `"phaseTimeouts": {"N": SECONDS}` sets per-phase pass ceilings.
 
 Gate evidence records the revision it ran against — `sourceRevision.revision` from
 `git rev-parse HEAD` plus `workingTreeDirty` — because an exit code proves nothing
