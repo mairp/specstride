@@ -59,4 +59,27 @@ specstride status -w ./ --all                    # see both, side by side
 
 `resume --feature X` replays that feature's saved config (preserving its `SPEC_FORMAT`).
 
+## Appearance
+
+`specstride run` opens with the Specstride mark and a gate rail showing each phase's state
+(`✓` approved, `✗` rejected, `•` current, `·` pending). It animates for under 700 ms, once,
+and only on an interactive terminal. `run.log` always gets a plain ASCII copy. Colors are six
+roles defined in [`lib/theme.py`](../lib/theme.py); the live presenter uses the same roles.
+
+| Switch | Effect |
+|---|---|
+| `SPECSTRIDE_BANNER=off` | no splash at all (CI logs, screen readers); the log copy is skipped too |
+| `SPECSTRIDE_MOTION=0` | never animate; the final frame prints alone. Motion is also off when `CI` is set, `TERM=dumb`, or stdout isn't a TTY |
+| `SPECSTRIDE_COLOR=16\|256\|truecolor\|none` | override the detected color depth |
+| `SPECSTRIDE_ASCII=1` | ASCII glyphs only (also automatic under a non-UTF-8 locale) |
+| `SPECSTRIDE_BANNER_BG=dark\|light` | skip background detection (the orchestrator otherwise detects it once per run; inside tmux or screen it doesn't query the terminal) |
+| `NO_COLOR` | no color anywhere (splash and presenter) |
+| `FORCE_COLOR` | color even when stdout isn't a TTY |
+| `--no-color` | presenter flag; same as `NO_COLOR` for the live view |
+
+Color depth is resolved in this order: an explicit `--color` flag, `NO_COLOR`, `FORCE_COLOR`,
+not-a-TTY or `TERM=dumb`, `COLORTERM=truecolor`, a `256color` `TERM`, then 16 colors;
+`SPECSTRIDE_COLOR` overrides the result. `python3 lib/banner.py --preview` prints every width
+tier, background and depth for review.
+
 Next: [On-Disk Contract](On-Disk-Contract) · [Hardening](Hardening)

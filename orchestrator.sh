@@ -693,31 +693,43 @@ export SPECSTRIDE_EVENTS SPECSTRIDE_RUN_ID SPECSTRIDE_TASK SPECSTRIDE_BACKEND_LA
 # `term()` always reaches the terminal (used for the final one-line summary).
 log()  { if [[ "${LIVE:-false}" == "true" ]]; then echo "$*" >> "$LOG"; else echo "$*" | tee -a "$LOG"; fi; }
 term() { echo "$*"; }
-# `banner()` prints a literal multi-line block (e.g. figlet art) verbatim. Unlike
-# `log()` it uses printf, so the backslashes in ASCII art survive untouched.
-banner() { if [[ "${LIVE:-false}" == "true" ]]; then printf '%s\n' "$1" >> "$LOG"; else printf '%s\n' "$1" | tee -a "$LOG"; fi; }
+# `print_banner()` — the startup splash from lib/banner.py: the Specstride mark
+# (the track folded into an S) above a rail that shows this feature's real phase
+# states, one gate per phase. Width, color depth, background, motion and ASCII
+# fallback are all decided in lib/banner.py and lib/theme.py; the switches
+# (SPECSTRIDE_BANNER, SPECSTRIDE_MOTION, SPECSTRIDE_COLOR, SPECSTRIDE_ASCII,
+# SPECSTRIDE_BANNER_BG, NO_COLOR, FORCE_COLOR) are documented in
+# wiki/CLI-Reference.md. Printed once to the terminal; a plain ASCII copy goes to
+# run.log. Never fails the run.
 
-# Terminal background detection (light/dark) + the Springfield palette now live in
-# lib/banner.py, which print_banner() below invokes. Detection order there:
-# SPECSTRIDE_BANNER_BG env → COLORFGBG env → OSC 11 query → default "dark".
+# The rail states for banner.py --states, one per phase in PHASES order:
+# A approved (GATE<n>-APPROVED), R rejected (GATE<n>-FEEDBACK.md, not yet
+# approved), C the resume phase, P pending.
+banner_states() {
+  local n s out=""
+  for n in "${PHASES[@]}"; do
+    if [[ -f "$GATES_DIR/GATE${n}-APPROVED" ]]; then s=A
+    elif [[ -f "$GATES_DIR/GATE${n}-FEEDBACK.md" ]]; then s=R
+    elif [[ "$n" == "${CUR_PHASE:-}" ]]; then s=C
+    else s=P; fi
+    out+="${out:+,}$s"
+  done
+  printf '%s' "$out"
+}
 
-# `print_banner()` — the startup splash: a Ralph Wiggum ASCII PORTRAIT (density art,
-# Mr-Burns-portrait style) + the title, colored from the Springfield palette matching
-# the detected terminal background (Night for dark, Day for light). The art, palette,
-# and background detection all live in lib/banner.py (kept out of bash so the art's
-# $ # @ \ bytes need no escaping). Printed ONCE to the terminal; a plain copy is
-# recorded in run.log. Degrades to no-color when stdout is not a TTY.
 print_banner() {
   if [[ -f "$LIB_DIR/banner.py" ]]; then
-    # colored → terminal (auto-detects bg; --bg override honored via env too)
-    if [[ -t 1 ]]; then python3 "$LIB_DIR/banner.py" || true; fi
-    # plain → run.log (faithful, code-free record)
-    python3 "$LIB_DIR/banner.py" --plain >> "$LOG" 2>/dev/null || true
+    local states; states="$(banner_states)"
+    if [[ -t 1 ]]; then
+      python3 "$LIB_DIR/banner.py" --phases "${#PHASES[@]}" --states "$states" || true
+    fi
+    python3 "$LIB_DIR/banner.py" --plain --phases "${#PHASES[@]}" --states "$states" \
+      >> "$LOG" 2>/dev/null || true
     return
   fi
   # Fallback if banner.py is missing: a minimal plain title (never fail the run).
-  printf '\n%s\n\n' 'The Autonomous Ralph Wiggun Loop'
-  printf '\n%s\n\n' 'The Autonomous Ralph Wiggun Loop' >> "$LOG" 2>/dev/null || true
+  printf '\n%s\n\n' 'specstride: from specs to tested code'
+  printf '\n%s\n\n' 'specstride: from specs to tested code' >> "$LOG" 2>/dev/null || true
 }
 
 # ── inline live timeline (the "coding-agent working" view in THIS terminal) ──
@@ -861,6 +873,12 @@ else
   CUR_PHASE="$(derive_phase)"
 fi
 
+# Detect the terminal background once, while this script still owns the terminal:
+# banner.py and the backgrounded present.py both read SPECSTRIDE_BANNER_BG.
+if [[ -t 1 && -z "${SPECSTRIDE_BANNER_BG:-}" && -f "$LIB_DIR/theme.py" ]]; then
+  SPECSTRIDE_BANNER_BG="$(python3 "$LIB_DIR/theme.py" bg)" || SPECSTRIDE_BANNER_BG=""
+  export SPECSTRIDE_BANNER_BG
+fi
 print_banner
 log ""
 log "specstride orchestrator start $(date -Is)"
@@ -892,11 +910,13 @@ log ""
 
 # In live mode, give the terminal an immediate header (the presenter narrates the
 # rest), then start the background presenter BEFORE the first event so nothing is
-# missed. The full banner is in run.log; `specstride tail`/`--debug` show the raw feed.
+# missed. The full start-up record is in run.log; `specstride tail`/`--debug` show the raw feed.
 if [[ "$LIVE" == "true" ]]; then
+  # The splash already shows the name and the phases; say only what it doesn't.
   term ""
-  term "  specstride — $SPECSTRIDE_TASK · ${PHASE_COUNT} phase(s) · prop:${PROPOSER_BACKEND} crit:${CRITIC_BACKEND}"
-  term "  log: $LOG   (raw output here; this view is the timeline)"
+  term "  feature  $SLUG"
+  term "  agents   proposer $PROPOSER_BACKEND, critic $CRITIC_BACKEND"
+  term "  log      $LOG"
   term ""
 fi
 start_presenter
