@@ -184,6 +184,37 @@ specstride_backend_display() {
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Stream-routing shims (SH-3). A backend's stream format comes ONLY from its
+#  registry entry in lib/backends.py, read through these shims — there is
+#  deliberately no bash copy of the format, the invocation-model table or the
+#  registered-format list anywhere in the shell. All three print nothing and
+#  return 0 on ANY failure (python3 missing, module missing, non-zero exit):
+#  a routing read must degrade, never break a pass.
+# ─────────────────────────────────────────────────────────────────────────────
+specstride_invocation_model() {
+  local out
+  if [[ -n "${2:-}" ]]; then
+    out="$(python3 "$_SPECSTRIDE_BACKENDS_PY" invocation-model --backend "$1" --model "$2" 2>/dev/null)"
+  else
+    out="$(python3 "$_SPECSTRIDE_BACKENDS_PY" invocation-model --backend "$1" 2>/dev/null)"
+  fi
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
+}
+specstride_backend_stream() {
+  local out
+  out="$(python3 "$_SPECSTRIDE_BACKENDS_PY" stream --backend "$1" 2>/dev/null)"
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
+}
+specstride_stream_formats() {
+  local out
+  out="$(python3 "$_SPECSTRIDE_LIB_DIR/lib/agent_stream.py" --list-formats 2>/dev/null)"
+  [[ -n "$out" ]] && printf '%s\n' "$out"
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Telemetry receiver state — thin shim over lib/telemetry_delivery.py, the SINGLE
 #  source of truth for the four escalating, user-visible states (FR-036). Startup
 #  and `specstride status` MUST distinguish configured / reachable / request-accepted /
