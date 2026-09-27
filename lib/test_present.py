@@ -274,3 +274,193 @@ def test_follow_renders_received_activity_within_two_seconds_without_terminal(tm
     assert len(timely) / count >= 0.95
     assert all("progress" in ANSI.sub("", line) for line in timely)
     assert not reader.is_alive()
+
+
+# ── the gate rail re-stamped in the live timeline ────────────────────────────
+import json
+import os
+import pathlib
+
+import banner
+import theme
+
+DEMO = pathlib.Path(__file__).resolve().parent.parent / "docs" / "media" / "demo-events.jsonl"
+PLAIN = {"NO_COLOR": "1", "SPECSTRIDE_ASCII": "1"}
+RUN_END = {"time": "2026-09-26T14:40:00+0000", "event": "run_end", "outcome": "all_approved"}
+
+
+def _timeline(tmp_path, events, capsys, monkeypatch, cols=100, env=None, name="events.jsonl"):
+    """Replay `events` through the non-following timeline; the output lines."""
+    path = tmp_path / name
+    path.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    env = {**PLAIN, **(env or {})}
+    for k in ("SPECSTRIDE_LIVE_RAIL", "SPECSTRIDE_BANNER"):
+        monkeypatch.delenv(k, raising=False)
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    present.apply_theme(theme.Theme("none"))
+    capsys.readouterr()
+    present.run_timeline(str(path), False, "tools", False, cols=cols)
+    return capsys.readouterr().out.splitlines()
+
+
+def _demo():
+    return [json.loads(l) for l in DEMO.read_text(encoding="utf-8").splitlines() if l.strip()]
+
+
+def _is_rail(line):
+    return line.startswith(" " * present.RAIL_INDENT)
+
+
+DEMO_REPLAY = """\
+14:10:02  x REJECTED phase 3 (attempt 1) -- C3.2 cites a test that never ran
+          ====+=========+=========+---------+---------+----   2/5 approved · attempt 1/3
+              1 ok      2 ok      3 rej     4 -       5 -
+14:17:06  ◆ phase 3 done (attempt 2)
+          ====+=========+=========+=========+---------+----   3/5 approved · 14m55s
+              1 ok      2 ok      3 ok      4 -       5 -
+14:40:00  ■ run complete -- all_approved
+          ====+=========+=========+=========+=========+===-   5/5 approved · 37m49s
+              1 ok      2 ok      3 ok      4 ok      5 ok
+"""
+
+
+def test_demo_replay_stamps_the_rail_after_rejection_phase_done_and_run_end(
+        tmp_path, capsys, monkeypatch):
+    lines = _timeline(tmp_path, _demo() + [RUN_END], capsys, monkeypatch)
+    rails = [i for i, l in enumerate(lines) if _is_rail(l)]
+    assert len(rails) == 6  # three stamps, two lines each
+    got = []
+    for i in rails[::2]:
+        got += lines[i - 1:i + 2]
+    want = DEMO_REPLAY.replace(" -- ", " — ").replace("x REJECTED", "✗ REJECTED")
+    assert "\n".join(got) + "\n" == want
+    assert "APPROVED phase 3" in lines[lines.index(got[3]) - 1]  # no rail after APPROVED
+
+
+def test_malformed_prints_no_rail_and_the_gate_stays_current(tmp_path, capsys, monkeypatch):
+    events = [
+        {"event": "run_start", "phases": 3, "states": "A,C,P"},
+        {"event": "phase_start", "phase": 2, "total": 3},
+        {"event": "verdict", "phase": 2, "result": "MALFORMED", "attempt": 1},
+    ]
+    lines = _timeline(tmp_path, events, capsys, monkeypatch)
+    assert not any(_is_rail(l) for l in lines)
+    rt = present.RailTracker()
+    for ev in events:
+        rt.update(ev)
+    assert rt.rail_states() == ["A", "C", "P"] and rt.stamp is None
+
+
+def test_resume_seeds_from_run_start_states(tmp_path, capsys, monkeypatch):
+    seeded = _timeline(tmp_path, _demo(), capsys, monkeypatch)
+    first = [l for l in seeded if _is_rail(l)][1]
+    assert first.split() == ["1", "ok", "2", "ok", "3", "rej", "4", "-", "5", "-"]
+
+
+def test_old_event_files_without_states_still_render(tmp_path, capsys, monkeypatch):
+    events = _demo()
+    del events[0]["states"]
+    lines = _timeline(tmp_path, events + [RUN_END], capsys, monkeypatch)
+    labels = [l for l in lines if _is_rail(l)][1::2]
+    assert labels[0].split() == ["1", "-", "2", "-", "3", "rej", "4", "-", "5", "-"]
+    assert labels[-1].split().count("ok") == 5  # run_end: every gate approved
+
+
+def test_no_rail_line_is_wider_than_the_terminal(tmp_path, capsys, monkeypatch):
+    for ascii_ in ("1", ""):
+        for cols in range(30, 121):
+            lines = _timeline(tmp_path, _demo() + [RUN_END], capsys, monkeypatch, cols=cols,
+                              env={"SPECSTRIDE_ASCII": ascii_})
+            rails = [l for l in lines if _is_rail(l)]
+            assert rails, cols
+            for l in rails:
+                assert theme.display_width(l) <= cols, (cols, l)
+
+
+def test_width_tiers(tmp_path, capsys, monkeypatch):
+    def rails(cols):
+        lines = _timeline(tmp_path, _demo(), capsys, monkeypatch, cols=cols)
+        return [l for l in lines if _is_rail(l)]
+    assert len(rails(30)) == 2  # one line per stamp: banner.oneline_rail
+    for cols in (40, 60, 80, 120):
+        got = rails(cols)
+        assert len(got) == 4, cols
+        assert ("approved" in got[0]) == (cols >= 120), cols  # the tail only when it fits
+    # colored, each width still fits
+    for cols in (30, 40, 60, 80, 120):
+        th = theme.Theme("truecolor", "dark")
+        for ln in present.live_rail_lines(["A", "A", "R", "P", "P"], cols, th, False,
+                                          tail="2/5 approved · attempt 1/3"):
+            assert theme.display_width(ln) <= cols
+
+
+def test_switches_suppress_the_rail(tmp_path, capsys, monkeypatch):
+    for env in ({"SPECSTRIDE_LIVE_RAIL": "off"}, {"SPECSTRIDE_BANNER": "off"}):
+        lines = _timeline(tmp_path, _demo() + [RUN_END], capsys, monkeypatch, env=env)
+        assert lines and not any(_is_rail(l) for l in lines), env
+
+
+def test_plain_mode_never_shows_the_rail(tmp_path):
+    import subprocess
+    import sys
+    path = tmp_path / "events.jsonl"
+    path.write_text(DEMO.read_text(encoding="utf-8"), encoding="utf-8")
+    env = {**os.environ, **PLAIN}
+    out = subprocess.run([sys.executable, present.__file__, "--events", str(path),
+                          "--mode", "plain"], capture_output=True, text=True, env=env,
+                         timeout=30).stdout
+    assert out and "+=====" not in out and not any(_is_rail(l) for l in out.splitlines())
+
+
+def test_halt_after_a_rejection_shows_the_gate_rejected(tmp_path, capsys, monkeypatch):
+    base = [{"event": "run_start", "phases": 3, "states": "A,C,P"},
+            {"event": "phase_start", "phase": 2, "total": 3}]
+    rejected = base + [
+        {"event": "verdict", "phase": 2, "result": "REJECTED", "attempt": 3},
+        {"event": "run_stop", "reason": "max_rejects", "phase": 2},
+    ]
+    lines = _timeline(tmp_path, rejected, capsys, monkeypatch)
+    labels = [l for l in lines if _is_rail(l)][1::2]
+    assert len(labels) == 2 and labels[-1].split() == ["1", "ok", "2", "rej", "3", "-"]
+    # halted with no rejection: the gate stays current
+    lines = _timeline(tmp_path, base + [{"event": "run_stop", "reason": "stop_flag",
+                                         "phase": 2}], capsys, monkeypatch)
+    labels = [l for l in lines if _is_rail(l)][1::2]
+    assert labels == [labels[0]] and labels[0].split() == ["1", "ok", "2", "now", "3", "-"]
+
+
+def test_one_halt_reported_twice_stamps_once(tmp_path, capsys, monkeypatch):
+    events = [{"event": "run_start", "phases": 2},
+              {"event": "phase_start", "phase": 1, "total": 2},
+              {"event": "run_stop", "reason": "proposer_cap_exhausted", "iter": 4},
+              {"event": "run_stop", "reason": "proposer_cap_exhausted", "phase": 1}]
+    lines = _timeline(tmp_path, events, capsys, monkeypatch)
+    assert sum(_is_rail(l) for l in lines) == 2
+
+
+def test_card_rail_is_unchanged_by_the_tracker_refactor():
+    st = present.State()
+    for ev in _demo():
+        st.update(ev)
+    present.apply_theme(theme.Theme("16", "dark"))
+    try:
+        got = st._rail_lines(100)
+        want = ["  " + ln for ln in banner.render_rail(["A", "A", "A", "P", "P"], 97,
+                                                       present.THEME, False)] + [""]
+        assert got == want
+        assert st.rail_states() == ["A", "A", "A", "P", "P"]
+        assert st.phases_total == 5 and st.cur_phase == 3
+    finally:
+        present.apply_theme(theme.Theme("16", "dark"))
+
+
+def test_rail_motion_walks_the_tip_and_lands_on_the_static_rail():
+    th = theme.Theme("16", "dark")
+    before, after = ["A", "A", "R", "P", "P"], ["A", "A", "A", "P", "P"]
+    frames = present._rail_frames(after, before, 100, th, False, "3/5 approved")
+    assert 2 <= len(frames) <= 5 and all(len(f) == 2 for f in frames)
+    assert frames[-1] == present.live_rail_lines(after, 100, th, False, tail="3/5 approved")
+    assert (len(frames) - 1) * banner.FRAME_SECONDS <= 0.3
+    assert present._rail_frames(before, before, 100, th, False, "") == []  # a hold: no walk
+    assert present._rail_frames(after, before, 30, th, False, "") == []   # one-line tier

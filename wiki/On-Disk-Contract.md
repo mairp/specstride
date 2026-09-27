@@ -117,7 +117,7 @@ stream-json tap ([`lib/agent_stream.py`](../lib/agent_stream.py), gated by `SPEC
 
 | Event | Emitted by | Meaning |
 |---|---|---|
-| `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`) |
+| `run_start` / `run_end` | orchestrator | a run begins / all phases approved (`outcome`). `run_start` carries `states`, the splash rail's per-phase states (`A,A,C,P,P`: approved, rejected, current, pending), so the live rail of a resumed run starts right; older files without it start all-pending |
 | `run_stop` | orchestrator | run halted early — `reason` (`stop_flag`, `wall_budget`, `max_rejects`, `proposer_max_iter`, `proposer_consecutive_errors`, `proposer_cap_exhausted`, `proposer_yield_budget`, `proposer_yield_timeout`, `proposer_no_progress`, `proposer_no_evidence`, `critic_config`) + `phase` |
 | `phase_start` / `phase_done` | orchestrator | phase N entered / approved. `phase_start` carries `shape`, the phase-shape digest learned state is keyed on |
 | `learning_observed` | orchestrator | a per-phase observation was written at `phase_done` — `phase`, `path` (`learning/phase-<N>.json`). Only under `SPECSTRIDE_LEARNING`; best-effort, and never fails the phase |
@@ -138,7 +138,7 @@ stream-json tap ([`lib/agent_stream.py`](../lib/agent_stream.py), gated by `SPEC
 | `iter_start` / `iter_done` | proposer | one headless proposer iteration |
 | `evidence_written` / `evidence_present` | proposer | `GATE<N>-EVIDENCE.md` was just written / already existed |
 | `attempt_archived` | orchestrator | a rejected evidence file was archived before retry |
-| `verdict` | critic | the critic's APPROVED/REJECTED decision |
+| `verdict` | critic | the critic's APPROVED/REJECTED decision; a REJECTED/MALFORMED one also carries `attempt` and `max_rejects` |
 | `reject` | orchestrator | phase N rejected (attempt M) with feedback |
 | `git_checkpoint` / `gates_migrated` | orchestrator | per-phase commit / one-time relocation of pre-v2 state into `features/default/` |
 | `agent_observability` | agent tap | the capability this invocation begins with — `mode` (`structured` \| `degraded` \| `raw-text`) + `supported_signals` + `reason` + `provider_format` + `role`. Re-emitted if a fatal schema diagnostic degrades `structured`→`degraded` mid-stream, so a loss of fine-grained capture is explicit, never silent |

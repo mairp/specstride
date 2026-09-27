@@ -70,11 +70,13 @@ specstride status -w ./ --all                    # see both, side by side
 `specstride run` opens with the Specstride mark and a gate rail showing each phase's state
 (`✓` approved, `✗` rejected, `•` current, `·` pending). It animates for under 700 ms, once,
 and only on an interactive terminal. `run.log` always gets a plain ASCII copy. Colors are six
-roles defined in [`lib/theme.py`](../lib/theme.py); the live presenter uses the same roles.
+roles defined in [`lib/theme.py`](../lib/theme.py); the live presenter uses the same roles, and
+re-stamps the same rail under the timeline line that moved a gate.
 
 | Switch | Effect |
 |---|---|
 | `SPECSTRIDE_BANNER=off` | no splash at all (CI logs, screen readers); the log copy is skipped too |
+| `SPECSTRIDE_LIVE_RAIL=on\|off` | re-stamp the gate rail in the live timeline (and a plain copy in `run.log`, via `banner.py --rail-only`) each time a gate opens or holds: after an approved phase's `phase_done`, a `REJECTED` verdict, a halt, and run complete. Default `on`; `SPECSTRIDE_BANNER=off` turns it off too. Never shown in `specstride events` or with `--quiet` |
 | `SPECSTRIDE_MOTION=0` | never animate; the final frame prints alone. Motion is also off when `CI` is set, `TERM=dumb`, or stdout isn't a TTY |
 | `SPECSTRIDE_COLOR=16\|256\|truecolor\|none` | override the detected color depth |
 | `SPECSTRIDE_ASCII=1` | ASCII glyphs only (also automatic under a non-UTF-8 locale) |
