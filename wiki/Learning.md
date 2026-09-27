@@ -6,7 +6,7 @@ passes went and, across runs, suggests per-phase settings sized to what each pha
 measured. Without it, you get one global setting sized for the worst phase in the project.
 
 The agents never improve; they stay stateless workers. What improves is how the loop drives
-them. The critic is never tuned.
+them. The critic, the loop's LLM judge, is never tuned.
 
 Full design: `roadmap/research/self-improvement-loops/` (the loop design, §5). Reference:
 [README → Learning](../README.md#learning-self-tuning-knobs).
