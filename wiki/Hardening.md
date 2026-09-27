@@ -44,7 +44,7 @@ cheap.
 ## Why fail-safe matters here
 
 Every ambiguous signal resolves to **REJECTED** or **halt**, never to auto-approve. The whole
-point of the critic gate is that "I couldn't tell" is treated identically to "no" — the loop
+point of an LLM-as-a-judge gate is that "I couldn't tell" is treated identically to "no" — the loop
 would rather stop and ask a human (exit 2) than advance on a verdict it couldn't parse
 unambiguously.
 
