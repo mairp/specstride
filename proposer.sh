@@ -1047,6 +1047,10 @@ EOF2
 # Bounds on the log slice handed back to the resuming pass.
 : "${SPECSTRIDE_YIELD_LOG_HEAD:=40}"
 : "${SPECSTRIDE_YIELD_LOG_TAIL:=80}"
+# The failure ledger: every failure line of the whole job log, deduplicated and
+# labelled NEW / RECURRING across this feature's jobs (lib/failure_ledger.py).
+: "${SPECSTRIDE_FAILURE_LEDGER:=true}"
+: "${SPECSTRIDE_FAILURE_LEDGER_MAX:=150}"
 
 YIELD_REASON=""; YIELD_MODE=""; YIELD_JOB_CWD=""; YIELD_JOB_LOG=""
 YIELD_DEADLINE=""; YIELD_PREDICATE=""; YIELD_ON_RESUME=""; YIELD_ADOPT_PID=""
@@ -1400,6 +1404,14 @@ EOF2
       cat "$YIELD_JOB_LOG"
     fi
     printf '```\n'
+    # Every failure in the WHOLE log, not just the slice above, each labelled NEW or
+    # RECURRING against this feature's earlier jobs (lib/failure_ledger.py).
+    if [[ "$SPECSTRIDE_FAILURE_LEDGER" == "true" ]]; then
+      python3 "$LIB_DIR/failure_ledger.py" --log "$YIELD_JOB_LOG" \
+        --ledger "$FEATURE_DIR/failure-ledger.jsonl" \
+        --job "${RUN_ID}:attempt${ATTEMPT}:yield${YIELD_INDEX}" \
+        --max "$SPECSTRIDE_FAILURE_LEDGER_MAX" 2>/dev/null || true
+    fi
   fi
   printf '\nThis pass is the RESUME of that work: read the result above, write what it\nsupports, and end the pass.\n'
 }
