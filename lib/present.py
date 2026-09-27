@@ -8,6 +8,10 @@ single source:
                       per milestone AND per agent action (tool calls, messages,
                       pass results). On a TTY with --follow it keeps a heartbeat
                       spinner alive between events so the loop always visibly moves.
+                      Each time a gate opens or holds (approved phase done, REJECTED,
+                      halt, run complete) it re-stamps the splash's gate rail under
+                      that line; SPECSTRIDE_LIVE_RAIL=off (or SPECSTRIDE_BANNER=off)
+                      turns that off.
   card (`specstride watch`)  A fixed status block that redraws in place (mini-TUI):
                       phase trail, current activity, run totals, rolling feed.
   plain (`specstride events`)  One `HH:MM:SS event key=value…` line per event — the raw
@@ -26,6 +30,7 @@ running survives stop + resume.
 Pure consumer — never affects loop control flow.
 """
 import sys, os, json, time, argparse, shutil, threading, queue
+from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
@@ -572,19 +577,228 @@ def stop_requested(events_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Gate rail state — shared by the card and the timeline, so both draw the same
+#  rail the splash printed.
+# ─────────────────────────────────────────────────────────────────────────────
+def _epoch(ev):
+    """The event's wall-clock time in seconds, or None."""
+    try:
+        return float(ev["ts"])
+    except (KeyError, ValueError, TypeError):
+        pass
+    try:
+        return datetime.strptime(ev.get("time", ""), "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
+class RailTracker:
+    """The banner's A/R/C/P bookkeeping, fed one event at a time. A resumed run's
+    events file holds no verdicts for the phases before it, so `run_start` carries
+    `states` (the splash's own A,A,C,P,P) and the tracker seeds from it; an older
+    file without it starts all-pending and fills in from the verdicts that follow."""
+
+    def __init__(self):
+        self.phases_total = None
+        self.cur_phase = None
+        self.last_verdict = {}     # phase -> "A" approved / "R" rejected
+        self.started = None        # run_start epoch, for the elapsed tail
+        self.stamp = None          # why the rail should be re-stamped now, or None
+        self.tail = ""             # the muted status beside it
+        self._last_stamp = None
+
+    def update(self, ev):
+        e = ev.get("event", "")
+        self.stamp = None
+        if e == "run_start":
+            self.phases_total = ev.get("phases")
+            self.started = _epoch(ev)
+            seed = banner.parse_states(None, ev.get("states"))
+            if seed:
+                self.last_verdict = {str(i + 1): s for i, s in enumerate(seed) if s in "AR"}
+                cur = next((i + 1 for i, s in enumerate(seed) if s == "C"), None)
+                if cur is not None:
+                    self.cur_phase = cur
+        elif e == "phase_start":
+            self.cur_phase = ev.get("phase")
+            self.phases_total = ev.get("total", self.phases_total)
+        elif e in ("proposer_start", "accelerator_start"):
+            self.cur_phase = ev.get("phase", self.cur_phase)
+        elif e == "verdict":
+            res = ev.get("result")
+            ph = str(ev.get("phase"))
+            # MALFORMED is a critic parse failure, not a judgment: the gate holds.
+            if res == "APPROVED":
+                self.last_verdict[ph] = "A"
+            elif res == "REJECTED":
+                self.last_verdict[ph] = "R"
+                att, most = ev.get("attempt"), ev.get("max_rejects", ev.get("MAX_REJECTS"))
+                self._stamp("verdict", ("attempt %s/%s" % (att, most)) if _present(att)
+                            and _present(most) else "")
+        elif e == "phase_done":
+            self.last_verdict[str(ev.get("phase"))] = "A"
+            self._stamp("phase_done", self._elapsed(ev))
+        elif e == "run_stop":
+            if _present(ev.get("phase")):
+                self.cur_phase = ev.get("phase")
+            self._stamp("run_stop", "")
+        elif e == "run_end":
+            total = self.phases_total
+            if str(total).isdigit():
+                self.last_verdict = {str(i): "A" for i in range(1, int(total) + 1)}
+            self._stamp("run_end", self._elapsed(ev))
+
+    def _elapsed(self, ev):
+        now = _epoch(ev)
+        if self.started is None or now is None or now < self.started:
+            return ""
+        return fmt_secs(now - self.started)
+
+    def _stamp(self, kind, extra):
+        states = self.rail_states()
+        if not states:
+            return
+        # the proposer and the orchestrator can both report one halt: stamp it once
+        if kind == "run_stop" and self._last_stamp == (kind, tuple(states)):
+            return
+        self._last_stamp = (kind, tuple(states))
+        self.stamp = kind
+        bits = ["%d/%d approved" % (states.count("A"), len(states))]
+        if extra:
+            bits.append(extra)
+        self.tail = " · ".join(bits)
+
+    def rail_states(self):
+        """The banner's A/R/C/P states, one per phase (1..total), or None."""
+        total = self.phases_total
+        if not str(total).isdigit() or int(total) < 1:
+            return None
+        out = []
+        for i in range(1, int(total) + 1):
+            v = self.last_verdict.get(str(i))
+            if v:
+                out.append(v)
+            elif str(i) == str(self.cur_phase):
+                out.append("C")
+            else:
+                out.append("P")
+        return out
+
+
+RAIL_INDENT = len("HH:MM:SS") + 2   # the rail starts in the message column
+ONE_LINE_BELOW = 40                  # under this many columns: banner.oneline_rail
+
+
+def live_rail_off(environ=None):
+    return banner.live_rail_off(environ)
+
+
+def _rail_layout(states, width, ascii_):
+    """(compact, gate count) for the layout that shows the most gates; the full
+    layout wins a tie, the compact one is the fallback when it doesn't fit."""
+    best = None
+    for compact in (False, True):
+        lead, tail, gap = (3, 3, 7) if compact else (4, 4, 10)
+        got = banner.layout_rail(states, width, ascii_, lead, tail, gap)
+        shown = len(got[0]) if got else 0
+        if best is None or shown > best[1]:
+            best = (compact, shown)
+    return best
+
+
+def live_rail_lines(states, cols, th=None, ascii_=None, tail="", progress=None):
+    """The gate rail re-stamped under a timeline line: indented to the message
+    column, sized to the terminal, with a muted status `tail` when it fits.
+    No line is wider than `cols`."""
+    th = THEME if th is None else th
+    ascii_ = theme.ascii_mode() if ascii_ is None else ascii_
+    pad = " " * RAIL_INDENT
+    width = cols - RAIL_INDENT - 1
+    if width < 1:
+        return []
+
+    def with_tail(line):
+        if tail and theme.display_width(line) + 3 + theme.display_width(tail) <= width:
+            return line + "   " + th.paint("muted", tail)
+        return line
+
+    if cols < ONE_LINE_BELOW:
+        line = banner.oneline_rail(states, th, ascii_)
+        if theme.display_width(line) > width:
+            line = banner._summary(states, th, ascii_)
+        if theme.display_width(line) > width:
+            return []
+        return [pad + with_tail(line)]
+    compact, _shown = _rail_layout(states, width, ascii_)
+    rail, labels = banner.render_rail(states, width, th, ascii_, compact=compact,
+                                      progress=progress)
+    return [pad + with_tail(rail)] + ([pad + labels] if labels else [])
+
+
+def _rail_frames(states, before, cols, th, ascii_, tail):
+    """Motion for one gate settling: the tip walks from the frontier at `before`
+    to the new one in 3 frames, then the static rail lands. [] when there's
+    nothing to walk (no advance, or the one-line tier)."""
+    width = cols - RAIL_INDENT - 1
+    f_old, f_new = banner.frontier(before or []), banner.frontier(states)
+    if cols < ONE_LINE_BELOW or not before or len(before) != len(states) or \
+            (f_old if f_old is not None else len(states)) >= \
+            (f_new if f_new is not None else len(states)):
+        return []
+    compact, _shown = _rail_layout(states, width, ascii_)
+    got = banner.layout_rail(states, width, ascii_, *((3, 3, 7) if compact else (4, 4, 10)))
+    if got is None:
+        return []
+    gates, _labels, length = got
+    col_of = {i: c for c, i, _s in gates if i is not None}
+    start = col_of.get(f_old, 0)
+    target = length - 1 if f_new is None else col_of.get(f_new)
+    if target is None or target <= start:
+        return []
+    frames = []
+    for k in range(3):
+        p = start + round((target - start) * k / 3)
+        fr = live_rail_lines(states, cols, th, ascii_, "", progress=p)
+        frames.append((fr + [""])[:2])
+    frames.append((live_rail_lines(states, cols, th, ascii_, tail) + [""])[:2])
+    return frames
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Timeline runner — with the heartbeat spinner in follow mode on a TTY.
 # ─────────────────────────────────────────────────────────────────────────────
-def run_timeline(path, follow, detail, debug):
+def run_timeline(path, follow, detail, debug, cols=None, environ=None):
     tr = Totals()
+    rails = RailTracker()
+    rail_on = not live_rail_off(environ)
     is_tty = sys.stdout.isatty()
+    drawn = []  # the states of the last rail drawn: where the next settle walks from
+
+    def stamp_rail(motion=False):
+        """Re-stamp the rail under the line that moved a gate (never on its own)."""
+        if not rail_on or rails.stamp is None:
+            return
+        states = rails.rail_states()
+        width = cols or shutil.get_terminal_size((100, 24)).columns
+        frames = _rail_frames(states, drawn[-1] if drawn else None, width, THEME,
+                              theme.ascii_mode(), rails.tail) if motion else []
+        if len(frames) > 1:
+            banner.play(frames)
+        else:
+            for ln in live_rail_lines(states, width, tail=rails.tail):
+                print(ln)
+        sys.stdout.flush()
+        drawn[:] = [states]
 
     if not follow or not is_tty:
         for ev in iter_events(path, follow):
             tr.update(ev)
+            rails.update(ev)
             line = narrate(ev, detail=detail, debug=debug)
             if line:
                 print(line)
                 sys.stdout.flush()
+            stamp_rail()
         return
 
     q = queue.Queue()
@@ -597,6 +811,7 @@ def run_timeline(path, follow, detail, debug):
     spin_i = 0
     spinner_up = False
     last_line_time = time.time()
+    motion = banner.motion_allowed(sys.stdout, environ)
 
     def clear_spinner():
         nonlocal spinner_up
@@ -612,11 +827,16 @@ def run_timeline(path, follow, detail, debug):
                 ev = None
             if ev is not None:
                 tr.update(ev)
+                rails.update(ev)
                 line = narrate(ev, detail=detail, debug=debug)
                 if line:
                     clear_spinner()
                     print(line)
                     sys.stdout.flush()
+                    last_line_time = time.time()
+                if rails.stamp:
+                    clear_spinner()  # the spinner owns the last line: never splice into it
+                    stamp_rail(motion=motion)
                     last_line_time = time.time()
                 if ev.get("event") == "run_end":
                     clear_spinner()
@@ -653,10 +873,8 @@ def run_timeline(path, follow, detail, debug):
 class State:
     def __init__(self, detail="tools"):
         self.detail = detail
-        self.phases_total = None
-        self.cur_phase = None
+        self.rail = RailTracker()
         self.cur_title = ""
-        self.last_verdict = {}     # phase -> "A" approved / "R" rejected
         self.attempt = {}          # phase -> attempt
         self.proposer = self.critic = "?"
         self.last_reason = ""
@@ -678,28 +896,22 @@ class State:
         self.last_ts = hhmmss(ev)
         self.last_event_epoch = time.time()
         self.totals.update(ev)
+        self.rail.update(ev)
         narrated = narrate(ev, detail=self.detail)
         if narrated:
             self._feed(self.last_ts, narrated.split("  ", 1)[-1])
         if e == "_reopen":
             self._feed("--:--:--", f"{DIM}── new run — following it ──{RESET}")
         elif e == "run_start":
-            self.phases_total = ev.get("phases")
             self.proposer = ev.get("proposer", "?")
             self.critic = ev.get("critic", "?")
             self.outcome = None
         elif e == "phase_start":
-            self.cur_phase = ev.get("phase")
             self.cur_title = ev.get("title", "")
-            self.phases_total = ev.get("total", self.phases_total)
         elif e in ("proposer_start", "accelerator_start"):
-            self.cur_phase = ev.get("phase", self.cur_phase)
             self.attempt[str(ev.get("phase"))] = ev.get("attempt")
         elif e == "verdict":
-            res = ev.get("result")
-            ph = str(ev.get("phase"))
-            self.last_verdict[ph] = "A" if res == "APPROVED" else "R"
-            if res != "APPROVED":
+            if ev.get("result") != "APPROVED":
                 self.last_reason = ev.get("reason", "")
         elif e == "run_stop":
             self.outcome = "STOPPED — resume with: specstride resume" \
@@ -707,21 +919,16 @@ class State:
         elif e == "run_end":
             self.outcome = ev.get("outcome", "done")
 
+    @property
+    def phases_total(self):
+        return self.rail.phases_total
+
+    @property
+    def cur_phase(self):
+        return self.rail.cur_phase
+
     def rail_states(self):
-        """The banner's A/R/C/P states, one per phase (1..total), or None."""
-        total = self.phases_total
-        if not str(total).isdigit() or int(total) < 1:
-            return None
-        out = []
-        for i in range(1, int(total) + 1):
-            v = self.last_verdict.get(str(i))
-            if v:
-                out.append(v)
-            elif str(i) == str(self.cur_phase):
-                out.append("C")
-            else:
-                out.append("P")
-        return out
+        return self.rail.rail_states()
 
     def _rail_lines(self, cols):
         """The same rail the splash printed, so startup and live read as one object."""

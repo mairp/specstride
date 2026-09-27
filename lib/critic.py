@@ -2825,7 +2825,7 @@ def _finish_reject(gates_dir, n, title, args, nonce, prompt, reply, verdict, det
     _write_transcript(transcript, nonce, verdict, detail, prompt, reply, args)
     emit(events_path, "verdict", phase=n, attempt=args.attempt,
          result=("REJECTED" if verdict == "REJECTED" else "MALFORMED"),
-         reason=reason, title=title)
+         reason=reason, title=title, max_rejects=args.max_rejects)
     print("REJECTED" if verdict == "REJECTED" else "MALFORMED")
     sys.exit(10)
 
