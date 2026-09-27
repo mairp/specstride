@@ -15,7 +15,9 @@ from stream_seam import (
     CANONICAL_TOOLS,
     Capability,
     StreamFormat,
+    _nested_target,
     build_registry,
+    tool_target,
 )
 
 
@@ -172,3 +174,139 @@ def select_provider_adapter(provider_format, policy):
 '''
     found = _function_strings(synthetic, {"select_provider_adapter"})
     assert found["select_provider_adapter"] & set(FORMATS.names()) == {"claude"}
+
+
+# ── Story 2: evidence detection fires for a harness's own tool names/paths ──
+
+import json
+import time
+
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fixtures"))
+from stream_test_adapter import StreamTestAdapter  # noqa: E402
+
+_STREAM_FIXTURES = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "fixtures", "stream-test-v1")
+
+
+def test_target_camel_keys_found_by_tool_target_and_policy():
+    assert tool_target("Write", {"filePath": "notes/x.txt"}) == "notes/x.txt"
+    assert tool_target(
+        "NotebookEdit", {"notebookPath": "n/e.ipynb"}) == "n/e.ipynb"
+    policy = ObservabilityPolicy()
+    assert policy.extract_target_paths({"filePath": "notes/x.txt"}) == [
+        "notes/x.txt"]
+    assert policy.extract_target_paths({"notebookPath": "n/e.ipynb"}) == [
+        "n/e.ipynb"]
+
+
+def test_target_exact_key_beats_converted():
+    assert tool_target("Write", {"file_path": "a", "filePath": "b"}) == "a"
+
+
+def test_target_nested_found():
+    assert tool_target(
+        "Write", {"call": {"args": {"path": "hello.txt"}}}) == "hello.txt"
+
+
+def test_target_top_level_beats_nested():
+    assert tool_target("Write", {
+        "path": "top.txt",
+        "call": {"args": {"path": "deep.txt"}},
+    }) == "top.txt"
+
+
+def test_nested_target_is_bounded():
+    deep = {"path": "v"}
+    for _ in range(5000):
+        deep = {"a": deep}
+    wide = {"k": {("key%05d" % i): "v" for i in range(100_000)}}
+    start = time.monotonic()
+    wide_target, wide_visited = _nested_target(wide)
+    deep_target, deep_visited = _nested_target(deep)
+    elapsed = time.monotonic() - start
+    assert wide_target == "" and wide_visited == 256
+    assert deep_target == "" and deep_visited <= 256
+
+    at_six = {"path": "v"}
+    for _ in range(6):
+        at_six = {"a": at_six}
+    assert _nested_target(at_six) == ("v", 7)
+    at_seven = {"a": at_six}
+    # The depth-7 dict is never dequeued: visited stops at the 7 counted nodes.
+    assert _nested_target(at_seven) == ("", 7)
+    assert elapsed < 1.0
+
+
+def test_target_camel_secret_redacted_like_snake():
+    policy = ObservabilityPolicy()
+    secret = "Bearer abcdefgh1234567890"
+    camel = policy.summarize_targets({"filePath": secret})
+    snake = policy.summarize_targets({"file_path": secret})
+    assert camel["targets"] == snake["targets"]
+    assert camel["redacted"] is True and camel["redacted"] == snake["redacted"]
+    assert camel["truncated"] == snake["truncated"]
+
+
+def _run_test_stream(name, expected_evidence):
+    with open(os.path.join(_STREAM_FIXTURES, name), encoding="utf-8") as handle:
+        records = [
+            json.loads(line)
+            for line in handle.read().replace("{EVIDENCE}", expected_evidence).splitlines()
+            if line.strip()
+        ]
+    policy = ObservabilityPolicy()
+    row = StreamFormat(
+        "specstride-test-v1", StreamTestAdapter,
+        capability=Capability("specstride test stream selected"))
+    adapter = select_provider_adapter(
+        "specstride-test-v1", policy, registry=build_registry([row]),
+        expected_evidence=expected_evidence)
+    outcomes = [adapter.consume(record) for record in records]
+    events = [event for outcome in outcomes for event in outcome.events]
+    return outcomes, events
+
+
+def test_target_camel_stream_emits_evidence_writing(tmp_path):
+    outcomes, events = _run_test_stream(
+        "camel.jsonl", str(tmp_path / "gate.md"))
+    tools = [fields for name, fields in events if name == "agent_tool"]
+    evidence = [fields for name, fields in events if name == "evidence_writing"]
+    assert len(tools) == 1 and tools[0]["tool"] == "Write"
+    assert len(evidence) == 1
+    assert evidence[0]["tool"] == "Write"
+    assert evidence[0]["match"] == "exact-expected-target"
+
+
+def test_target_nested_stream_emits_evidence_writing(tmp_path):
+    outcomes, events = _run_test_stream(
+        "nested.jsonl", str(tmp_path / "gate.md"))
+    tools = [fields for name, fields in events if name == "agent_tool"]
+    evidence = [fields for name, fields in events if name == "evidence_writing"]
+    assert len(tools) == 1 and tools[0]["tool"] == "Write"
+    assert len(evidence) == 1 and evidence[0]["tool"] == "Write"
+
+
+def test_target_unmapped_tool_stream_has_no_evidence(tmp_path):
+    outcomes, events = _run_test_stream(
+        "unmapped-tool.jsonl", str(tmp_path / "gate.md"))
+    tools = [fields for name, fields in events if name == "agent_tool"]
+    assert len(tools) == 1 and tools[0]["tool"] == "apply_patch"
+    assert not [name for name, _ in events if name == "evidence_writing"]
+
+
+def test_target_run_shell_lexical_match_only(tmp_path):
+    outcomes, events = _run_test_stream(
+        "run-shell.jsonl", str(tmp_path / "gate.md"))
+    tools = [fields for name, fields in events if name == "agent_tool"]
+    assert len(tools) == 1 and tools[0]["tool"] == "Bash"
+    assert "gate.md" in tools[0]["target"]
+    evidence = [fields for name, fields in events if name == "evidence_writing"]
+    assert len(evidence) == 1  # lexical match only; nothing was executed
+
+
+def test_target_multi_write_emits_evidence_once(tmp_path):
+    outcomes, events = _run_test_stream(
+        "multi-write.jsonl", str(tmp_path / "gate.md"))
+    evidence = [fields for name, fields in events if name == "evidence_writing"]
+    assert len(evidence) == 1

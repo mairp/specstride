@@ -6,11 +6,12 @@ tap itself (``agent_stream``), which would create an import cycle. This module
 imports only the standard library and ``observability_policy``.
 """
 
+from collections import deque
 from dataclasses import dataclass, field
 import re
 from pathlib import Path
 
-from observability_policy import ObservabilityPolicy
+from observability_policy import ObservabilityPolicy, snake_key
 
 
 TARGET_MAX = 120
@@ -18,6 +19,12 @@ TARGET_KEYS = (
     "file_path", "path", "notebook_path", "command", "pattern", "url", "query",
     "skill", "description", "prompt", "subject",
 )
+
+# Bounds for the nested target search (T015): a dict nested deeper than
+# NESTED_MAX_DEPTH is not expanded, and the search stops after NESTED_MAX_NODES
+# dequeued values, whatever the shape of the input.
+NESTED_MAX_DEPTH = 6
+NESTED_MAX_NODES = 256
 
 # The tool names whose writes are matched against the expected gate evidence
 # path (same five names, same result as the previous inline set).
@@ -42,8 +49,51 @@ def one_line(value, limit):
     return value if len(value) <= limit else value[:limit - 1] + "…"
 
 
+def _dict_target(d):
+    """The exact-then-converted key rule for one dict: an exact TARGET_KEYS hit
+    wins over a snake_key-converted one, both in TARGET_KEYS tuple order."""
+    for k in TARGET_KEYS:
+        if d.get(k):
+            return d[k]
+    converted = [(snake_key(key), value) for key, value in d.items() if value]
+    for k in TARGET_KEYS:
+        for key, value in converted:
+            if key == k:
+                return value
+    return None
+
+
+def _nested_target(tool_input):
+    """Bounded BFS over nested values for a target key.
+
+    Returns ``(target, visited)``: the first BFS match wins, ``visited`` counts
+    every dequeued dict/list/scalar. Top-level values sit at depth 1; a container
+    at depth ``NESTED_MAX_DEPTH`` is counted but not expanded, so no value can be
+    visited at depth > ``NESTED_MAX_DEPTH``."""
+    visited = 0
+    queue = deque([(tool_input, 0)])
+    while queue:
+        node, depth = queue.popleft()
+        visited += 1
+        if visited > NESTED_MAX_NODES:
+            return "", NESTED_MAX_NODES
+        if isinstance(node, dict):
+            if depth <= NESTED_MAX_DEPTH:
+                found = _dict_target(node)
+                if found is not None:
+                    return one_line(found, TARGET_MAX), visited
+            if depth < NESTED_MAX_DEPTH:
+                queue.extend((child, depth + 1) for child in node.values())
+        elif isinstance(node, (list, tuple)) and depth < NESTED_MAX_DEPTH:
+            queue.extend((child, depth + 1) for child in node)
+    return "", visited
+
+
 def tool_target(name, tool_input):
-    """Compact one-line description of what a tool call touches."""
+    """Compact one-line description of what a tool call touches.
+
+    Order: the ``Bash`` short-cut, the exact top-level pass over ``TARGET_KEYS``,
+    a ``snake_key``-converted top-level pass, then a bounded nested search."""
     if not isinstance(tool_input, dict):
         return ""
     if name == "Bash":
@@ -53,7 +103,12 @@ def tool_target(name, tool_input):
         value = tool_input.get(key)
         if value:
             return one_line(value, TARGET_MAX)
-    return ""
+    for k in TARGET_KEYS:
+        for key, value in tool_input.items():
+            if snake_key(key) == k and value:
+                return one_line(value, TARGET_MAX)
+    target, _ = _nested_target(tool_input)
+    return target
 
 
 def looks_like_evidence(name, tool_input, target, expected_evidence=None):
@@ -72,6 +127,52 @@ def looks_like_evidence(name, tool_input, target, expected_evidence=None):
         except (OSError, ValueError):
             continue
     return False
+
+
+class ToolEvents:
+    """Build the ``tool_use`` events of any adapter, once (T016).
+
+    Reproduces ``ClaudeAdapter._consume_block``'s ``tool_use`` branch field for
+    field — ``agent_tool``, the display line and the ``("tool_use", fields)``
+    telemetry — except that the canonical tool name (the name given to
+    ``tool_target`` and ``looks_like_evidence``) is
+    ``tool_names.get(harness_name, harness_name)``. The ``evidence_writing``
+    event fires at most once per instance."""
+
+    def __init__(self, policy, expected_evidence, tool_names):
+        self.policy = policy
+        self.expected_evidence = expected_evidence
+        self.tool_names = dict(tool_names or {})
+        self.evidence_announced = False
+
+    def build(self, harness_name, tool_input, tool_id=None):
+        name = self.tool_names.get(harness_name, harness_name)
+        raw_target = tool_target(name, tool_input)
+        target = self.policy.sanitize_text(raw_target, TARGET_MAX).value
+        summary = self.policy.summarize_targets(tool_input or {})
+        fields = {
+            "tool": name,
+            "target": target,
+            "targets": summary["targets"],
+            "redacted": summary["redacted"],
+            "truncated": summary["truncated"],
+            "original_bytes": summary["original_bytes"],
+            "retained_bytes": summary["retained_bytes"],
+        }
+        if tool_id:
+            fields["tool_id"] = tool_id
+        events = [("agent_tool", fields)]
+        display = "  → %s %s" % (name, target) if target else "  → %s" % name
+        if not self.evidence_announced and looks_like_evidence(
+            name, tool_input, target, self.expected_evidence,
+        ):
+            self.evidence_announced = True
+            evidence = {"tool": name, "target": str(self.expected_evidence),
+                        "match": "exact-expected-target"}
+            if tool_id:
+                evidence["tool_id"] = tool_id
+            events.append(("evidence_writing", evidence))
+        return events, display, ("tool_use", fields)
 
 
 @dataclass

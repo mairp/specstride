@@ -1,0 +1,2 @@
+{"type":"tool","name":"run_shell","id":"t1","input":{"command":"echo ok > {EVIDENCE}"}}
+{"type":"result","status":"success","duration_ms":8,"num_turns":1,"model":"test-model"}

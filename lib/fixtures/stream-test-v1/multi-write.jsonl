@@ -1,0 +1,4 @@
+{"type":"tool","name":"write_file","id":"t1","input":{"filePath":"{EVIDENCE}"}}
+{"type":"tool","name":"write_file","id":"t2","input":{"filePath":"{EVIDENCE}"}}
+{"type":"tool","name":"write_file","id":"t3","input":{"filePath":"{EVIDENCE}"}}
+{"type":"result","status":"success","duration_ms":30,"num_turns":4,"model":"test-model"}
