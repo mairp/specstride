@@ -13,7 +13,7 @@ from observability_policy import ObservabilityPolicy
 from prime_stream import PrimeAdapter
 from stream_seam import (
     AdapterOutcome, TARGET_KEYS, TARGET_MAX, tool_target, looks_like_evidence,
-    Capability, StreamFormat, build_registry,
+    Capability, StreamFormat, SharedBehaviour, build_registry,
 )
 from telemetry_delivery import LocalFirstFanout
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
@@ -228,8 +228,7 @@ def select_provider_adapter(provider_format, policy, *, registry=None,
     if row is None:
         raise ValueError("unsupported provider format: %s" % provider_format)
     if row.opts:
-        raise NotImplementedError(
-            "shared behaviours for stream format %s are not wired yet" % row.name)
+        return SharedBehaviour(row.adapter(policy, **kwargs), row, invocation_model)
     return row.adapter(policy, **kwargs)
 
 
@@ -319,6 +318,10 @@ def main():
     parser.add_argument("--invocation-id", default="")
     parser.add_argument("--expected-evidence", default="")
     parser.add_argument("--provider-format", default="claude")
+    # The model the invocation specified (research R5). Used only by the
+    # shared-behaviour wrapper (synthesised init / missing_terminal header
+    # facts); bare adapters ignore it, so Claude and Prime output is unchanged.
+    parser.add_argument("--invocation-model", default="")
     # When set (structured Prime path only), the tap records the provider-terminal
     # observation it — and only it — can see into this atomic sidecar. The producer
     # exit/signal/timeout is observed separately by the controller (producer.json);
@@ -337,6 +340,7 @@ def main():
     adapter = select_provider_adapter(
         args.provider_format, policy,
         expected_evidence=context.expected_evidence if context else args.expected_evidence or None,
+        invocation_model=args.invocation_model or None,
     )
     loki, otel, logfmt = _telemetry(args)
     # Fan every normalized event out local-first (authoritative JSONL), then to each

@@ -310,3 +310,209 @@ def test_target_multi_write_emits_evidence_once(tmp_path):
         "multi-write.jsonl", str(tmp_path / "gate.md"))
     evidence = [fields for name, fields in events if name == "evidence_writing"]
     assert len(evidence) == 1
+
+
+# ── Story 3: opt-in shared behaviours (synthesised init/terminal, no_activity) ──
+
+from stream_seam import SharedBehaviour  # noqa: E402
+
+_HEADER_ROW_KWARGS = dict(
+    has_init_record=False, synth_init=True, synth_terminal=True, no_activity=True,
+)
+
+
+def _test_row(**kwargs):
+    kwargs.setdefault("capability", Capability("specstride test stream selected"))
+    return StreamFormat("specstride-test-v1", StreamTestAdapter, **kwargs)
+
+
+def _shared_wrapper(registry_row=None, invocation_model=None, expected_evidence=None):
+    row = registry_row if registry_row is not None else _test_row(**_HEADER_ROW_KWARGS)
+    return select_provider_adapter(
+        "specstride-test-v1", ObservabilityPolicy(), registry=build_registry([row]),
+        invocation_model=invocation_model, expected_evidence=expected_evidence,
+    )
+
+
+def _feed(wrapper, name):
+    """Feed one fixture stream through the wrapper, then finish() once."""
+    with open(os.path.join(_STREAM_FIXTURES, name), encoding="utf-8") as handle:
+        raw = handle.read().replace("{EVIDENCE}", "/tmp/e2e/placeholder-gate.md")
+    outcomes = [wrapper.consume(json.loads(line))
+                for line in raw.splitlines() if line.strip()]
+    outcomes.append(wrapper.finish())
+    events = [event for outcome in outcomes for event in outcome.events]
+    terminals = [outcome.terminal for outcome in outcomes if outcome.terminal]
+    output = [line for outcome in outcomes for line in outcome.output]
+    return outcomes, events, terminals, output
+
+
+def test_shared_init_emitted_once_and_first(tmp_path):
+    outcomes, events, terminals, _ = _feed(
+        _shared_wrapper(), "no-init-no-terminal.jsonl")
+    names = [name for name, _ in events]
+    assert names.count("agent_init") == 1
+    assert names[0] == "agent_init"
+
+
+def test_shared_init_model_from_invocation_or_none():
+    # research R5 table cases as the proposer would pass them: "", "M", "Q".
+    for passed, expected in (("", None), ("M", "M"), ("Q", "Q"), (None, None)):
+        outcomes, events, terminals, _ = _feed(
+            _shared_wrapper(invocation_model=passed), "idle-success.jsonl")
+        inits = [fields for name, fields in events if name == "agent_init"]
+        assert len(inits) == 1 and inits[0]["model"] == expected
+        assert inits[0]["tools"] is None
+
+
+def test_shared_missing_terminal_model_is_invocation_model():
+    # The synthesised missing_terminal carries the header-fact model.
+    _, _, terminals, _ = _feed(_shared_wrapper(invocation_model="Q"), "empty.jsonl")
+    assert terminals[0]["reason_code"] == "missing_terminal"
+    assert terminals[0]["model"] == "Q"
+    _, _, terminals, _ = _feed(_shared_wrapper(), "empty.jsonl")
+    assert terminals[0]["model"] is None
+
+
+def test_shared_empty_stream_yields_only_missing_terminal():
+    outcomes, events, terminals, output = _feed(_shared_wrapper(), "empty.jsonl")
+    names = [name for name, _ in events]
+    assert names == []
+    assert len(terminals) == 1
+    assert terminals[0]["reason_code"] == "missing_terminal"
+    assert any("missing_terminal" in line for line in output)
+    assert not [fields for _, fields in events if False] and events == []
+
+
+def test_shared_no_init_no_terminal_fixture():
+    outcomes, events, terminals, _ = _feed(
+        _shared_wrapper(), "no-init-no-terminal.jsonl")
+    names = [name for name, _ in events]
+    assert names.count("agent_init") == 1
+    assert len(terminals) == 1
+    assert terminals[0]["reason_code"] == "missing_terminal"
+
+
+def test_shared_delivered_terminal_not_resynthesised():
+    outcomes, events, terminals, _ = _feed(
+        _shared_wrapper(), "idle-success.jsonl")
+    assert len(terminals) == 1
+    assert terminals[0]["reason_code"] == "success"
+
+
+def test_shared_duplicate_terminal_dropped_with_diagnostic():
+    outcomes, events, terminals, _ = _feed(
+        _shared_wrapper(), "duplicate-terminal.jsonl")
+    assert len(terminals) == 1
+    duplicates = [fields for name, fields in events
+                  if name == "agent_diagnostic"
+                  and fields.get("code") == "duplicate_terminal"]
+    assert len(duplicates) == 1 and duplicates[0]["severity"] == "warning"
+
+
+def test_shared_cost_usd_is_never_zero():
+    outcomes, events, terminals, _ = _feed(
+        _shared_wrapper(), "idle-success.jsonl")
+    assert len(terminals) == 1
+    assert terminals[0]["cost_usd"] is None
+
+
+def test_shared_idle_success_stamps_no_activity():
+    outcomes, events, terminals, _ = _feed(
+        _shared_wrapper(), "idle-success.jsonl")
+    assert terminals[0]["no_activity"] is True
+    assert terminals[0]["status"] == "success"
+    assert terminals[0]["reason_code"] == "success"
+
+
+def test_shared_camel_tool_means_activity():
+    outcomes, events, terminals, _ = _feed(
+        _shared_wrapper(), "camel.jsonl")
+    assert terminals[0]["no_activity"] is False
+
+
+def test_shared_no_activity_opt_off_leaves_key_absent():
+    row = _test_row(has_init_record=False, synth_init=True, synth_terminal=True,
+                    no_activity=False)
+    outcomes, events, terminals, _ = _feed(_shared_wrapper(row), "idle-success.jsonl")
+    assert "no_activity" not in terminals[0]
+
+
+def test_shared_error_terminal_leaves_no_activity_absent():
+    with open(os.path.join(_STREAM_FIXTURES, "idle-success.jsonl"),
+              encoding="utf-8") as handle:
+        raw = handle.read().replace('"success"', '"error"').replace(
+            "{EVIDENCE}", "/tmp/e2e/placeholder-gate.md")
+    wrapper = _shared_wrapper()
+    terminal = None
+    for line in raw.splitlines():
+        if line.strip():
+            outcome = wrapper.consume(json.loads(line))
+            terminal = terminal or outcome.terminal
+    assert terminal is not None and terminal["status"] == "error"
+    assert "no_activity" not in terminal
+    # The error terminal was delivered, so finish() synthesises nothing extra.
+    outcome = wrapper.finish()
+    assert outcome.terminal is None
+    assert wrapper.terminal_seen is True
+
+
+def test_shared_finish_twice_same_single_terminal():
+    # Empty stream: the first finish() synthesises the missing_terminal, the
+    # second returns the same single terminal by adding nothing.
+    wrapper = _shared_wrapper()
+    first = wrapper.finish()
+    second = wrapper.finish()
+    assert first.terminal is not None
+    assert first.terminal["reason_code"] == "missing_terminal"
+    assert second.terminal is None
+    assert second.events == [] and second.output == []
+
+
+def test_shared_terminal_seen_reflects_terminal():
+    wrapper = _shared_wrapper()
+    assert wrapper.terminal_seen is False
+    _feed(wrapper, "idle-success.jsonl")
+    assert wrapper.terminal_seen is True
+    empty_wrapper = _shared_wrapper()
+    _feed(empty_wrapper, "empty.jsonl")
+    assert empty_wrapper.terminal_seen is True  # the synthesised terminal
+
+
+def test_shared_consume_raw_absent_for_test_adapter():
+    wrapper = _shared_wrapper()
+    assert isinstance(wrapper, SharedBehaviour)
+    assert getattr(wrapper, "consume_raw", None) is None
+
+
+def test_shared_track_terminal_only():
+    row = _test_row(track_terminal=True)
+    wrapper = _shared_wrapper(row)
+    assert isinstance(wrapper, SharedBehaviour)
+    # A delivered terminal sets terminal_seen and is stamped with nothing.
+    outcomes, events, terminals, _ = _feed(wrapper, "idle-success.jsonl")
+    assert wrapper.terminal_seen is True
+    assert "no_activity" not in terminals[0]
+    assert not [name for name, _ in events if name == "agent_init"]
+    # EOF without a terminal: no synthesis at all.
+    quiet = _shared_wrapper(row)
+    quiet.consume({"type": "text", "text": "still working"})
+    finish_outcome = quiet.finish()
+    assert finish_outcome.terminal is None
+    assert quiet.terminal_seen is False
+    assert not [name for name, _ in finish_outcome.events if name == "agent_init"]
+
+
+def test_shared_text_is_sanitised():
+    secret_text = "token Bearer abcdefgh1234567890 in the log"
+    shared = _shared_wrapper()
+    shared_outcome = shared.consume({"type": "text", "text": secret_text})
+    claude = select_provider_adapter("claude", ObservabilityPolicy())
+    claude_outcome = claude.consume({"type": "assistant", "message": {
+        "model": "m", "content": [{"type": "text", "text": secret_text}]}})
+    shared_text = [fields for name, fields in shared_outcome.events
+                   if name == "agent_text"]
+    claude_text = [fields for name, fields in claude_outcome.events
+                   if name == "agent_text"]
+    assert len(shared_text) == 1 and len(claude_text) == 1
+    assert shared_text[0] == claude_text[0]

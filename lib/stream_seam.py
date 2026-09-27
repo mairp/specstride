@@ -301,3 +301,108 @@ def _validate_signals(row):
                 "stream format %s declares out-of-order or repeated signals: %s"
                 % (row.name, signals))
         indexes.append(index)
+
+
+class SharedBehaviour:
+    """The opt-in shared behaviours one stream format may request (T020).
+
+    Wraps an inner adapter for a ``StreamFormat`` row that declares at least one
+    of ``synth_init`` / ``synth_terminal`` / ``no_activity`` /
+    ``track_terminal``. Nothing is invented: a synthesised ``agent_init`` carries
+    the invocation's header facts, a synthesised terminal is only ever the
+    honest ``missing_terminal``, and ``no_activity`` is an additive flag on a
+    success terminal. ``status``, ``reason_code`` and ``is_error`` are never
+    touched. ``terminal_seen`` is exposed read-only for the later hang
+    classifier, on every wrapper (including a row whose only opt is
+    ``track_terminal``, which synthesises and stamps nothing).
+    """
+
+    def __init__(self, inner, decl, invocation_model=None):
+        self.inner = inner
+        self.decl = decl
+        self.invocation_model = invocation_model
+        self._activity = False
+        self._terminal_seen = False
+        self._init_emitted = False
+        self._finished = False
+        # Expose consume_raw only when the inner adapter has it, so the tap's
+        # duck check (getattr(adapter, "consume_raw", None)) stays honest.
+        inner_raw = getattr(inner, "consume_raw", None)
+        if inner_raw is not None:
+            self.consume_raw = inner_raw
+
+    @property
+    def terminal_seen(self):
+        """Read-only: whether a terminal (delivered or from inner.finish) was seen."""
+        return self._terminal_seen
+
+    def _header_facts(self):
+        return {"model": self.invocation_model or None, "tools": None}
+
+    def _synth_init(self):
+        self._init_emitted = True
+        facts = self._header_facts()
+        event = ("agent_init", facts)
+        display = "  · init model=%s" % (facts["model"] or "?")
+        return event, display
+
+    def _first_terminal(self, outcome):
+        self._terminal_seen = True
+        terminal = outcome.terminal
+        if self.decl.no_activity and terminal.get("status") == "success":
+            terminal["no_activity"] = not self._activity
+
+    def _later_terminal(self, outcome):
+        outcome.terminal = None
+        outcome.events.append(("agent_diagnostic", {
+            "code": "duplicate_terminal", "severity": "warning",
+            "message": one_line(
+                "duplicate terminal dropped: the pass already had one", 200),
+        }))
+
+    def _handle_terminal(self, outcome):
+        if outcome.terminal is None:
+            return
+        if self._terminal_seen:
+            self._later_terminal(outcome)
+        else:
+            self._first_terminal(outcome)
+
+    def consume(self, record):
+        outcome = self.inner.consume(record)
+        if self.decl.synth_init and not self._init_emitted:
+            event, display = self._synth_init()
+            outcome.events.insert(0, event)
+            outcome.output.insert(0, display)
+        if any(name in ("agent_tool", "evidence_writing")
+               for name, _ in outcome.events):
+            self._activity = True
+        self._handle_terminal(outcome)
+        return outcome
+
+    def finish(self):
+        """Idempotent: the inner finish runs once; a missing terminal is synthesised."""
+        outcome = AdapterOutcome()
+        if self._finished:
+            return outcome
+        self._finished = True
+        inner_finish = getattr(self.inner, "finish", None)
+        if inner_finish is not None:
+            inner_outcome = inner_finish()
+            outcome.events.extend(inner_outcome.events)
+            outcome.output.extend(inner_outcome.output)
+            outcome.telemetry = outcome.telemetry or inner_outcome.telemetry
+            self._handle_terminal(inner_outcome)
+            outcome.terminal = inner_outcome.terminal
+        if self.decl.synth_terminal and not self._terminal_seen:
+            terminal = {
+                "status": "error",
+                "reason_code": "missing_terminal",
+                "reason": "Provider stream ended without a terminal result",
+                "model": self.invocation_model or None,
+            }
+            self._terminal_seen = True
+            outcome.terminal = terminal
+            outcome.output.append(
+                "  ✗ result: missing_terminal (stream ended before result)")
+        return outcome
