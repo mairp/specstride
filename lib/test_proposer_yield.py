@@ -531,3 +531,27 @@ def test_a_long_pass_resets_the_short_pass_count(tmp_path):
     result, events = _run(tmp_path, _agent(tmp_path, "exit 0\n"), max_iter=3,
                           env_extra={"SPECSTRIDE_SHORT_PASS_SEC": "0"})
     assert "iter_short_pass" not in _names(events)
+
+
+# ── the resume prompt lists every failure of the whole job log ──────────────
+def test_the_resume_prompt_lists_a_failure_the_log_slice_elides(tmp_path):
+    """A failure printed in the middle of a long job log is elided from the
+    head+tail slice. The resume prompt must still name it (failure ledger)."""
+    job = ("for i in $(seq 1 300); do echo step $i ok; done; "
+           "echo 'FAIL lab-acl not Ready=True within 600s'; "
+           "for i in $(seq 1 300); do echo step $i ok; done")
+    document = _yield_json(job={"mode": "launch", "argv": ["/bin/sh", "-c", job]})
+    evidence = tmp_path / ".specstride" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"
+    body = _writes_yield(tmp_path, document,
+        then=f'mkdir -p "$(dirname "{evidence}")"\nprintf "# done\\n" > "{evidence}"\nexit 0\n')
+    body = body.replace(f'printf "# done\\n" > "{evidence}"\n',
+                        f'[[ -f "{tmp_path}/yields-written" ]] && [[ $(cat "{tmp_path}/yields-written") -ge 1 ]] '
+                        f'&& grep -q "resume from its result" <<<"$prompt" && printf "# done\\n" > "{evidence}"\n')
+    result, events = _run(tmp_path, _agent(tmp_path, body), max_iter=2)
+    prompts = (tmp_path / "prompts.log").read_text().split("===PASS-END===")
+    resume = next(p for p in prompts if "resume from its result" in p)
+    assert "lines elided from the middle" in resume
+    assert "Every failure the job reported" in resume
+    assert "[NEW]" in resume and "FAIL lab-acl not Ready=True" in resume
+    ledger = tmp_path / ".specstride" / "features" / "f" / "failure-ledger.jsonl"
+    assert ledger.exists()
