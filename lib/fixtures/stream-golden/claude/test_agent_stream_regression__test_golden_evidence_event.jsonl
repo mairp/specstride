@@ -1,0 +1,1 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu-2", "name": "Write", "input": {"file_path": "/tmp/stream-golden/GATE2-EVIDENCE.md"}}]}}

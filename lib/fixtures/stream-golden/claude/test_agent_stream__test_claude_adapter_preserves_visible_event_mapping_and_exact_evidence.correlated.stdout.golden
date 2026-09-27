@@ -1,0 +1,4 @@
+  · init model=fixture tools=1
+  → Write /tmp/stream-golden/GATE9-EVIDENCE.md
+  → Write /tmp/stream-golden/GATE2-EVIDENCE.md
+  ✗ result: missing_terminal (stream ended before result)
