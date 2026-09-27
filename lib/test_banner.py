@@ -188,3 +188,35 @@ def test_the_old_splash_is_gone():
     text = "\n".join(all_outputs()).lower() + run("--plain").lower()
     for word in ("unpossible", "springfield", "wig" + "gum"):
         assert word not in text
+
+
+def test_rail_only_plain_prints_exactly_two_ascii_lines():
+    out = run("--rail-only", "--plain", "--phases", "5", "--states", "A,A,R,P,P")
+    lines = out.splitlines()
+    assert len(lines) == 2 and out.isascii() and "\x1b" not in out
+    assert lines == B.render(FIVE[:2] + ["R", "P", "P"], 80, 24, T.Theme("none"),
+                             ascii_=True, tier="full")[-2:]
+    assert "specstride" not in out and "3 rej" in lines[1]
+
+
+def test_rail_only_honors_both_switches():
+    assert run("--rail-only", "--plain", "--phases", "3", SPECSTRIDE_LIVE_RAIL="off") == ""
+    assert run("--rail-only", "--plain", "--phases", "3", SPECSTRIDE_BANNER="off") == ""
+    # the live-rail switch never touches the splash itself
+    assert "specstride" in run("--plain", "--phases", "3", SPECSTRIDE_LIVE_RAIL="off")
+
+
+SPLASH_PLAIN = """\
+  .====+====+====-
+  |                   specstride
+  '====+====+====.    From specs to tested code.
+                 |    Every step, signed off.
+  -====+====+===='
+
+  ====+=========+=========+---------+---------+----
+      1 ok      2 ok      3 now     4 -       5 -
+"""
+
+
+def test_default_splash_is_byte_identical():
+    assert run("--plain", "--phases", "5", "--states", "A,A,C,P,P") == SPLASH_PLAIN
