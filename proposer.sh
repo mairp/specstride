@@ -172,7 +172,10 @@ REPEAT_LIMIT="${SPECSTRIDE_PROPOSER_REPEAT_LIMIT:-12}"
 # process-level detector still counted bare argv; it stays as belt and braces
 # now that W28 keys that detector by the spawning tool call, in the anchored
 # form so it exempts the tools and not every command line that mentions them.
-REPEAT_IGNORE="${SPECSTRIDE_PROPOSER_REPEAT_IGNORE-pytest|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)|(^|/)(tesseract|convert|magick|compare|ffmpeg|pdftotext|identify)( |$)}"
+# `pytest -n N` (pytest-xdist) starts N workers through execnet, whose command
+# line never names pytest: `python -u -c import sys;exec(eval(sys.stdin.readline()))`.
+# Sixteen of them are one suite run, not a retry loop, so that bootstrap is listed too.
+REPEAT_IGNORE="${SPECSTRIDE_PROPOSER_REPEAT_IGNORE-pytest|exec\(eval\(sys\.stdin\.readline|ruff|mypy|black|flake8|eslint|prettier|tsc|jest|vitest|go (test|vet)|cargo (test|clippy|fmt)|make (test|lint|check)|(^|/)(tesseract|convert|magick|compare|ffmpeg|pdftotext|identify)( |$)}"
 PROGRESS_PATHS=()
 STREAM_JSON="false"
 LOKI_URL="${SPECSTRIDE_LOKI_URL:-http://localhost:3100}"

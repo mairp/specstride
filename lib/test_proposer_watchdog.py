@@ -227,6 +227,20 @@ def test_default_ignore_pattern_exempts_test_runners(tmp_path):
     assert _kills(evs) == []
 
 
+def test_default_ignore_pattern_exempts_xdist_workers(tmp_path):
+    """`pytest -n 16` runs its tests in execnet workers whose command line never
+    names pytest. Counted, sixteen of them look like a retry loop and the pass is
+    killed on every suite run, so the default ignore list names their bootstrap."""
+    worker = "python3 -u -c 'import sys;exec(eval(sys.stdin.readline()))'"
+    body = ("for i in 1 2 3 4 5 6; do echo '\"import time; time.sleep(2)\"' | %s; done\n"
+            "exit 0\n" % worker)
+    result, evs = _run(tmp_path, _agent(tmp_path, body),
+                       env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
+
+    assert result.returncode == 4, result.stderr
+    assert _kills(evs) == []
+
+
 def test_one_long_command_is_not_repetition(tmp_path):
     """A single slow command is one pid however often it is sampled."""
     body = "timeout 8 tail -f /dev/null\nexit 0\n"
