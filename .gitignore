@@ -68,5 +68,7 @@ specs/*/check-done.sh
 
 # Local working folders: planning notes, reverse-engineered specs, feature specs.
 roadmap/
+drafts/
+prompts/
 reversed/
 specs/
