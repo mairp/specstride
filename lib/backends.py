@@ -11,6 +11,13 @@ module's API or output.
 
 Stdlib only; paths resolve from __file__, never from the CWD, and nothing here
 reads .env or SPECSTRIDE_* variables.
+
+Adding a backend: append its entry to REGISTRY here, add the matching arm to
+that role's dispatch (run_agent() in proposer.sh and/or critic_call() in
+lib/critic.py), update the "Proposer backends:" / "Critic backends:" lines in
+.env.example, README.md, wiki/Configuration.md and — for a critic backend — the
+lib/critic.py module docstring, then run lib/test_backend_registry.py: its
+dispatch-parity and documentation-list checks name whatever is still missing.
 """
 import argparse
 import sys

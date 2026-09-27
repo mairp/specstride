@@ -14,6 +14,10 @@ Proposer backends: `dsh[:provider/model] | claude | codex | bebop[:name] | prime
 
 Critic backends: `dsh[:provider/model] | claude | codex | bebop | prime[:variant]`
 
+Both lists are generated from `lib/backends.py`, the single backend registry, and
+checked against it by `lib/test_backend_registry.py`; to add a new backend, add it
+to that registry first, then to its dispatch arm and these doc lines.
+
 - **`dsh`** — DeepSeek Harness's `headless` profile. It uses the provider/model in
   `$DSH_HOME/settings.yaml` (this host selects `gpt-5.6-sol` through Compass STAGE).
   The proposer gets the normal harness tools; the critic runs with a temporary

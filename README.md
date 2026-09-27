@@ -1221,6 +1221,10 @@ Proposer backends: `dsh[:provider/model] | claude | codex | bebop[:name] | prime
 
 Critic backends: `dsh[:provider/model] | claude | codex | bebop | prime[:variant]`
 
+Both lists are generated from `lib/backends.py`, the single backend registry, and
+checked against it by `lib/test_backend_registry.py`; to add a new backend, add it
+to that registry first, then to its dispatch arm and these doc lines.
+
 - **`dsh`** — DeepSeek Harness's `headless` profile, using the provider/model in
   `$DSH_HOME/settings.yaml` unless a model override is supplied. Use backend
   refs such as `dsh:zai/glm-5.3` or `dsh:qwen3.8-27b`, or set

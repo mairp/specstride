@@ -675,3 +675,142 @@ def test_drift_undeclared_list(tmp_path):
     assert problems, "expected an undeclared-list failure"
     assert problems[0].startswith(str(p) + ":")
     assert "undeclared backend list" in problems[0]
+
+
+# ── T026/T027/T028: US3 — the shim and the registry-unavailable fallback ─────
+# The note is pinned here (T028) with the exact text of the fallback contract's
+# header. The test never reads the contract file (untracked, absent in CI);
+# the text was compared with the contract by hand once, locally.
+
+FALLBACK_NOTE = \
+    '(backend list unavailable: could not run lib/backends.py; see README "Configuration")'
+
+SPECSTRIDE_LIB_SH = os.path.join(ROOT, "specstride-lib.sh")
+
+
+def _no_registry_failure(argv, detail):
+    return "%s without registry: %s" % (argv, detail)
+
+
+def test_fallback_note_is_pinned_and_in_the_shim():
+    assert FALLBACK_NOTE in open(SPECSTRIDE_LIB_SH, encoding="utf-8").read()
+    # the note itself must not be a backend list the guard would flag
+    assert not any(is_backend_list(raw) for _, raw in find_lists(FALLBACK_NOTE))
+
+
+@pytest.mark.parametrize("role", ["proposer", "critic"])
+def test_shim_prints_display_from_any_cwd(tmp_path, role):
+    argv = ["/bin/bash", "-c",
+            ". %s; specstride_backend_display %s" % (SPECSTRIDE_LIB_SH, role)]
+    r = subprocess.run(argv, cwd=str(tmp_path), capture_output=True,
+                       text=True, timeout=60)
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    assert r.stdout == backends.display(role) + "\n", role
+
+
+def _path_without_python(tmp_path):
+    """A single dir symlinking every PATH executable (first match per name)
+    except any interpreter whose name starts with 'python'."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    seen = set()
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if not d or not os.path.isdir(d):
+            continue
+        for name in os.listdir(d):
+            if name in seen or name.startswith("python"):
+                continue
+            full = os.path.join(d, name)
+            if os.path.isfile(full) and os.access(full, os.X_OK):
+                os.symlink(full, bindir / name)
+                seen.add(name)
+    return bindir
+
+
+def _assert_fallback(argv, out, stream):
+    assert FALLBACK_NOTE in out, _no_registry_failure(argv, "note missing on " + stream)
+    lists = [raw for _, raw in find_lists(out) if is_backend_list(raw)]
+    assert not lists, _no_registry_failure(
+        argv, "backend list still shown: %r" % (lists,))
+    for role in backends.ROLES:
+        assert backends.display(role) not in out, \
+            _no_registry_failure(argv, "%s list rendered" % role)
+
+
+def test_g8_fallback_when_backends_py_missing(tmp_path):
+    root = _copy_tree(tmp_path)
+    (root / "lib" / "backends.py").unlink()
+    env = {k: v for k, v in os.environ.items() if not k.startswith("SPECSTRIDE_")}
+    orch = str(root / "orchestrator.sh")
+    prop = str(root / "proposer.sh")
+
+    help_orch = subprocess.run(["bash", orch, "--help"], capture_output=True,
+                               text=True, timeout=60, env=env)
+    assert help_orch.returncode == 0, _no_registry_failure(
+        "bash orchestrator.sh --help", "exit %d" % help_orch.returncode)
+    _assert_fallback("bash orchestrator.sh --help", help_orch.stdout, "stdout")
+
+    help_prop = subprocess.run(["bash", prop, "--help"], capture_output=True,
+                               text=True, timeout=60, env=env)
+    assert help_prop.returncode == 0, _no_registry_failure(
+        "bash proposer.sh --help", "exit %d" % help_prop.returncode)
+    _assert_fallback("bash proposer.sh --help", help_prop.stdout, "stdout")
+
+    bad_orch = subprocess.run(["bash", orch, "--no-such-flag"],
+                              capture_output=True, text=True, timeout=60, env=env)
+    assert bad_orch.returncode == 3, _no_registry_failure(
+        "bash orchestrator.sh --no-such-flag",
+        "exit %d (E_SPEC is 3)" % bad_orch.returncode)
+    _assert_fallback("bash orchestrator.sh --no-such-flag",
+                     bad_orch.stderr, "stderr")
+
+    # the unmodified proposer exits with the status its own argument parser
+    # assigns to an unknown argument (the `*) unknown arg` arm, exit 1)
+    m = re.search(r"unknown arg.*?exit (\d+)",
+                  open(PROPOSER_SH, encoding="utf-8").read())
+    assert m, "could not read proposer.sh's unknown-arg exit status"
+    want_prop_exit = int(m.group(1))
+    assert want_prop_exit == 1, want_prop_exit
+    bad_prop = subprocess.run(["bash", prop, "--no-such-flag"],
+                              capture_output=True, text=True, timeout=60, env=env)
+    assert bad_prop.returncode == want_prop_exit, _no_registry_failure(
+        "bash proposer.sh --no-such-flag", "exit %d" % bad_prop.returncode)
+    _assert_fallback("bash proposer.sh --no-such-flag",
+                     bad_prop.stderr, "stderr")
+
+    # the proposer unknown-backend error from the copy: T010's harness
+    wd = tmp_path / "wd"
+    wd.mkdir()
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("work\n", encoding="utf-8")
+    unk_argv = ["bash", prop, "--workdir", str(wd), "--evidence", "done.txt",
+                "--prompt-file", str(prompt),
+                "--backend", "no-such-backend", "-n", "1", "-s", "0"]
+    unk = subprocess.run(unk_argv, capture_output=True, text=True,
+                         timeout=60, env=env)
+    assert unk.returncode == UNKNOWN_BACKEND_EXIT, _no_registry_failure(
+        " ".join(unk_argv), "exit %d (pinned %d)" % (unk.returncode,
+                                                     UNKNOWN_BACKEND_EXIT))
+    assert "unknown backend 'no-such-backend' (" in unk.stderr
+    _assert_fallback(" ".join(unk_argv), unk.stderr, "stderr")
+
+    # no Python traceback anywhere
+    for label, r in [("orchestrator --help", help_orch),
+                     ("proposer --help", help_prop),
+                     ("orchestrator unknown flag", bad_orch),
+                     ("proposer unknown flag", bad_prop),
+                     ("proposer unknown backend", unk)]:
+        assert "Traceback" not in r.stderr, \
+            _no_registry_failure(label, "Python traceback on stderr")
+
+
+def test_g8_fallback_when_python3_not_on_path(tmp_path):
+    bindir = _path_without_python(tmp_path)
+    assert shutil.which("python3", path=str(bindir)) is None
+    env = dict(os.environ)
+    env["PATH"] = str(bindir)
+    r = subprocess.run(["bash", ORCHESTRATOR_SH, "--help"], env=env,
+                       capture_output=True, text=True, timeout=60)
+    argv = "bash orchestrator.sh --help (PATH without python3)"
+    assert r.returncode == 0, _no_registry_failure(argv, "exit %d" % r.returncode)
+    _assert_fallback(argv, r.stdout, "stdout")
