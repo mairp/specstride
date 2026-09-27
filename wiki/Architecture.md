@@ -35,7 +35,7 @@ The loop above is the middle of three nested loops:
 
 The diagnostician and accelerator adapt the next attempt, but nothing they learn outlives the
 run. Only the outer loop carries lessons forward, and only for two allowlisted settings. The
-critic is outside its reach by design. See [Learning](Learning).
+critic, the loop's judge, is outside its reach by design. See [Learning](Learning).
 
 ## The roles
 
@@ -48,6 +48,15 @@ Literal role names are used everywhere — code, files, flags, env vars. Three s
 | **Critic** | [`lib/critic.py`](../lib/critic.py) | Reads criteria + evidence, grounds cited files (read-only, byte budget scaled to the backend's context window), asks the LLM for a nonce-bound verdict. |
 | **Diagnostician** | `lib/critic.py --diagnose` | Fires once per NEW unmet-criteria signature: same critic backend, the FULL untruncated cited files, no grounding budget. Writes `GATE<N>-HINT.md` (`CASE: GROUNDING` or `CASE: REAL-GAP` + the fix). Advisory only. `SPECSTRIDE_DIAGNOSTICIAN=false` disables. |
 | **Accelerator** | `proposer.sh --role accelerator` | The attempt right after a new hint: the proposer with a prompt narrowed to the unmet criteria, the feedback, the hint and the evidence to splice. Once per hint, never twice in a row, counts toward `MAX_REJECTS`; writes `GATE<N>-ACCELERATION.md` for the next wide pass. `SPECSTRIDE_ACCELERATOR=false` disables. |
+
+## Terminology
+
+The critic is Specstride's *LLM-as-a-judge*: it checks a phase's evidence against the
+phase's acceptance criteria and returns a structured, nonce-bound verdict (`APPROVED` or
+`REJECTED` with the specific gaps). It is not a generic scorer or a reward model; the verdict
+is grounded in the files the evidence cites and in the verification plan's obligations. The
+code, CLI, env vars, telemetry and on-disk files all call it the "critic" (`lib/critic.py`,
+`--critic`, `SPECSTRIDE_CRITIC`, the `verdict` event), and so do these docs.
 
 ## Sequence
 

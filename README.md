@@ -8,8 +8,9 @@
 
 **Specstride**. From specs to tested code. An autonomous coding
 orchestrator that steers your agent through implementation, critic review, and
-verification, phase by phase: a spec-driven agent loop with a critic gate,
-wrapped in an outer loop that tunes its own budgets from its telemetry, checks
+verification, phase by phase: a spec-driven agent loop with a critic gate (an
+[*LLM-as-a-judge*](wiki/Architecture.md#terminology) that approves a phase only on
+cited evidence), wrapped in an outer loop that tunes its own budgets from its telemetry, checks
 whether each change helped, and rolls it back when it did not.
 
 <!-- Rendered from docs/media/specstride.tape: `vhs docs/media/specstride.tape` from the repo root. -->
@@ -37,7 +38,7 @@ You hand it a [GitHub Spec Kit](https://github.com/github/spec-kit) feature — 
 agent phase by phase, but *nothing advances until a critic approves it*. The
 feature's `spec.md`, `plan.md` and contracts ride along as read-only context for both
 the agent and the critic. The human who used to eyeball each phase and click
-"approved" is replaced by an LLM-backed critic. You stay out of the inner loop;
+"approved" is replaced by an LLM judge, the critic. You stay out of the inner loop;
 you only arbitrate the phases the machines genuinely can't settle.
 
 Specstride runs a coding agent in a repeating, self-checking loop: each pass is
@@ -119,8 +120,8 @@ start, and did it finish?". Together:
 | applies learned settings from `learning/applied.json` | the contract pins which learned decisions the run may use; a newer `specstride learn --apply` waits for a new contract, and `supervise.py retro` reports how they evaluated without ever changing them |
 
 The split keeps judgment where it can be checked: MoL records facts from the files and
-refuses to render a launcher from an unvalidated contract, and Specstride's critic still
-decides every phase. Install the skill with `./bin/onboard-skill --harness all --scope user`
+refuses to render a launcher from an unvalidated contract, and Specstride's critic, its LLM
+judge, still decides every phase. Install the skill with `./bin/onboard-skill --harness all --scope user`
 from a MoL checkout. How learning is shared between the two is described in
 [Under mixture-of-loops: who decides what](#under-mixture-of-loops-who-decides-what).
 
@@ -556,7 +557,7 @@ no race, no half-written file.
 A large phase can cite more files than the critic's grounding snapshot can fit in
 one budget (`GROUNDING_TOTAL_CAP`), so the same file gets degraded to a head/tail
 excerpt — or elided — on every attempt. When that's the actual cause, the
-criterion never converges: the critic isn't wrong about what it *can* see, it
+criterion never converges: the judge isn't wrong about what it *can* see, it
 just can't see enough, and a plain retry burns a full proposer+critic pass to
 learn nothing new.
 
