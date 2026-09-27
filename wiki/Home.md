@@ -1,13 +1,13 @@
 # Specstride Wiki
 
-**A spec-driven agent loop with a critic gate, wrapped in an outer loop that tunes its own
+**A spec-driven agent loop with a critic gate (an [*LLM-as-a-judge*](Architecture#terminology)), wrapped in an outer loop that tunes its own
 budgets from its telemetry, checks whether each change helped, and rolls it back when it did
 not.**
 
 You hand Specstride a [Spec Kit](https://github.com/github/spec-kit) feature's `tasks.md` — an ordered set of phases, each a list of tasks — and it
 drives a coding agent phase by phase. *Nothing advances until a critic approves it.* The
-human who used to eyeball each phase and click "approved" is replaced by an LLM-backed
-critic. You stay out of the inner loop and only arbitrate the phases the machines genuinely
+human who used to eyeball each phase and click "approved" is replaced by an LLM judge,
+the critic. You stay out of the inner loop and only arbitrate the phases the machines genuinely
 can't settle.
 
 Specstride runs a coding agent in a repeating, self-checking loop: each pass is a fresh,
