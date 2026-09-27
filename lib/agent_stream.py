@@ -2,10 +2,8 @@
 """Turn a coding agent's JSONL stream into safe Specstride events (stdlib only)."""
 
 import argparse
-from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import signal
 import sys
 import time
@@ -13,22 +11,16 @@ import time
 from invocation_result import EventEnvelope, InvocationContext, atomic_write_json
 from observability_policy import ObservabilityPolicy
 from prime_stream import PrimeAdapter
+from stream_seam import (
+    AdapterOutcome, TARGET_KEYS, TARGET_MAX, tool_target, looks_like_evidence,
+    Capability, StreamFormat, build_registry,
+)
 from telemetry_delivery import LocalFirstFanout
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
 
-TARGET_MAX = 120
 TEXT_MAX = 160
-TARGET_KEYS = (
-    "file_path", "path", "notebook_path", "command", "pattern", "url", "query",
-    "skill", "description", "prompt", "subject",
-)
-
-
-def one_line(value, limit):
-    value = " ".join(str(value).split())
-    return value if len(value) <= limit else value[:limit - 1] + "…"
 
 
 class EventSink:
@@ -91,48 +83,6 @@ class EventSink:
             for key, value in metadata.items():
                 result.setdefault(key, value)
         return result
-
-
-def tool_target(name, tool_input):
-    """Compact one-line description of what a tool call touches."""
-    if not isinstance(tool_input, dict):
-        return ""
-    if name == "Bash":
-        value = tool_input.get("command", "") or tool_input.get("description", "")
-        return one_line(value, TARGET_MAX)
-    for key in TARGET_KEYS:
-        value = tool_input.get(key)
-        if value:
-            return one_line(value, TARGET_MAX)
-    return ""
-
-
-def looks_like_evidence(name, tool_input, target, expected_evidence=None):
-    """Classify writes only when a lexical target equals the expected gate path."""
-    if not expected_evidence or name not in {
-        "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash",
-    }:
-        return False
-    expected = Path(expected_evidence).expanduser().resolve()
-    policy = ObservabilityPolicy(target_max_bytes=4096)
-    candidates = policy.extract_target_paths(tool_input)
-    if target:
-        candidates.append(target)
-    for candidate in candidates:
-        try:
-            if Path(candidate).expanduser().resolve() == expected:
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
-
-
-@dataclass
-class AdapterOutcome:
-    events: list = field(default_factory=list)
-    output: list = field(default_factory=list)
-    terminal: dict | None = None
-    telemetry: tuple | None = None
 
 
 class ClaudeAdapter:
@@ -259,12 +209,28 @@ class ClaudeAdapter:
         return outcome
 
 
-def select_provider_adapter(provider_format, policy, **kwargs):
-    if provider_format in {"claude", "claude-stream-json"}:
-        return ClaudeAdapter(policy, **kwargs)
-    if provider_format == "prime-v3":
-        return PrimeAdapter(policy, **kwargs)
-    raise ValueError("unsupported provider format: %s" % provider_format)
+# ── stream formats (the seam) ─────────────────────────────────────────────
+# Adding a format = its adapter module plus one import and one row here.
+# Order is display order; duplicates fail at import.
+STREAM_FORMATS = (
+    StreamFormat("claude", ClaudeAdapter, aliases=("claude-stream-json",),
+                 capability=Capability("Claude stream-json schema selected")),
+    StreamFormat("prime-v3", PrimeAdapter,
+                 capability=Capability("Prime JSON schema v3 selected")),
+)
+FORMATS = build_registry(STREAM_FORMATS)
+
+
+def select_provider_adapter(provider_format, policy, *, registry=None,
+                            invocation_model=None, **kwargs):
+    """Build the adapter for a format, resolving only through the seam table."""
+    row = (registry or FORMATS).lookup(provider_format)
+    if row is None:
+        raise ValueError("unsupported provider format: %s" % provider_format)
+    if row.opts:
+        raise NotImplementedError(
+            "shared behaviours for stream format %s are not wired yet" % row.name)
+    return row.adapter(policy, **kwargs)
 
 
 # The five fine-grained signals a structured adapter can surface. Emitted verbatim
@@ -273,17 +239,16 @@ def select_provider_adapter(provider_format, policy, **kwargs):
 _STRUCTURED_SIGNALS = "init,text,tool,evidence,result"
 
 
-def observability_start(provider_format):
+def observability_start(provider_format, *, registry=None):
     """Describe the capability an invocation begins with (T060).
 
     Returns (mode, reason, supported_signals) for the invocation-start
     ``agent_observability`` event. A recognized structured schema starts fully
     structured; any other format degrades to raw-text parsing up front so the
     absence of fine-grained signals is explicit rather than silent."""
-    if provider_format == "prime-v3":
-        return "structured", "Prime JSON schema v3 selected", _STRUCTURED_SIGNALS
-    if provider_format in {"claude", "claude-stream-json"}:
-        return "structured", "Claude stream-json schema selected", _STRUCTURED_SIGNALS
+    row = (registry or FORMATS).lookup(provider_format)
+    if row is not None:
+        return "structured", row.capability.reason, row.capability.signals
     return ("raw-text",
             "structured schema unavailable — parsing plain output", "text,result")
 
@@ -425,8 +390,9 @@ def main():
             try:
                 record = json.loads(raw)
             except ValueError:
-                if isinstance(adapter, PrimeAdapter):
-                    outcome = adapter.consume_raw(raw)
+                consume_raw = getattr(adapter, "consume_raw", None)
+                if consume_raw is not None:
+                    outcome = consume_raw(raw)
                 else:
                     print(raw)
                     continue
