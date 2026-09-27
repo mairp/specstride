@@ -139,8 +139,9 @@ def test_repeats_the_agent_moved_on_from_are_left_alone(tmp_path):
 
 def test_rerunning_one_command_ends_the_pass_without_any_agent_stream(tmp_path):
     """The dsh/codex case: no tool events exist, so repetition is read off the
-    process tree — a new pid each time the same expensive command is re-run."""
-    body = ("for i in 1 2 3 4 5 6; do timeout 2 tail -f /dev/null; done\n"
+    process tree — a new pid each time the same expensive command is re-run.
+    Each run lives 4s so a watchdog tick slowed by a loaded host still sees it."""
+    body = ("for i in 1 2 3 4 5 6; do timeout 4 tail -f /dev/null; done\n"
             "sleep 120\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
                        env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
@@ -176,7 +177,7 @@ def test_one_command_rerun_under_one_tool_call_still_ends_the_pass(tmp_path):
     over and over from a SINGLE tool call is a retry loop, and is still killed."""
     events = tmp_path / ".specstride" / "events.jsonl"
     body = (_emit_tool(events, "Bash", "for f in shots/*.png; do tesseract $f; done")
-            + "for i in 1 2 3 4 5 6 7; do timeout 2 tail -f /dev/null; done\n"
+            + "for i in 1 2 3 4 5 6 7; do timeout 4 tail -f /dev/null; done\n"
             + "sleep 120\n")
     result, evs = _run(tmp_path, _agent(tmp_path, body),
                        env_extra={"SPECSTRIDE_PROPOSER_REPEAT_LIMIT": "5"})
