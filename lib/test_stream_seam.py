@@ -516,3 +516,139 @@ def test_shared_text_is_sanitised():
                    if name == "agent_text"]
     assert len(shared_text) == 1 and len(claude_text) == 1
     assert shared_text[0] == claude_text[0]
+
+
+# ── T025: tap hardening — every adapter fault degrades instead of dying ──────
+
+import io  # noqa: E402
+
+_CONTEXT_ARGS = ("--run-id", "run-fault", "--feature", "fault", "--role",
+                 "proposer", "--backend", "faulty", "--phase", "1",
+                 "--attempt", "1", "--iteration", "1",
+                 "--expected-evidence", "/tmp/fault-gate.md")
+
+
+def _registry_with_test_row():
+    return build_registry(tuple(agent_stream.STREAM_FORMATS) + (_test_row(**_HEADER_ROW_KWARGS),))
+
+
+def _run_main(monkeypatch, tmp_path, stdin_text, extra_argv=(), formats=None):
+    """Call agent_stream.main() in-process with patched argv/stdin/stdout.
+
+    Returning normally is the tap's exit 0 (the outer handler only swallows
+    unexpected exceptions). Returns (events_path, sidecar_path, stdout)."""
+    events = tmp_path / "events.jsonl"
+    sidecar = tmp_path / "provider-terminal.json"
+    argv = ["agent_stream.py", "--events", str(events),
+            "--terminal-sidecar", str(sidecar), *extra_argv]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(sys, "stdin", io.StringIO(stdin_text))
+    out = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    if formats is not None:
+        monkeypatch.setattr(agent_stream, "FORMATS", formats)
+    agent_stream.main()
+    return events, sidecar, out
+
+
+def _events(path):
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def _fixture(name):
+    with open(os.path.join(_STREAM_FIXTURES, name), encoding="utf-8") as handle:
+        return handle.read().replace("{EVIDENCE}", "/tmp/fault-gate.md")
+
+
+def test_fault_raising_record_degrades_and_continues(monkeypatch, tmp_path):
+    events, sidecar, _ = _run_main(
+        monkeypatch, tmp_path, _fixture("raising-record.jsonl"),
+        ("--provider-format", "specstride-test-v1", *_CONTEXT_ARGS),
+        formats=_registry_with_test_row())
+    found = _events(events)
+    errors = [e for e in found
+              if e["event"] == "agent_diagnostic" and e.get("code") == "adapter_error"]
+    assert len(errors) == 1 and errors[0]["severity"] == "error"
+    # The following tool and result were still processed.
+    assert [e["event"] for e in found].count("agent_tool") == 1
+    assert [e["event"] for e in found].count("evidence_writing") == 1
+    # On the correlated (context) path the terminal goes to the sidecar; the
+    # finalizer owns the one agent_result event.
+    assert not [e for e in found if e["event"] == "agent_result"]
+    side = json.loads(sidecar.read_text())
+    assert side["malformed_stream"] is True
+    assert side["provider_terminal"]["status"] == "success"
+
+
+def test_fault_only_first_three_adapter_errors_emit(monkeypatch, tmp_path):
+    stdin_text = "".join('{"type":"boom"}\n' for _ in range(5))
+    events, _, _ = _run_main(
+        monkeypatch, tmp_path, stdin_text,
+        ("--provider-format", "specstride-test-v1", *_CONTEXT_ARGS),
+        formats=_registry_with_test_row())
+    errors = [e for e in _events(events)
+              if e["event"] == "agent_diagnostic" and e.get("code") == "adapter_error"]
+    assert len(errors) == 3
+    assert all(e["severity"] == "error" for e in errors)
+
+
+class _ExplodingInitAdapter:
+    TOOL_NAMES = {}
+
+    def __init__(self, policy, *, expected_evidence=None):
+        raise RuntimeError("cannot start")
+
+
+def test_fault_adapter_constructor_raises_degrades_to_raw(monkeypatch, tmp_path):
+    row = StreamFormat("boom-init", _ExplodingInitAdapter,
+                       capability=Capability("boom init selected"))
+    lines = "plain one\nplain two\n"
+    events, _, out = _run_main(
+        monkeypatch, tmp_path, lines, ("--provider-format", "boom-init",),
+        formats=build_registry((row,)))
+    found = _events(events)
+    degraded = [e for e in found if e["event"] == "agent_observability"]
+    assert len(degraded) == 1 and degraded[0]["mode"] == "degraded"
+    assert degraded[0]["reason"] == (
+        "stream adapter for 'boom-init' failed to start — parsing plain output")
+    assert degraded[0]["supported_signals"] == "result"
+    # Raw pass-through of every line.
+    assert out.getvalue() == lines
+
+
+def test_fault_unknown_format_passes_through_raw(monkeypatch, tmp_path):
+    lines = '{"type":"text","text":"hi"}\nnot json at all\n'
+    events, _, out = _run_main(
+        monkeypatch, tmp_path, lines, ("--provider-format", "nope",))
+    assert out.getvalue() == lines
+    assert _events(events) == []
+
+
+def test_fault_unknown_format_context_emits_verbatim_raw_text_start(monkeypatch, tmp_path):
+    lines = '{"unparsed": true}\n'
+    events, _, out = _run_main(
+        monkeypatch, tmp_path, lines, ("--provider-format", "nope", *_CONTEXT_ARGS))
+    assert out.getvalue() == lines
+    found = _events(events)
+    starts = [e for e in found if e["event"] == "agent_observability"]
+    assert len(starts) == 1
+    assert starts[0]["mode"] == "raw-text"
+    assert starts[0]["reason"] == (
+        "structured schema unavailable — parsing plain output")
+    assert starts[0]["supported_signals"] == "text,result"
+    assert starts[0]["provider_format"] == "nope"
+
+
+def test_fault_list_formats_prints_canonical_and_no_events(monkeypatch, tmp_path):
+    events_path = tmp_path / "events.jsonl"
+    monkeypatch.setattr(sys, "argv", ["agent_stream.py", "--list-formats",
+                                      "--events", str(events_path)])
+    out = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", out)
+    agent_stream.main()
+    assert out.getvalue() == "claude\nprime-v3\n"
+    assert not events_path.exists()
+
+
