@@ -1215,7 +1215,11 @@ and never re-plans anything.
 Everything is set in `.env` (copy from `.env.example`; the real `.env` is
 gitignored). Precedence: **built-in defaults < `.env` < CLI flags**.
 
-Pick a backend per role — `dsh[:provider/model] | claude | codex | bebop | prime[:variant]`:
+Pick a backend per role; each role has its own accepted list:
+
+Proposer backends: `dsh[:provider/model] | claude | codex | bebop[:name] | prime[:variant]`
+
+Critic backends: `dsh[:provider/model] | claude | codex | bebop | prime[:variant]`
 
 - **`dsh`** — DeepSeek Harness's `headless` profile, using the provider/model in
   `$DSH_HOME/settings.yaml` unless a model override is supplied. Use backend
