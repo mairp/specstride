@@ -11,7 +11,7 @@ Output docs/media/specstride.gif
 Set Shell bash
 Set FontSize 16
 Set Width 1100
-Set Height 680
+Set Height 800
 Set Padding 28
 Set TypingSpeed 45ms
 Set Theme { "name": "specstride", "background": "#1E1E1E", "foreground": "#D4D4D4", "cursor": "#F07CC0", "selection": "#3A3A3A", "black": "#1E1E1E", "red": "#FF6B6B", "green": "#4ADE80", "yellow": "#F5B342", "blue": "#8B9CFF", "magenta": "#F07CC0", "cyan": "#5EE0C8", "white": "#D4D4D4", "brightBlack": "#8A93A6", "brightRed": "#FF6B6B", "brightGreen": "#4ADE80", "brightYellow": "#F5B342", "brightBlue": "#8B9CFF", "brightMagenta": "#F07CC0", "brightCyan": "#5EE0C8", "brightWhite": "#FFFFFF" }

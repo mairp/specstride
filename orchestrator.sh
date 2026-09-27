@@ -737,6 +737,29 @@ print_banner() {
   printf '\n%s\n\n' 'specstride: from specs to tested code' >> "$LOG" 2>/dev/null || true
 }
 
+# `log_rail [phase]` — the rail alone (no mark, no name), appended to run.log each
+# time a gate opens or holds: an approved phase done, a rejection, a halt, the run
+# complete. The live presenter re-stamps the same rail on the terminal, so this
+# writes to the log only. `phase` is the gate in flight (C unless it has a
+# verdict). Never fails the run.
+log_rail() {
+  [[ -f "$LIB_DIR/banner.py" ]] || return 0
+  local CUR_PHASE="${1:-}"
+  python3 "$LIB_DIR/banner.py" --rail-only --plain --phases "${#PHASES[@]}" \
+    --states "$(banner_states)" >> "$LOG" 2>/dev/null || true
+}
+
+# `emit_run_stop <key value>...` — every orchestrator halt: the run_stop event,
+# then the rail in run.log with the halted phase (its `phase` field) in flight.
+emit_run_stop() {
+  specstride_emit run_stop "$@"
+  local args=("$@") i cur=""
+  for (( i = 0; i + 1 < ${#args[@]}; i += 2 )); do
+    [[ "${args[i]}" == phase ]] && cur="${args[i+1]}"
+  done
+  log_rail "$cur"
+}
+
 # ── inline live timeline (the "coding-agent working" view in THIS terminal) ──
 # Resolve auto -> on iff stdout is a TTY and present.py exists. When on, a single
 # background presenter tails the event stream and prints a clean scrolling
@@ -928,6 +951,7 @@ start_presenter
 
 specstride_emit run_start workdir "$WORKDIR" phases "$PHASE_COUNT" feature "$SLUG" \
   proposer "$PROPOSER_BACKEND" critic "$CRITIC_BACKEND" resume "${CUR_PHASE:-done}" \
+  states "$(banner_states)" \
   verification "$VERIFICATION" verification_plan "$VERIFICATION_JSON"
 
 run_release_verification() {
@@ -944,7 +968,7 @@ run_release_verification() {
   if [[ "$release_rc" -ne 0 ]]; then
     log "# HALT — release verification failed (exit $release_rc)."
     log "#   evidence: $release_evidence"
-    specstride_emit run_stop reason release_verification rc "$release_rc" \
+    emit_run_stop reason release_verification rc "$release_rc" \
       evidence "$release_evidence"
     exit "$E_REJECTS"
   fi
@@ -956,6 +980,7 @@ if [[ -z "$CUR_PHASE" ]]; then
   run_release_verification
   log "# All phases already approved. Nothing to do."
   specstride_emit run_end outcome all_approved
+  log_rail
   exit "$E_OK"
 fi
 
@@ -1730,13 +1755,13 @@ run_phase() {
     # stop.flag / budget checks at each phase-boundary step
     if [[ -f "$STOP_FLAG" ]]; then
       log ">>> stop.flag detected — halting cleanly (exit $E_STOP; rerun resumes)."
-      specstride_emit run_stop reason stop_flag phase "$n"
+      emit_run_stop reason stop_flag phase "$n"
       rm -f "$STOP_FLAG"
       exit "$E_STOP"
     fi
     if over_budget; then
       log ">>> wall-clock budget (${MAX_WALL_MIN}min) exceeded — halting (exit $E_BUDGET)."
-      specstride_emit run_stop reason wall_budget phase "$n"
+      emit_run_stop reason wall_budget phase "$n"
       exit "$E_BUDGET"
     fi
 
@@ -1843,7 +1868,7 @@ run_phase() {
     # flag so the next rerun resumes instead of instantly stopping again.
     if [[ "$prc" -eq 6 ]]; then
       log ">>> stop.flag detected during proposer — halting cleanly (exit $E_STOP; rerun resumes)."
-      specstride_emit run_stop reason stop_flag phase "$n"
+      emit_run_stop reason stop_flag phase "$n"
       rm -f "$STOP_FLAG"
       exit "$E_STOP"
     fi
@@ -1851,7 +1876,7 @@ run_phase() {
     if [[ ! -f "$GATES_DIR/GATE${n}-EVIDENCE.md" ]]; then
       if [[ "$prc" -eq 4 ]]; then
         log ">>> proposer hit max-iter ($MAX_ITER) without evidence for phase $n — halting (exit $E_BUDGET)."
-        specstride_emit run_stop reason proposer_max_iter phase "$n"
+        emit_run_stop reason proposer_max_iter phase "$n"
         exit "$E_BUDGET"
       fi
       if [[ "$prc" -eq 8 ]]; then
@@ -1866,7 +1891,7 @@ run_phase() {
         log "#     - the phase's run note under the spec's runs/ directory (it usually lists"
         log "#       the options the operator has to choose between)"
         log "#   Record the decision where the note asks for it, then: specstride resume -w $WORKDIR"
-        specstride_emit run_stop reason proposer_no_progress phase "$n"
+        emit_run_stop reason proposer_no_progress phase "$n"
         exit "$E_BUDGET"
       fi
       if [[ "$prc" -eq 7 ]]; then
@@ -1881,7 +1906,7 @@ run_phase() {
         log "#     - raise the error tolerance:    SPECSTRIDE_PROPOSER_MAX_ERRORS=5 specstride resume -w $WORKDIR"
         log "#     - loosen a futility detector:   SPECSTRIDE_PROPOSER_REPEAT_LIMIT=0 / SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT=0"
         log "#     - or fix the phase's live harness so a pass completes within the timeout."
-        specstride_emit run_stop reason proposer_consecutive_errors phase "$n"
+        emit_run_stop reason proposer_consecutive_errors phase "$n"
         exit "$E_BUDGET"
       fi
       # A spent yield budget is not a failing agent either: the passes ended
@@ -1901,7 +1926,7 @@ run_phase() {
         log "#     - if the phase needs several long jobs in sequence, it is really several"
         log "#       phases — split it rather than raising SPECSTRIDE_YIELD_MAX_PER_ATTEMPT"
         log "#   Then: specstride resume -w $WORKDIR"
-        specstride_emit run_stop reason proposer_yield_budget phase "$n"
+        emit_run_stop reason proposer_yield_budget phase "$n"
         exit "$E_BUDGET"
       fi
       # Cap exhaustion is a DIFFERENT cause from exit 7 and deserves different
@@ -1926,11 +1951,11 @@ run_phase() {
         log "#       SPECSTRIDE_PROPOSER_TIMEOUT=<seconds> specstride resume -w $WORKDIR"
         log "#   Note: those passes report no cost at all (a kill severs the provider stream),"
         log "#   so their pass_cost_unknown events — not a cost metric — are the honest record."
-        specstride_emit run_stop reason proposer_cap_exhausted phase "$n"
+        emit_run_stop reason proposer_cap_exhausted phase "$n"
         exit "$E_BUDGET"
       fi
       log ">>> proposer exited ($prc) without writing evidence for phase $n — internal error."
-      specstride_emit run_stop reason proposer_no_evidence phase "$n" rc "$prc"
+      emit_run_stop reason proposer_no_evidence phase "$n" rc "$prc"
       exit "$E_INTERNAL"
     fi
 
@@ -2035,6 +2060,7 @@ run_phase() {
       fi
       rm -f "$GATES_DIR/.diagnosed-phase${n}" "$GATES_DIR/.accelerated-phase${n}"
       specstride_emit phase_done phase "$n" attempt "$attempt" title "$title"
+      log_rail "$n"
       # ── tick the approved phase's task checkboxes ────────────────────────
       # The task list is the project's progress record, and until now nothing ever
       # ticked it: a fully approved feature still read "0 done". Ticked HERE — after
@@ -2095,13 +2121,15 @@ run_phase() {
 
     if [[ "$crc" -eq 3 ]]; then
       log ">>> critic config/usage error (exit 3) — halting."
-      specstride_emit run_stop reason critic_config phase "$n"
+      emit_run_stop reason critic_config phase "$n"
       exit "$E_SPEC"
     fi
 
     # REJECTED / MALFORMED (crc == 10 or other). Record and maybe retry.
     log "----- phase $n REJECTED on attempt $attempt/$MAX_REJECTS -----"
     specstride_emit reject phase "$n" attempt "$attempt"
+    # a MALFORMED verdict is a critic parse failure, not a judgment: no rail
+    if [[ "$(last_verdict_result "$n" "$attempt")" == "REJECTED" ]]; then log_rail "$n"; fi
 
     # Critic-outage breaker: MALFORMED means the critic produced no usable reply
     # at all — it timed out, was unreachable, or never emitted a verdict line —
@@ -2138,7 +2166,7 @@ run_phase() {
           log "#     - point at a reachable critic: specstride resume -w $WORKDIR --critic <backend>"
           log "#     - raise the tolerance:      SPECSTRIDE_CRITIC_MALFORMED_LIMIT=5 specstride resume -w $WORKDIR"
           log "############################################################"
-          specstride_emit run_stop reason critic_unavailable phase "$n" \
+          emit_run_stop reason critic_unavailable phase "$n" \
             attempts "$attempt" streak "$malformed_streak"
           exit "$E_INTERNAL"
         fi
@@ -2173,7 +2201,7 @@ run_phase() {
       log "#   attempt history : $FEATURE_DIR/attempts/phase${n}/"
       log "############################################################"
       specstride_emit gate_oscillation phase "$n" attempt "$attempt" criterion "$osc_id" reappears "$osc_ct"
-      specstride_emit run_stop reason gate_oscillation phase "$n" attempts "$attempt"
+      emit_run_stop reason gate_oscillation phase "$n" attempts "$attempt"
       exit "$E_REJECTS"
     fi
 
@@ -2210,7 +2238,7 @@ run_phase() {
         log "#   (often by editing SPECS.md), then rerun to resume."
       fi
       log "############################################################"
-      specstride_emit run_stop reason max_rejects phase "$n" attempts "$attempt"
+      emit_run_stop reason max_rejects phase "$n" attempts "$attempt"
       exit "$E_REJECTS"
     fi
 
@@ -2234,4 +2262,5 @@ run_release_verification
 log ""
 log "# DONE — all $PHASE_COUNT phase(s) approved. $(date -Is)"
 specstride_emit run_end outcome all_approved phases "$PHASE_COUNT"
+log_rail
 exit "$E_OK"

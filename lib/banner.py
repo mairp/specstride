@@ -11,6 +11,9 @@ Usage:
                                      live rail: A approved, R rejected, C current,
                                      P pending (missing states are pending)
   banner.py --plain                  ASCII, no escapes (the run.log copy)
+  banner.py --rail-only --plain --phases 5 --states A,A,A,P,P
+                                     just the two rail lines, no mark or name (the
+                                     run.log copy each time a gate opens or holds)
   banner.py --bg dark|light          force the background
   banner.py --color always|never|auto
   banner.py --no-motion              print the final frame only
@@ -18,6 +21,7 @@ Usage:
 
 Appearance switches (documented in wiki/CLI-Reference.md):
   SPECSTRIDE_BANNER=off     print nothing (CI logs, screen readers)
+  SPECSTRIDE_LIVE_RAIL=off  no rail re-stamps (--rail-only and the live timeline)
   SPECSTRIDE_MOTION=0       never animate (also: CI set, TERM=dumb, not a TTY)
   SPECSTRIDE_COLOR=16|256|truecolor|none   override the detected color depth
   SPECSTRIDE_ASCII=1        ASCII glyphs only (also: a non-UTF-8 locale)
@@ -418,6 +422,20 @@ def banner_off(environ=None):
     return environ.get("SPECSTRIDE_BANNER", "").lower() in ("off", "0", "false", "no")
 
 
+def live_rail_off(environ=None):
+    """The rail re-stamped in the live timeline and run.log: off with its own
+    switch, and off whenever the splash itself is off."""
+    environ = os.environ if environ is None else environ
+    return banner_off(environ) or \
+        environ.get("SPECSTRIDE_LIVE_RAIL", "").lower() in ("off", "0", "false", "no")
+
+
+def rail_only(states, cols, th, ascii_):
+    """The splash's two rail lines alone, laid out exactly as under the mark."""
+    tier = "full" if cols >= FULL_MIN_COLS else "compact"
+    return render(states, cols, 24, th, ascii_, tier)[-2:]
+
+
 def preview(states):
     """Every tier x background x depth, plus the motion frames and the log copy."""
     states = states or parse_states(5, "A,A,C,P,P")
@@ -448,6 +466,8 @@ def main(argv=None):
     ap.add_argument("--phases", type=int)
     ap.add_argument("--states", default="")
     ap.add_argument("--no-motion", action="store_true")
+    ap.add_argument("--rail-only", action="store_true",
+                    help="print just the two rail lines (no mark, no name)")
     ap.add_argument("--preview", action="store_true")
     ap.add_argument("--cols", type=int, help=argparse.SUPPRESS)
     ap.add_argument("--rows", type=int, help=argparse.SUPPRESS)
@@ -457,7 +477,7 @@ def main(argv=None):
     if args.preview:
         sys.stdout.write("\n".join(preview(states)) + "\n")
         return 0
-    if banner_off():
+    if banner_off() or (args.rail_only and live_rail_off()):
         return 0
 
     size = shutil.get_terminal_size((80, 24))
@@ -465,12 +485,18 @@ def main(argv=None):
     plain = args.plain or (args.color != "always" and not T._isatty(sys.stdout))
     if plain:
         # the log copy: full-width ASCII, no escapes, whatever the terminal is
-        lines = render(states, max(cols, 80), 24, T.Theme("none"), ascii_=True, tier="full")
+        if args.rail_only:
+            lines = rail_only(states, max(cols, 80), T.Theme("none"), True)
+        else:
+            lines = render(states, max(cols, 80), 24, T.Theme("none"), ascii_=True, tier="full")
         sys.stdout.write("\n".join(lines) + "\n")
         return 0
 
     th = T.theme_for(args.color, sys.stdout, bg=args.bg)
     ascii_ = T.ascii_mode()
+    if args.rail_only:
+        sys.stdout.write("\n".join(rail_only(states, cols, th, ascii_)) + "\n")
+        return 0
     frame_list = frames(states, cols, rows, th, ascii_)
     if len(frame_list) > 1 and motion_allowed(no_motion=args.no_motion):
         play(frame_list)

@@ -18,7 +18,8 @@ whether each change helped, and rolls it back when it did not.
 
 *Every step, signed off.* The mark is the track folded into an S; the rail under
 it shows the feature's real phases, and each gate opens only on approved evidence
-([animated version](docs/media/specstride.gif)). The inner loop is the Ralph
+([animated version](docs/media/specstride.gif)). The live timeline re-stamps that
+rail each time a gate opens or holds. The inner loop is the Ralph
 technique (fresh context every pass); Specstride adds the gate that holds each
 phase until its evidence is approved.
 
