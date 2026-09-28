@@ -32,6 +32,7 @@ import glob  # W20 — placeholder-in-citation resolution
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_spec  # noqa: E402
 import backends  # noqa: E402
+import backend_overlay  # noqa: E402  (SH-2: per-call critic overlays)
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 import verification_plan  # noqa: E402
@@ -1927,11 +1928,16 @@ def call_bebop_shell(prompt, backend, timeout):
     env = dict(os.environ)
     env.setdefault("IS_SANDBOX", "1")
     try:
-        out = subprocess.run(["bash", "-c", script, "_", bebop_sh, backend],
-                             input=prompt, capture_output=True, text=True,
-                             timeout=timeout, env=env)
+        with backend_overlay.critic_overlay("bebop", None, environ=env) as ov_env:
+            kw = {} if ov_env is None else {"env": ov_env}
+            out = subprocess.run(["bash", "-c", script, "_", bebop_sh, backend],
+                                 input=prompt, capture_output=True, text=True,
+                                 timeout=timeout,
+                                 env=env if ov_env is None else ov_env)
     except subprocess.TimeoutExpired:
         raise RuntimeError("bebop critic timed out after %ss" % timeout)
+    except (backend_overlay.DeclarationError, backend_overlay.OverlayError) as exc:
+        raise RuntimeError("bebop critic overlay: %s" % exc)
     if out.returncode != 0:
         raise RuntimeError("bebop critic exit %d: %s" % (out.returncode, (out.stderr or "")[:300]))
     return out.stdout
@@ -2198,11 +2204,15 @@ def call_prime_shell(prompt, variant, timeout, workdir=None):
     if workdir:
         argv += ["--cwd", workdir]
     try:
-        out = subprocess.run(
-            argv, input=prompt, capture_output=True, text=True, timeout=timeout,
-        )
+        with backend_overlay.critic_overlay("prime", workdir) as ov_env:
+            kw = {} if ov_env is None else {"env": ov_env}
+            out = subprocess.run(
+                argv, input=prompt, capture_output=True, text=True, timeout=timeout,
+                **kw)
     except subprocess.TimeoutExpired:
         raise RuntimeError("Prime Agent critic timed out after %ss" % timeout)
+    except (backend_overlay.DeclarationError, backend_overlay.OverlayError) as exc:
+        raise RuntimeError("prime critic overlay: %s" % exc)
     except OSError as exc:
         raise RuntimeError("Prime launcher failed: %s" % exc)
     if out.returncode != 0:
@@ -2273,11 +2283,15 @@ def call_prime_critic(prompt, variant, timeout, workdir=None):
     argv = _prime_launch_argv(variant, mode, workdir)
     start = time.time()
     try:
-        out = subprocess.run(
-            argv, input=prompt, capture_output=True, text=True, timeout=timeout,
-        )
+        with backend_overlay.critic_overlay("prime", workdir) as ov_env:
+            kw = {} if ov_env is None else {"env": ov_env}
+            out = subprocess.run(
+                argv, input=prompt, capture_output=True, text=True, timeout=timeout,
+                **kw)
     except subprocess.TimeoutExpired:
         raise RuntimeError("Prime Agent critic timed out after %ss" % timeout)
+    except (backend_overlay.DeclarationError, backend_overlay.OverlayError) as exc:
+        raise RuntimeError("prime critic overlay: %s" % exc)
     except OSError as exc:
         raise RuntimeError("Prime launcher failed: %s" % exc)
     duration_ms = max(0, int((time.time() - start) * 1000))
