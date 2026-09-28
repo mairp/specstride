@@ -432,6 +432,102 @@ dsh_make_home_overlay() {
   } > "$overlay/settings.yaml" || return 1
 }
 
+# ── throwaway config-home overlay (SH-2) ────────────────────────────────────
+# One generic implementation, lib/backend_overlay.py, reached through its CLI.
+# These four helpers sit next to dsh_make_home_overlay (same `<…> <dir>` shape)
+# and carry no backend name: each run_agent arm asks for its overlay by its own
+# registry name and puts an exec-style prefix in front of the harness command,
+# so the overlay env reaches ONLY the harness process tree — the proposer's own
+# shell, the watchdog and the stream tap keep the real HOME/TMPDIR/state paths.
+# With BACKEND_OVERLAY_SCOPE == none every helper is a no-op and the arm runs
+# exactly the command it ran before SH-2 (pinned by the baseline fixtures).
+
+# Populate `<dir>` (an existing empty directory, e.g. from mktemp -d) as
+# `<backend>`'s overlay. Scope defaults to pass; the startup path passes
+# attempt through BACKEND_OVERLAY_MAKE_SCOPE. Returns the populate call's
+# status (its failure message is printed by the CLI, naming backend + cause).
+# Never removes <dir>; the caller does, like the dsh arm does.
+make_backend_overlay() {
+  python3 "$LIB_DIR/backend_overlay.py" populate "$1" "$2" \
+    --scope "${BACKEND_OVERLAY_MAKE_SCOPE:-pass}" \
+    --owner-pid "$$" \
+    --workdir "$WORKDIR"
+}
+
+# Compute the arm's exec prefix and (pass scope) its overlay directory.
+#   none    -> prefix and pass dir empty, no process started (return 0)
+#   attempt -> prefix reuses the startup-created $BACKEND_OVERLAY_ATTEMPT_DIR
+#   pass    -> a fresh `specstride-overlay.<key>.*` root per pass
+# On failure the creation-failure message (backend + directory + cause) is
+# printed — by this function for a mktemp failure, by the populate CLI
+# otherwise, never twice — the half-made directory is removed and 1 is
+# returned, which the arm turns into a failed pass.
+backend_overlay_prefix() {
+  BACKEND_OVERLAY_PREFIX=()
+  BACKEND_OVERLAY_PASS_DIR=""
+  case "${BACKEND_OVERLAY_SCOPE:-none}" in
+    none) return 0 ;;
+    attempt)
+      BACKEND_OVERLAY_PREFIX=(backend_overlay_exec "$BACKEND_OVERLAY_ATTEMPT_DIR")
+      return 0 ;;
+    pass) : ;;
+    *) return 0 ;;
+  esac
+  local key="${1%%:*}"
+  local dir
+  dir="$(mktemp -d "${TMPDIR:-/tmp}/specstride-overlay.${key}.XXXXXX")" || {
+    echo "proposer.sh: could not create overlay for backend '$1' in ${TMPDIR:-/tmp}: mktemp failed" >&2
+    return 1
+  }
+  if ! make_backend_overlay "$1" "$dir"; then
+    rm -rf "$dir"
+    return 1
+  fi
+  BACKEND_OVERLAY_PREFIX=(backend_overlay_exec "$dir")
+  BACKEND_OVERLAY_PASS_DIR="$dir"
+  return 0
+}
+
+# Run INSIDE the watchdog's `"$@" &` child, in place of the bare harness name.
+# The binary is resolved to an absolute path FIRST, with the real HOME/PATH,
+# before any overlay variable is applied; then the overlay's env
+# records are applied to this process only, and it execs the harness. The
+# proposer's own shell is never modified.
+backend_overlay_exec() {
+  local root="$1"; shift
+  local abs
+  abs="$(type -P -- "$1")" || { echo "proposer.sh: $1 not found" >&2; exit 127; }
+  local kind name value
+  while IFS= read -r -d '' kind; do
+    case "$kind" in
+      unset)
+        IFS= read -r -d '' name || [[ -n "$name" ]] || { echo "proposer.sh: truncated overlay env record" >&2; exit 1; }
+        unset "$name" || true
+        ;;
+      set)
+        IFS= read -r -d '' name || [[ -n "$name" ]] || { echo "proposer.sh: truncated overlay env record" >&2; exit 1; }
+        IFS= read -r -d '' value || [[ -n "$value" ]] || true
+        export "$name=$value"
+        ;;
+      *)
+        echo "proposer.sh: unknown overlay env record kind '$kind'" >&2
+        exit 1
+        ;;
+    esac
+  done < "$root/specstride-overlay.env"
+  exec "$abs" "$@"
+}
+
+# Remove the pass overlay after the watchdog returns. Always 0: a
+# failed removal prints its own warning and never changes the pass's rc.
+backend_overlay_release() {
+  [[ -n "${BACKEND_OVERLAY_PASS_DIR:-}" ]] || return 0
+  python3 "$LIB_DIR/backend_overlay.py" remove "$BACKEND_OVERLAY_PASS_DIR" \
+    >/dev/null || true
+  BACKEND_OVERLAY_PASS_DIR=""
+  return 0
+}
+
 run_agent() {
   local prompt="$1"; shift
   local -a args=( "$@" )
@@ -479,18 +575,19 @@ run_agent() {
       local prompt_file
       prompt_file="$(mktemp "${TMPDIR:-/tmp}/specstride-prompt.XXXXXX")"
       printf '%s' "$prompt" > "$prompt_file"
+      backend_overlay_prefix claude || return 1
       SPECSTRIDE_STDIN_FILE="$prompt_file" \
-        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" claude -p "${args[@]}"
-      rc=$?
-      rm -f "$prompt_file"
-      return "$rc"
+        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" claude -p "${args[@]}"
+      local rc=$?; backend_overlay_release; rm -f "$prompt_file"; return "$rc"
       ;;
     codex)
       # OpenAI Codex CLI — UNVERIFIED on this host (no codex CLI here to test).
       # `codex exec` is the headless/non-interactive entrypoint.
       local -a cargs=( --dangerously-bypass-approvals-and-sandbox )
       [[ -n "$MODEL" ]] && cargs+=( --model "$MODEL" )
-      run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" codex exec "${cargs[@]}" "$prompt"
+      backend_overlay_prefix codex || return 1
+      run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" codex exec "${cargs[@]}" "$prompt"
+      local rc=$?; backend_overlay_release; return "$rc"
       ;;
     prime)
       # Out-of-the-box Prime Agent: use its configured default provider/model.
@@ -501,7 +598,9 @@ run_agent() {
       [[ "$PRIME_STRUCTURED" == "true" ]] && prime_mode="json"
       local -a pargs=( -p --mode "$prime_mode" --no-session --cwd "$WORKDIR" )
       [[ -n "$MODEL" ]] && pargs+=( --model "$MODEL" )
-      printf '%s' "$prompt" | run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "$prime_agent_bin" "${pargs[@]}"
+      backend_overlay_prefix prime || return 1
+      printf '%s' "$prompt" | run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" "$prime_agent_bin" "${pargs[@]}"
+      local rc=$?; backend_overlay_release; return "$rc"
       ;;
     prime:*)
       # Optional fleet launcher resolves a named variant's model/provider/persona.
@@ -512,7 +611,9 @@ run_agent() {
       [[ -z "$MODEL" ]] || { echo "proposer.sh: --model is unsupported with prime:<variant>; the variant selects its model" >&2; return 1; }
       local prime_mode="text"
       [[ "$PRIME_STRUCTURED" == "true" ]] && prime_mode="json"
-      printf '%s' "$prompt" | run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "$prime_fleet_bin" "$pv" -p --mode "$prime_mode" --no-session --cwd "$WORKDIR"
+      backend_overlay_prefix "$BACKEND" || return 1
+      printf '%s' "$prompt" | run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" "$prime_fleet_bin" "$pv" -p --mode "$prime_mode" --no-session --cwd "$WORKDIR"
+      local rc=$?; backend_overlay_release; return "$rc"
       ;;
     bebop|bebop:*)
       # bebop is a shell FUNCTION (bebop.sh); a subprocess doesn't inherit it, so
@@ -526,11 +627,12 @@ run_agent() {
       . "$bebop_sh"
       declare -F bebop >/dev/null 2>&1 || { echo "proposer.sh: $bebop_sh did not define bebop()" >&2; return 127; }
       set +u   # bebop's associative-array indexing is not nounset-clean
-      run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" bash -c '
+      backend_overlay_prefix "$BACKEND" || return 1
+      run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" bash -c '
         . "$1"; shift; bb="$1"; shift; prompt="$1"; shift
         bebop "$bb" -p "$prompt" "$@"
       ' _ "$bebop_sh" "$bb" "$prompt" "${args[@]}"
-      local rc=$?
+      local rc=$?; backend_overlay_release
       set -u
       return "$rc"
       ;;
@@ -1697,7 +1799,81 @@ fi
 # `specstride stop --now` can kill the in-flight agent tree; a graceful
 # `specstride stop` (flag only) is honored at every pass boundary with exit 6.
 PIDFILE="$STATE_DIR/proposer.pid"
-trap 'rm -f "$PIDFILE"' EXIT
+
+# Validate the throwaway-config-home scope setting once, before pass 1. The
+# helper prints the resolved scope word (none/pass/attempt) on stdout; its own
+# exit status is propagated as-is: 3 means an invalid declaration or scope
+# value (config error), 1 means an internal failure (traceback, missing file) —
+# an internal failure must never be reported as an invalid config. With no
+# declaration for the backend the word is always `none` and nothing changes.
+BACKEND_OVERLAY_SCOPE="$(python3 "$LIB_DIR/backend_overlay.py" startup "$BACKEND")" || exit "$?"
+
+# Stop the in-flight pass's process tree (TERM, then KILL at a bounded wait).
+# The EXIT cleanup runs this BEFORE removing any pass-scope overlay, so a
+# SIGINT/SIGTERM (bash runs the EXIT trap on an untrapped TERM) never deletes
+# the config-home overlay under a still-running harness. Always returns 0.
+proposer_stop_pass_tree() {
+  local p
+  for p in $(pgrep -P "$1" 2>/dev/null); do proposer_stop_pass_tree "$p"; done
+  kill -TERM "$1" 2>/dev/null || true
+}
+proposer_stop_pass() {
+  [[ -n "${PASS_PID:-}" ]] || return 0
+  kill -0 "$PASS_PID" 2>/dev/null || return 0
+  local p
+  for p in $(pgrep -P "$PASS_PID" 2>/dev/null); do proposer_stop_pass_tree "$p"; done
+  kill -TERM "$PASS_PID" 2>/dev/null || true
+  local i=0
+  while kill -0 "$PASS_PID" 2>/dev/null && (( i < 100 )); do
+    sleep 0.1; i=$((i + 1))
+  done
+  kill -KILL "$PASS_PID" 2>/dev/null || true
+  return 0
+}
+
+proposer_exit_cleanup() {
+  rm -f "$PIDFILE"
+  if [[ "${BACKEND_OVERLAY_SCOPE:-none}" != "none" ]]; then
+    proposer_stop_pass
+    # Reap any pass-scope overlay the (possibly killed) pass subshell left.
+    python3 "$LIB_DIR/backend_overlay.py" reap --owner-pid "$$" >/dev/null 2>&1 || true
+  fi
+}
+trap proposer_exit_cleanup EXIT
+
+# A signal during an attempt-scoped run must take the SAME exit path as any
+# other exit: exiting fires proposer_exit_cleanup, which stops the in-flight
+# pass's process tree (proposer_stop_pass) BEFORE its reap removes the overlay,
+# so a harness is never left running without its config home. Defined before
+# the attempt branch that installs the traps that call it.
+proposer_signal_exit() {
+  exit "$1"
+}
+
+# Attempt scope: ONE overlay shared by every pass of this invocation. This
+# branch sits immediately AFTER `trap proposer_exit_cleanup EXIT` (never
+# before it), so every exit below removes the overlay through the EXIT
+# cleanup — and after the early exits above (evidence already present /
+# prompt is empty), which therefore never run with an attempt overlay in
+# existence. The overlay is created here, before pass 1; each run_agent arm
+# reuses it through BACKEND_OVERLAY_ATTEMPT_DIR. The INT/TERM traps are
+# installed ONLY in this branch, so signal handling for every other scope is
+# exactly what it was before SH-2.
+if [[ "${BACKEND_OVERLAY_SCOPE:-none}" == "attempt" ]]; then
+  BACKEND_OVERLAY_ATTEMPT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/specstride-overlay.${BACKEND%%:*}.XXXXXX")" || {
+    echo "proposer.sh: could not create overlay for backend '$BACKEND' in ${TMPDIR:-/tmp}: mktemp failed" >&2
+    exit 1
+  }
+  if ! BACKEND_OVERLAY_MAKE_SCOPE=attempt make_backend_overlay "$BACKEND" \
+      "$BACKEND_OVERLAY_ATTEMPT_DIR"; then
+    # The populate CLI already printed the creation-failure message (backend +
+    # directory + cause); drop the half-made directory and fail the run.
+    rm -rf "$BACKEND_OVERLAY_ATTEMPT_DIR"
+    exit 1
+  fi
+  trap 'proposer_signal_exit 130' INT
+  trap 'proposer_signal_exit 143' TERM
+fi
 
 # Consecutive-error circuit breaker. A pass can end in error (e.g. the agent
 # hitting --timeout, or rejecting an over-long prompt) yet write no evidence —
@@ -1854,6 +2030,14 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   PASS_PID=$!
   echo "$PASS_PID" > "$PIDFILE" 2>/dev/null || true
   wait "$PASS_PID" || true
+  # A pass subshell killed before its arm could release (e.g. `stop --now` TERMs
+  # the tree) leaves its pass overlay behind; the parent reaps its own overlays
+  # here. Pass scope only — an attempt overlay must survive to the next pass.
+  # The reap runs at proposer level, outside the pass's stream pipeline, so a
+  # removal-failure warning reaches the operator's stderr. Always tolerated.
+  if [[ "${BACKEND_OVERLAY_SCOPE:-none}" == "pass" ]]; then
+    python3 "$LIB_DIR/backend_overlay.py" reap --owner-pid "$$" --scope pass || true
+  fi
   rm -f "$PIDFILE"
 
   # A DSH proposer may request one pre-approved profile plugin through the fixed

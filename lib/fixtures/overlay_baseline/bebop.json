@@ -1,0 +1,38 @@
+{
+  "backend": "bebop",
+  "launch": {
+    "arg0": "<TMP>/bin/bebop",
+    "argv": [
+      "compass",
+      "-p",
+      "standing prompt for the overlay test",
+      "--dangerously-skip-permissions",
+      "--verbose",
+      "--disable-slash-commands"
+    ],
+    "argv_nul_count": 6,
+    "env": {
+      "BEBOP_SH": "<TMP>/bin/bebop.sh",
+      "HOME": "<TMP>/home",
+      "IS_SANDBOX": "1",
+      "LANG": "C.UTF-8",
+      "OLDPWD": "<MASKED>",
+      "PATH": "<TMP>/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      "PWD": "<MASKED>",
+      "SHLVL": "<MASKED>",
+      "SPECSTRIDE_AGENT_STREAM": "false",
+      "SPECSTRIDE_EVENTS": "<TMP>/work/events.jsonl",
+      "SPECSTRIDE_RUN_ID": "run-overlay-test",
+      "SPECSTRIDE_TEST_CAPTURE": "<TMP>/capture",
+      "SPECSTRIDE_TEST_N": "1",
+      "TERM": "dumb",
+      "TMPDIR": "<TMP>/tmp",
+      "XDG_CACHE_HOME": "<TMP>/xdg/cache",
+      "XDG_CONFIG_HOME": "<TMP>/xdg/config",
+      "XDG_DATA_HOME": "<TMP>/xdg/data",
+      "XDG_STATE_HOME": "<TMP>/xdg/state",
+      "_": "<MASKED>"
+    },
+    "stdin": ""
+  }
+}
