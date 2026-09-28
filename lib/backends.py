@@ -38,6 +38,7 @@ class Backend:
     """One backend: its name and, per role served, its qualifier spelling."""
     name: str
     roles: tuple  # ordered (role, Qualifier) pairs
+    stream: str | None = None  # canonical stream format (SH-3); absent = raw text
 
     def qualifier(self, role):
         return dict(self.roles)[role]
@@ -87,18 +88,79 @@ def display(role):
     return " | ".join(spelling(n, role) for n in names(role))
 
 
+def find(name):
+    """The entry named `name`, or None (SH-3: bare names only, no qualifier)."""
+    for b in REGISTRY:
+        if b.name == name:
+            return b
+    return None
+
+
+def stream_value(name):
+    """The entry's `stream` value; KeyError for an unknown name (SH-3)."""
+    entry = find(name)
+    if entry is None:
+        raise KeyError(name)
+    return entry.stream
+
+
+def invocation_model_value(spec, model):
+    """The research R5 invocation model for SPEC (NAME[:QUALIFIER]) and --model.
+
+    A qualifier counts as a model only when SH-1 labels the proposer qualifier
+    `provider/model` (today only dsh); `variant`/`name` labels are not model
+    ids. An explicit --model beats the qualifier unless both are given, in
+    which case picking either would be a guess (XI) — so neither is reported.
+    Returns None when there is no model to report; KeyError for an unknown name.
+    """
+    bare, _, qualifier = spec.partition(":")
+    entry = find(bare)
+    if entry is None:
+        raise KeyError(bare)
+    if model:
+        return None if qualifier else model
+    q = entry.qualifier("proposer") if "proposer" in dict(entry.roles) else None
+    if (qualifier and q is not None and q.form != "none"
+            and q.label == "provider/model"):
+        return qualifier
+    return None
+
+
 def _main(argv):
     parser = argparse.ArgumentParser(prog="backends.py", description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="mode", required=True, metavar="{names,display}")
+    sub = parser.add_subparsers(dest="mode", required=True, metavar="{names,display,stream,invocation-model}")
     for mode in ("names", "display"):
         p = sub.add_parser(mode)
         p.add_argument("--role", required=True, choices=ROLES)
+    # SH-3 modes: read the per-entry stream format / invocation model. They take
+    # their own --backend (and --model); --role does not apply to them.
+    p = sub.add_parser("stream")
+    p.add_argument("--backend", required=True)
+    p = sub.add_parser("invocation-model")
+    p.add_argument("--backend", required=True)
+    p.add_argument("--model", default="")
     args = parser.parse_args(argv)
     if args.mode == "names":
         for n in names(args.role):
             print(n)
-    else:
+    elif args.mode == "display":
         print(display(args.role))
+    elif args.mode == "stream":
+        try:
+            value = stream_value(args.backend)
+        except KeyError:
+            return 1
+        if value is not None:
+            print(value)
+        return 0
+    else:
+        try:
+            value = invocation_model_value(args.backend, args.model)
+        except KeyError:
+            return 1
+        if value is not None:
+            print(value)
+        return 0
     return 0
 
 

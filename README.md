@@ -1276,6 +1276,17 @@ which turns **off** structured capture entirely and restores the legacy raw
 tee'd output — no per-tool events, and the redaction/payload policy no longer
 applies, so use it only when you accept raw provider text in `run.log`.
 
+**Adding a stream format.** A new structured schema is three edits: (1) write the
+adapter module — a class built as `Adapter(policy, *, expected_evidence=None)` with
+`consume(record)` (and optionally `consume_raw`/`finish`), importing from
+`lib/stream_seam.py`, never from the tap; (2) add one row to the marked
+"stream formats (the seam)" table in `lib/agent_stream.py` (one import + one
+`StreamFormat(...)` row with its capability); (3) set the backend's registry entry's
+`stream` value to the new format name in `lib/backends.py` — routing, the
+invocation artifacts and the finalizer hand-off follow from that value alone, and any
+failure (unknown format, `SPECSTRIDE_AGENT_STREAM=false`, missing tap) degrades to the
+announced raw-text path.
+
 Key knobs (see `.env.example` for all of them): `SPECSTRIDE_MAX_REJECTS` (3),
 `SPECSTRIDE_MAX_ITER`, `SPECSTRIDE_PROPOSER_TIMEOUT` (1800s),
 `SPECSTRIDE_CRITIC_TIMEOUT` (300s), `SPECSTRIDE_CRITIC_MALFORMED_LIMIT` (3),

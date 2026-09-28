@@ -82,6 +82,13 @@ into `degraded` mode — a text/result-only capability that is always announced 
 an `agent_observability` event, never silently dropped. See
 [On-Disk-Contract](On-Disk-Contract#the-event-stream) for the event fields.
 
+**Registry-routed formats.** For any other backend, the stream schema comes from
+the backend's registry entry (`lib/backends.py`), not from a backend-name check:
+a backend whose entry names a `stream` format is parsed by that format's adapter,
+routed purely by that value. Every failure degrades to the raw-text path with an
+announced reason. `SPECSTRIDE_AGENT_STREAM=false` turns that off too — even with
+`-j` (unlike `prime`, where `-j` keeps the tap on).
+
 ## Key knobs
 
 See `.env.example` for the full set. The load-bearing ones:
@@ -107,7 +114,7 @@ See `.env.example` for the full set. The load-bearing ones:
 | `SPECSTRIDE_GIT_COMMITS` | auto | per-phase git checkpoint behavior |
 | `SPECSTRIDE_CONTEXT_BUDGET` | ~24000 | chars of design-doc context injected (Spec Kit / OpenSpec) |
 | `SPECSTRIDE_LIVE_DETAIL` | `tools` | live-view verbosity: `milestones \| tools \| full` |
-| `SPECSTRIDE_AGENT_STREAM` | `true` | structured stream tap (`agent_*` events) for `claude`/`codex`/`prime`; `false` = legacy raw path |
+| `SPECSTRIDE_AGENT_STREAM` | `true` | structured stream tap (`agent_*` events) for `claude`/`codex`/`prime` and any backend whose registry entry names a `stream` format; `false` = legacy raw path (for registry-routed backends this wins even with `-j`) |
 | `SPECSTRIDE_SPEC_FORMAT` | auto | force `native \| speckit-tasks \| openspec-change` |
 | `SPECSTRIDE_FEATURE` | dir basename / `default` | feature namespace |
 | `SPECSTRIDE_LEARNING` | unset (= `off`) | the [learning loop](Learning): unset/`off` = inert; `suggest` = write per-phase observations at `phase_done`; `apply` = also read applied values into the run |

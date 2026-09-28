@@ -156,6 +156,7 @@ All Python lives under [`lib/`](../lib); the Bash entry points stay at the top l
 | `lib/specstride_spec.py` | The single spec-parsing source of truth (bash and critic both delegate) — see [Spec Formats](Spec-Formats) |
 | `lib/verification_plan.py` | Pre-loop `VerificationPlan v1` derivation + test scaffolding |
 | `lib/agent_stream.py` | The proposer's stream-json tap that emits `agent_*` events |
+| `lib/stream_seam.py` | The one seam stream adapters sit behind — the `StreamFormat`/`Capability` records, the registry builder, the shared opt-in behaviours (synthesised init/terminal, the `no_activity` flag, terminal-seen tracking), the tool-event builder and the target helpers. New adapters import from here, not from the tap |
 | `lib/present.py` | The live presenter (inline timeline + status card) |
 | `lib/*_loki_ship.py` / `lib/*_otel_ship.py` | The two telemetry shippers (Loki push, OTLP) |
 | `lib/verdict_pins.py` | Verdict-parsing pins/guards |
