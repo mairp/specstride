@@ -21,7 +21,8 @@ LIB_DIR="$SCRIPT_DIR/lib"          # Python components (the Loki shipper) live h
 . "$SCRIPT_DIR/specstride-lib.sh"
 
 usage() {
-  cat <<'EOF'
+  local text
+  text=$(cat <<'EOF'
 proposer.sh — the Specstride proposer (simplified headless Ralph loop).
 
 USAGE
@@ -37,8 +38,7 @@ REQUIRED
   -f, --prompt-file FILE  File whose contents are the standing prompt each pass.
 
 OPTIONS
-  --backend NAME          Provider backend: dsh[:provider/model] | claude | codex |
-                          bebop:<name> | prime:<variant>
+  --backend NAME          Provider backend: @PROPOSER_BACKENDS@
                           (default: $SPECSTRIDE_PROPOSER or "dsh").
                           Bare bebop uses SPECSTRIDE_BEBOP_BACKEND; bare prime uses
                           stock prime-agent with its configured default model.
@@ -126,6 +126,9 @@ EXIT
      work fit — declare the long step as a yield, pre-stage it as a verification
      command, or split the phase — not to raise the cap.
 EOF
+)
+  text=${text//@PROPOSER_BACKENDS@/$(specstride_backend_display proposer)}
+  printf '%s\n' "$text"
 }
 
 WORKDIR="" EVIDENCE="" PROMPT_FILE=""
@@ -497,7 +500,7 @@ run_agent() {
       return "$rc"
       ;;
     *)
-      echo "proposer.sh: unknown backend '$BACKEND' (dsh | claude | codex | bebop[:name] | prime[:variant])" >&2
+      echo "proposer.sh: unknown backend '$BACKEND' ($(specstride_backend_display proposer))" >&2
       return 127
       ;;
   esac

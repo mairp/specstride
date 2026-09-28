@@ -14,8 +14,9 @@ in the evidence can never approve the gate. Missing / duplicated / wrong-nonce /
 absent verdict all fail SAFE (counted as REJECTED, recorded malformed): an
 unattended approve-your-own-work loop must never auto-approve on ambiguity.
 
-Provider is chosen by SPECSTRIDE_CRITIC = dsh[:provider/model] | claude | codex |
-bebop | prime[:variant]. DSH runs a fresh, tool-free DeepSeek Harness headless
+Provider is chosen by SPECSTRIDE_CRITIC.
+Critic backends: dsh[:provider/model] | claude | codex | bebop | prime[:variant].
+DSH runs a fresh, tool-free DeepSeek Harness headless
 turn; HTTP paths use stdlib urllib. No pip installs.
 
 Exit codes:  0 APPROVED · 10 REJECTED · 3 bad config/usage · 1 internal error.
@@ -30,6 +31,7 @@ import glob  # W20 — placeholder-in-citation resolution
 # the same directory this file lives in, regardless of the caller's CWD.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import specstride_spec  # noqa: E402
+import backends  # noqa: E402
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 import verification_plan  # noqa: E402
@@ -2376,7 +2378,7 @@ def critic_call(provider, prompt, timeout, workdir=None):
                     "(no hardcoded default — the model is env-controlled)")
             return call_openai_chat(prompt, model, timeout, base, key, "SPECSTRIDE_COMPASS_KEY")
         return call_bebop_shell(prompt, backend, timeout)
-    raise RuntimeError("unknown SPECSTRIDE_CRITIC provider: %s (dsh[:provider/model]|claude|codex|bebop|prime[:variant])" % provider)
+    raise RuntimeError("unknown SPECSTRIDE_CRITIC provider: %s (%s)" % (provider, backends.display("critic")))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2466,7 +2468,7 @@ def main():
     ap.add_argument("--max-rejects", type=int,
                     default=int(os.environ.get("SPECSTRIDE_MAX_REJECTS", "3")))
     ap.add_argument("--provider", default=os.environ.get("SPECSTRIDE_CRITIC", "claude"),
-                    help="critic provider: dsh[:provider/model]|claude|codex|bebop|prime[:variant]")
+                    help="critic provider: " + backends.display("critic"))
     ap.add_argument("--timeout", type=int,
                     default=int(os.environ.get("SPECSTRIDE_CRITIC_TIMEOUT", "300")))
     ap.add_argument("--grounding", default=os.environ.get("SPECSTRIDE_CRITIC_GROUNDING", "true"))

@@ -164,6 +164,26 @@ _SPECSTRIDE_SPEC_PY="$_SPECSTRIDE_LIB_DIR/lib/specstride_spec.py"
 _SPECSTRIDE_TELEMETRY_PY="$_SPECSTRIDE_LIB_DIR/lib/telemetry_delivery.py"
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Backend names — thin shim over lib/backends.py, the SINGLE source of every
+#  backend name and spelling for both roles. Bash must never keep its own copy
+#  of that list: no fallback copy of the list may live in bash. When the module
+#  cannot be run (python3 missing, non-zero exit, empty output), print the
+#  registry-unavailable fallback note instead and return 0 either way, so help
+#  and error paths keep their existing exit status.
+# ─────────────────────────────────────────────────────────────────────────────
+_SPECSTRIDE_BACKENDS_PY="$_SPECSTRIDE_LIB_DIR/lib/backends.py"
+specstride_backend_display() {
+  local out
+  out="$(python3 "$_SPECSTRIDE_BACKENDS_PY" display --role "$1" 2>/dev/null)"
+  if [[ -n "$out" ]]; then
+    printf '%s\n' "$out"
+  else
+    printf '%s\n' '(backend list unavailable: could not run lib/backends.py; see README "Configuration")'
+  fi
+  return 0
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Telemetry receiver state — thin shim over lib/telemetry_delivery.py, the SINGLE
 #  source of truth for the four escalating, user-visible states (FR-036). Startup
 #  and `specstride status` MUST distinguish configured / reachable / request-accepted /
