@@ -23,7 +23,7 @@ Exit codes:  0 APPROVED · 10 REJECTED · 3 bad config/usage · 1 internal error
 The orchestrator maps these onto phase advancement; the marker files are the
 real contract, the exit code is a convenience.
 """
-import sys, os, re, json, time, argparse, secrets, urllib.request, urllib.error
+import sys, os, re, json, time, argparse, secrets, hashlib, urllib.request, urllib.error
 import glob  # W20 — placeholder-in-citation resolution
 
 # Spec parsing is owned by ONE module (lib/specstride_spec.py) shared with the bash
@@ -2164,6 +2164,7 @@ def call_dsh_shell(prompt, timeout, workdir=None, model_ref=None):
         env["DSH_PERMISSION_MODE"] = "read-only"
         if overlay_home:
             env["DSH_HOME"] = overlay_home
+        env.update(_child_otel_env("dsh"))
         out = subprocess.run(argv, cwd=workdir, capture_output=True, text=True,
                              timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
@@ -2420,7 +2421,64 @@ def critic_observability(provider):
             "structured schema unavailable — parsing plain output", "text,result")
 
 
-def emit(events_path, event, **fields):
+def _otel_spans():
+    lib = os.path.dirname(os.path.abspath(__file__))
+    if lib not in sys.path:
+        sys.path.insert(0, lib)
+    import ralph_otel_spans
+    return ralph_otel_spans
+
+
+def _child_otel_env(service):
+    """TRACEPARENT (= the open critic span) + resource for a child agent, so its own
+    spans nest inside the run's trace, in Phoenix project `specstride`. {} when
+    traces are off or no critic scope is open. Never raises."""
+    env = os.environ
+    run_id = env.get("SPECSTRIDE_RUN_ID", "")
+    if env.get("SPECSTRIDE_OTEL_ENABLED") != "true" or not run_id:
+        return {}
+    try:
+        tp = _otel_spans().traceparent(run_id, ["critic"])
+    except Exception:  # noqa: BLE001
+        return {}
+    if not tp:
+        return {}
+    run = re.sub(r"[^A-Za-z0-9._:-]", "_", run_id)
+    return {"TRACEPARENT": tp,
+            "OTEL_RESOURCE_ATTRIBUTES": "service.name=%s,openinference.project.name=specstride,"
+                                        "specstride.run_id=%s" % (service, run)}
+
+
+def _write_prompt_file(feature_dir, n, prompt):
+    """Persist the critic prompt (like proposer-prompt.phase<N>.txt) so the trace can
+    point at it. Returns emit() fields prompt_path/sha256/bytes, or {}."""
+    if os.environ.get("SPECSTRIDE_OTEL_ENABLED") != "true":
+        return {}
+    try:
+        if not _otel_spans().enabled():
+            return {}
+    except Exception:  # noqa: BLE001
+        return {}
+    path = os.path.join(feature_dir, "critic-prompt.phase%d.txt" % n)
+    raw = prompt.encode("utf-8")
+    try:
+        with open(path, "wb") as fh:
+            fh.write(raw)
+    except OSError:
+        return {}
+    return {"prompt_path": os.path.abspath(path),
+            "prompt_sha256": hashlib.sha256(raw).hexdigest(), "prompt_bytes": len(raw)}
+
+
+def _reply_content(reply):
+    """The critic reply as span-only output.value (redacted, capped). {} on failure."""
+    try:
+        return _otel_spans().content_attrs("output.value", reply or "")
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def emit(events_path, event, _span_content=None, **fields):
     if not events_path:
         return
     rec = {"ts": "%.6f" % time.time(),
@@ -2432,10 +2490,10 @@ def emit(events_path, event, **fields):
             fh.write(json.dumps(rec) + "\n")
     except OSError:
         pass
-    _ship_remote(rec)
+    _ship_remote(rec, _span_content)
 
 
-def _ship_remote(rec):
+def _ship_remote(rec, span_content=None):
     """Mirror a critic event to the Loki/OTEL sinks the orchestrator enabled, the
     way specstride_emit does for lifecycle events, so the critic gate (critic_start,
     verdict, grounding_gap, ...) is visible remotely and in the run's trace.
@@ -2470,7 +2528,8 @@ def _ship_remote(rec):
             import ralph_otel_ship as otel_ship
             otel = otel_ship.Otel(env["SPECSTRIDE_OTEL_URL"],
                                   {"service.name": "ralph", "task": task, "backend": backend})
-            otel.add(event, otel_ship.logfmt(fields), fields=fields)
+            otel.add(event, otel_ship.logfmt(fields), fields=fields,
+                     span_content=span_content)
             otel.flush()
         except Exception:  # noqa: BLE001
             pass
@@ -2712,7 +2771,8 @@ def main():
             fh.write(prompt)
         warn("[debug] nonce=%s provider=%s prompt bytes=%d" % (nonce, args.provider, len(prompt)))
 
-    emit(events_path, "critic_start", phase=n, attempt=args.attempt, provider=args.provider)
+    emit(events_path, "critic_start", phase=n, attempt=args.attempt, provider=args.provider,
+         **_write_prompt_file(feature_dir, n, prompt))
     # Announce the critic's capability mode so an operator can distinguish a
     # structured (JSON-mode) Prime critic from a raw-text fallback (T060/SC-012).
     capability = critic_observability(args.provider)
@@ -2760,7 +2820,7 @@ def main():
         open(approved, "w").close()
         _write_transcript(transcript, nonce, "APPROVED", detail, prompt, reply, args)
         emit(events_path, "verdict", phase=n, attempt=args.attempt, result="APPROVED",
-             title=title)
+             title=title, _span_content=_reply_content(reply))
         # W9: phase fully approved — drop its pin file so a future re-run starts clean.
         try:
             verdict_pins.clear_pins(feature_dir, n)
@@ -2847,7 +2907,8 @@ def _finish_reject(gates_dir, n, title, args, nonce, prompt, reply, verdict, det
     _write_transcript(transcript, nonce, verdict, detail, prompt, reply, args)
     emit(events_path, "verdict", phase=n, attempt=args.attempt,
          result=("REJECTED" if verdict == "REJECTED" else "MALFORMED"),
-         reason=reason, title=title, max_rejects=args.max_rejects)
+         reason=reason, title=title, max_rejects=args.max_rejects,
+         _span_content=_reply_content(reply or detail))
     print("REJECTED" if verdict == "REJECTED" else "MALFORMED")
     sys.exit(10)
 

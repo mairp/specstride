@@ -144,6 +144,29 @@ specstride_emit() {
   fi
 }
 
+# Locate a prompt for the trace: fills SPECSTRIDE_PROMPT_KV with the specstride_emit
+# key/value words `prompt_path <abs> prompt_sha256 <hex> prompt_bytes <n>` (the event,
+# and so Loki, never carries the text; ralph_otel_spans reads the file onto the
+# span's input.value). Empty when the file is unreadable.
+specstride_prompt_fields() {
+  local f="$1" sha bytes
+  SPECSTRIDE_PROMPT_KV=()
+  [[ -r "$f" ]] || return 0
+  sha="$(sha256sum "$f" 2>/dev/null)"; sha="${sha%% *}"
+  bytes="$(wc -c < "$f" 2>/dev/null)"; bytes="${bytes//[[:space:]]/}"
+  [[ "$f" = /* ]] || f="$PWD/$f"
+  SPECSTRIDE_PROMPT_KV=( prompt_path "$f" prompt_sha256 "$sha" prompt_bytes "$bytes" )
+}
+
+# W3C traceparent of the run's innermost open scope among $1 (comma list, e.g.
+# "iter,attempt"), so a child agent nests its spans under it. Empty when traces are
+# off or nothing is open. Best-effort, never fails.
+specstride_traceparent() {
+  [[ "${SPECSTRIDE_OTEL_ENABLED:-false}" == "true" && -n "${SPECSTRIDE_RUN_ID:-}" ]] || return 0
+  python3 "$_SPECSTRIDE_LIB_DIR/lib/ralph_otel_spans.py" traceparent \
+    --run-id "$SPECSTRIDE_RUN_ID" --scope "${1:-}" 2>/dev/null || true
+}
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  Spec parsing — thin shims over lib/specstride_spec.py (the single source of truth).
 #

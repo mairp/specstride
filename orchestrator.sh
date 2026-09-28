@@ -1843,11 +1843,15 @@ run_phase() {
       rem_after="$RUN_DIR/accelerator/phase${n}-attempt${attempt}.after"
       workdir_change_snapshot "$rem_before"
       log "----- accelerator: phase $n attempt $attempt/$MAX_REJECTS ($backend) — acting on the hint for ${rem_sig%,} -----"
-      specstride_emit accelerator_start phase "$n" attempt "$attempt" backend "$backend" criteria "${rem_sig%,}"
+      specstride_prompt_fields "$prompt_file"
+      specstride_emit accelerator_start phase "$n" attempt "$attempt" backend "$backend" criteria "${rem_sig%,}" \
+        "${SPECSTRIDE_PROMPT_KV[@]}"
     else
       build_proposer_prompt "$n" "$attempt" "$prompt_file"
       log "----- proposer: phase $n attempt $attempt/$MAX_REJECTS ($PROPOSER_BACKEND) -----"
-      specstride_emit proposer_start phase "$n" attempt "$attempt" backend "$PROPOSER_BACKEND"
+      specstride_prompt_fields "$prompt_file"
+      specstride_emit proposer_start phase "$n" attempt "$attempt" backend "$PROPOSER_BACKEND" \
+        "${SPECSTRIDE_PROMPT_KV[@]}"
     fi
     # The budget this pass runs under, and WHERE IT CAME FROM, recorded beside
     # the start of the pass it governs. Reconstructing that afterwards from a

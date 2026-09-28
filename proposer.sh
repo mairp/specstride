@@ -540,9 +540,25 @@ backend_overlay_release() {
   return 0
 }
 
+# Trace nesting for a child agent (claude -p, dsh): CHILD_OTEL_ENV becomes an `env`
+# prefix carrying TRACEPARENT = the run's open iter (else attempt) span, so the child's
+# own spans land inside the specstride trace. CHILD_OTEL_RES is the child's resource
+# (Phoenix project `specstride`, service.name kept per child). Both empty when traces
+# are off (SPECSTRIDE_OTEL_ENABLED / SPECSTRIDE_OTEL_TRACES) or no scope is open.
+child_otel_setup() {
+  local service="$1" tp run
+  CHILD_OTEL_ENV=(); CHILD_OTEL_RES=""
+  tp="$(specstride_traceparent iter,attempt)"
+  [[ -n "$tp" ]] || return 0
+  run="${SPECSTRIDE_RUN_ID//[^A-Za-z0-9._:-]/_}"
+  CHILD_OTEL_RES="service.name=$service,openinference.project.name=specstride,specstride.run_id=$run"
+  CHILD_OTEL_ENV=( env "TRACEPARENT=$tp" )
+}
+
 run_agent() {
   local prompt="$1"; shift
   local -a args=( "$@" )
+  local -a CHILD_OTEL_ENV=(); local CHILD_OTEL_RES=""
   case "$BACKEND" in
     dsh|dsh:*)
       # DeepSeek Harness one-shot profile. The profile selects the provider/model
@@ -570,9 +586,11 @@ run_agent() {
           rm -rf "$overlay_dir"; return 1; }
       fi
       dsh_home_eff="${overlay_dir:-${DSH_HOME:-$HOME/.dsh}}"
+      child_otel_setup dsh
+      [[ -n "$CHILD_OTEL_RES" ]] && CHILD_OTEL_ENV+=( "OTEL_RESOURCE_ATTRIBUTES=$CHILD_OTEL_RES" )
       DSH_HOME="$dsh_home_eff" \
       DSH_PERMISSION_MODE="${SPECSTRIDE_DSH_PERMISSION_MODE:-${DSH_PERMISSION_MODE:-workspace-write}}" \
-        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "$dsh_bin" "${dsh_args[@]}" "$prompt"
+        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${CHILD_OTEL_ENV[@]}" "$dsh_bin" "${dsh_args[@]}" "$prompt"
       rc=$?
       if [[ -n "${overlay_dir:-}" ]]; then
         rm -rf "$overlay_dir"
@@ -589,14 +607,19 @@ run_agent() {
       printf '%s' "$prompt" > "$prompt_file"
       backend_overlay_prefix claude || return 1
       # Pinned harness (#109): one helper decides the setting sources, MCP and the
-      # single --settings JSON (claude does not merge two --settings flags).
+      # single --settings JSON. claude does not merge two --settings flags (the
+      # last replaces the first whole), so the OTEL resource attributes ride in
+      # that same JSON via --env (#112). Claude Code's settings.json `env` beats
+      # the process env for OTEL_RESOURCE_ATTRIBUTES; a --settings flag beats both.
+      child_otel_setup claude-code
       local -a harness=()
       local -a harness_opts=()
       [[ "$SPECSTRIDE_PROPOSER_INHERIT_PLUGINS" == "1" ]] && harness_opts+=( --inherit )
       [[ -n "$MODEL" ]] && harness_opts+=( --model-given )
+      [[ -n "$CHILD_OTEL_RES" ]] && harness_opts+=( --env "OTEL_RESOURCE_ATTRIBUTES=$CHILD_OTEL_RES" )
       mapfile -d '' -t harness < <(python3 "$LIB_DIR/claude_harness.py" args "${harness_opts[@]}")
       SPECSTRIDE_STDIN_FILE="$prompt_file" \
-        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" claude -p "${harness[@]}" "${args[@]}"
+        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${CHILD_OTEL_ENV[@]}" "${BACKEND_OVERLAY_PREFIX[@]}" claude -p "${harness[@]}" "${args[@]}"
       local rc=$?; backend_overlay_release; rm -f "$prompt_file"; return "$rc"
       ;;
     codex)
