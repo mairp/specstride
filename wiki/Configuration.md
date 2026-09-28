@@ -8,7 +8,15 @@ values), so `SPECSTRIDE_PROPOSER_TIMEOUT=… specstride run …` is honored.
 
 ## Backends (pick one per role)
 
-Choose `dsh | claude | codex | bebop | prime[:variant]` for the proposer and critic independently:
+Pick one per role; each role has its own accepted list:
+
+Proposer backends: `dsh[:provider/model] | claude | codex | bebop[:name] | prime[:variant]`
+
+Critic backends: `dsh[:provider/model] | claude | codex | bebop | prime[:variant]`
+
+Both lists are generated from `lib/backends.py`, the single backend registry, and
+checked against it by `lib/test_backend_registry.py`; to add a new backend, add it
+to that registry first, then to its dispatch arm and these doc lines.
 
 - **`dsh`** — DeepSeek Harness's `headless` profile. It uses the provider/model in
   `$DSH_HOME/settings.yaml` (this host selects `gpt-5.6-sol` through Compass STAGE).

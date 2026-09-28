@@ -33,7 +33,8 @@ LIB_DIR="$SCRIPT_DIR/lib"          # all Python components live here
 E_OK=0; E_INTERNAL=1; E_REJECTS=2; E_SPEC=3; E_BUDGET=4; E_LOCK=5; E_STOP=6
 
 usage() {
-  cat <<'EOF'
+  local text
+  text=$(cat <<'EOF'
 orchestrator.sh — Specstride: spec-driven Ralph loop with an automated critic gate.
 
 USAGE
@@ -57,11 +58,9 @@ OPTIONS
                         Default: the Spec Kit feature or OpenSpec change directory
                         basename, else "default". Also disambiguates multiple
                         discovered task specs. Also via SPECSTRIDE_FEATURE.
-  --proposer BACKEND    Proposer backend: dsh[:provider/model] | claude | codex |
-                        bebop[:name] | prime[:variant]
+  --proposer BACKEND    Proposer backend: @PROPOSER_BACKENDS@
                         (default: $SPECSTRIDE_PROPOSER or dsh).
-  --critic BACKEND      Critic provider: dsh[:provider/model] | claude | codex |
-                        bebop | prime[:variant] (default: $SPECSTRIDE_CRITIC or claude).
+  --critic BACKEND      Critic provider: @CRITIC_BACKENDS@ (default: $SPECSTRIDE_CRITIC or claude).
   --max-rejects N       Critic REJECTs per phase before halting (default: 3).
   --max-iter N          Proposer passes per phase (default: 30).
   --proposer-timeout SECONDS  Hard wall-clock limit on a single proposer pass
@@ -169,6 +168,10 @@ fallback (no local structure).
 Config precedence: built-in defaults < .env (in repo root) < these flags.
 See .env.example for every knob and the README for the file contract.
 EOF
+)
+  text=${text//@PROPOSER_BACKENDS@/$(specstride_backend_display proposer)}
+  text=${text//@CRITIC_BACKENDS@/$(specstride_backend_display critic)}
+  printf '%s\n' "$text"
 }
 
 # ── config: built-in defaults < .env < caller env < flags ───────────────────
