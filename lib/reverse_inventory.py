@@ -385,6 +385,23 @@ def walk(src, excludes=(), environ=None):
     return files, skipped, mode, total
 
 
+def testautomation_snapshot(src):
+    """{path: [bytes, sha256]} of every file already under ``testautomation/``, or
+    None when there is none. The walk denies the directory, so without this a
+    testautomation/ left by earlier runs looks like output the reverse run wrote."""
+    root = os.path.join(src, "testautomation")
+    if not os.path.isdir(root):
+        return None
+    snapshot = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(filenames):
+            path = os.path.join(dirpath, name)
+            if os.path.isfile(path) and not os.path.islink(path):
+                snapshot[_relpath(path, src)] = [os.path.getsize(path), _sha256_file(path)]
+    return snapshot
+
+
 def fingerprint(files, skipped):
     entries = sorted((e["path"], e["bytes"], e["sha256"]) for e in list(files) + list(skipped))
     return hashlib.sha256(json.dumps(entries, separators=(",", ":")).encode()).hexdigest()
@@ -818,6 +835,7 @@ def build(src, excludes=(), environ=None):
         "fingerprint": fingerprint(files, skipped),
         "git_head": git_head(src) if mode == "git" else None,
         "git_status": status,
+        "testautomation": testautomation_snapshot(src),
     }
 
 

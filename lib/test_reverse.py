@@ -357,9 +357,12 @@ def test_workspace_relative_citations_resolve_in_a_monorepo(tmp_path):
 
 # ── guard ───────────────────────────────────────────────────────────────────
 
-def baselined(tmp_path, with_git=True):
-    """src-mini with an inventory baseline where `reverse.py plan` would put it."""
+def baselined(tmp_path, with_git=True, prepare=None):
+    """src-mini with an inventory baseline where `reverse.py plan` would put it.
+    ``prepare(src)`` runs first, for state the baseline must already hold."""
     src = src_mini(tmp_path)
+    if prepare:
+        prepare(src)
     if with_git:
         git(src, "init", "-q")
         git(src, "add", "-A")
@@ -398,6 +401,34 @@ def test_guard_catches_changes_to_the_source(tmp_path, with_git, change, expect)
     change(src)
     problems = guard(result)
     assert any(expect in p for p in problems), problems
+
+
+@pytest.mark.parametrize("with_git", [True, False], ids=["git", "walk"])
+def test_guard_ignores_a_testautomation_dir_that_predates_the_baseline(tmp_path, with_git):
+    old = "testautomation/002-earlier-run/TEST_PLAN.md"
+
+    def earlier_run(src):
+        (src / old).parent.mkdir(parents=True)
+        (src / old).write_text("# an earlier run's plan\n")
+    src, result = baselined(tmp_path, with_git, prepare=earlier_run)
+    assert guard(result) == []
+    (src / "testautomation" / "reverse" / "TEST_PLAN.md").parent.mkdir(parents=True)
+    (src / "testautomation" / "reverse" / "TEST_PLAN.md").write_text("# landed\n")
+    (src / old).write_text("# rewritten\n")
+    problems = guard(result)
+    assert any(p.startswith("added: testautomation/reverse/TEST_PLAN.md") for p in problems), problems
+    assert any(p.startswith("changed: testautomation/002-earlier-run/TEST_PLAN.md")
+               for p in problems), problems
+
+
+def test_guard_keeps_the_directory_check_for_a_baseline_without_the_snapshot(tmp_path):
+    src, result = baselined(tmp_path)
+    inventory = json.load(open(result["inventory"]))
+    del inventory["testautomation"]
+    with open(result["inventory"], "w") as handle:
+        json.dump(inventory, handle)
+    (src / "testautomation" / "f").mkdir(parents=True)
+    assert any(p.startswith("added: testautomation/") for p in guard(result))
 
 
 def test_guard_catches_a_moved_head(tmp_path):
