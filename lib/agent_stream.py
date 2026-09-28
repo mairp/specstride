@@ -2,10 +2,8 @@
 """Turn a coding agent's JSONL stream into safe Specstride events (stdlib only)."""
 
 import argparse
-from dataclasses import dataclass, field
 import json
 import os
-from pathlib import Path
 import signal
 import sys
 import time
@@ -13,22 +11,16 @@ import time
 from invocation_result import EventEnvelope, InvocationContext, atomic_write_json
 from observability_policy import ObservabilityPolicy
 from prime_stream import PrimeAdapter
+from stream_seam import (
+    AdapterOutcome, TARGET_KEYS, TARGET_MAX, tool_target, looks_like_evidence,
+    Capability, StreamFormat, SharedBehaviour, build_registry,
+)
 from telemetry_delivery import LocalFirstFanout
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
 
-TARGET_MAX = 120
 TEXT_MAX = 160
-TARGET_KEYS = (
-    "file_path", "path", "notebook_path", "command", "pattern", "url", "query",
-    "skill", "description", "prompt", "subject",
-)
-
-
-def one_line(value, limit):
-    value = " ".join(str(value).split())
-    return value if len(value) <= limit else value[:limit - 1] + "…"
 
 
 class EventSink:
@@ -91,48 +83,6 @@ class EventSink:
             for key, value in metadata.items():
                 result.setdefault(key, value)
         return result
-
-
-def tool_target(name, tool_input):
-    """Compact one-line description of what a tool call touches."""
-    if not isinstance(tool_input, dict):
-        return ""
-    if name == "Bash":
-        value = tool_input.get("command", "") or tool_input.get("description", "")
-        return one_line(value, TARGET_MAX)
-    for key in TARGET_KEYS:
-        value = tool_input.get(key)
-        if value:
-            return one_line(value, TARGET_MAX)
-    return ""
-
-
-def looks_like_evidence(name, tool_input, target, expected_evidence=None):
-    """Classify writes only when a lexical target equals the expected gate path."""
-    if not expected_evidence or name not in {
-        "Write", "Edit", "MultiEdit", "NotebookEdit", "Bash",
-    }:
-        return False
-    expected = Path(expected_evidence).expanduser().resolve()
-    policy = ObservabilityPolicy(target_max_bytes=4096)
-    candidates = policy.extract_target_paths(tool_input)
-    if target:
-        candidates.append(target)
-    for candidate in candidates:
-        try:
-            if Path(candidate).expanduser().resolve() == expected:
-                return True
-        except (OSError, ValueError):
-            continue
-    return False
-
-
-@dataclass
-class AdapterOutcome:
-    events: list = field(default_factory=list)
-    output: list = field(default_factory=list)
-    terminal: dict | None = None
-    telemetry: tuple | None = None
 
 
 class ClaudeAdapter:
@@ -259,12 +209,27 @@ class ClaudeAdapter:
         return outcome
 
 
-def select_provider_adapter(provider_format, policy, **kwargs):
-    if provider_format in {"claude", "claude-stream-json"}:
-        return ClaudeAdapter(policy, **kwargs)
-    if provider_format == "prime-v3":
-        return PrimeAdapter(policy, **kwargs)
-    raise ValueError("unsupported provider format: %s" % provider_format)
+# ── stream formats (the seam) ─────────────────────────────────────────────
+# Adding a format = its adapter module plus one import and one row here.
+# Order is display order; duplicates fail at import.
+STREAM_FORMATS = (
+    StreamFormat("claude", ClaudeAdapter, aliases=("claude-stream-json",),
+                 capability=Capability("Claude stream-json schema selected")),
+    StreamFormat("prime-v3", PrimeAdapter,
+                 capability=Capability("Prime JSON schema v3 selected")),
+)
+FORMATS = build_registry(STREAM_FORMATS)
+
+
+def select_provider_adapter(provider_format, policy, *, registry=None,
+                            invocation_model=None, **kwargs):
+    """Build the adapter for a format, resolving only through the seam table."""
+    row = (registry or FORMATS).lookup(provider_format)
+    if row is None:
+        raise ValueError("unsupported provider format: %s" % provider_format)
+    if row.opts:
+        return SharedBehaviour(row.adapter(policy, **kwargs), row, invocation_model)
+    return row.adapter(policy, **kwargs)
 
 
 # The five fine-grained signals a structured adapter can surface. Emitted verbatim
@@ -273,17 +238,16 @@ def select_provider_adapter(provider_format, policy, **kwargs):
 _STRUCTURED_SIGNALS = "init,text,tool,evidence,result"
 
 
-def observability_start(provider_format):
+def observability_start(provider_format, *, registry=None):
     """Describe the capability an invocation begins with (T060).
 
     Returns (mode, reason, supported_signals) for the invocation-start
     ``agent_observability`` event. A recognized structured schema starts fully
     structured; any other format degrades to raw-text parsing up front so the
     absence of fine-grained signals is explicit rather than silent."""
-    if provider_format == "prime-v3":
-        return "structured", "Prime JSON schema v3 selected", _STRUCTURED_SIGNALS
-    if provider_format in {"claude", "claude-stream-json"}:
-        return "structured", "Claude stream-json schema selected", _STRUCTURED_SIGNALS
+    row = (registry or FORMATS).lookup(provider_format)
+    if row is not None:
+        return "structured", row.capability.reason, row.capability.signals
     return ("raw-text",
             "structured schema unavailable — parsing plain output", "text,result")
 
@@ -354,6 +318,10 @@ def main():
     parser.add_argument("--invocation-id", default="")
     parser.add_argument("--expected-evidence", default="")
     parser.add_argument("--provider-format", default="claude")
+    # The model the invocation specified (research R5). Used only by the
+    # shared-behaviour wrapper (synthesised init / missing_terminal header
+    # facts); bare adapters ignore it, so Claude and Prime output is unchanged.
+    parser.add_argument("--invocation-model", default="")
     # When set (structured Prime path only), the tap records the provider-terminal
     # observation it — and only it — can see into this atomic sidecar. The producer
     # exit/signal/timeout is observed separately by the controller (producer.json);
@@ -362,17 +330,39 @@ def main():
     parser.add_argument("--terminal-sidecar", default="")
     parser.add_argument("--loki", default="")
     parser.add_argument("--otel", default="")
+    # Registry introspection for the bash shim specstride_stream_formats: print
+    # the canonical format names, one per line, and exit before reading stdin.
+    # Emits no events and constructs no telemetry shipper.
+    parser.add_argument("--list-formats", action="store_true")
     args = parser.parse_args()
+
+    if args.list_formats:
+        for name in FORMATS.canonical():
+            print(name)
+        return
 
     policy = ObservabilityPolicy()
     context = _invocation_context(args)
     sink = EventSink(
         args.events, args.run_id, args.task, args.backend, context=context, policy=policy,
     )
-    adapter = select_provider_adapter(
-        args.provider_format, policy,
-        expected_evidence=context.expected_evidence if context else args.expected_evidence or None,
-    )
+    # Resolve the row through the seam table BEFORE building the adapter, so an
+    # unknown format (or an adapter whose constructor raises) degrades into a
+    # plain pass-through instead of the old "fatal (ignored)" that never read
+    # stdin and left the producer with SIGPIPE (contracts/tap-cli.md).
+    adapter = None
+    constructor_error = None
+    if FORMATS.lookup(args.provider_format) is not None:
+        try:
+            adapter = select_provider_adapter(
+                args.provider_format, policy,
+                expected_evidence=(
+                    context.expected_evidence if context
+                    else args.expected_evidence or None),
+                invocation_model=args.invocation_model or None,
+            )
+        except Exception as error:  # noqa: BLE001 — degrade, never die (T023)
+            constructor_error = error
     loki, otel, logfmt = _telemetry(args)
     # Fan every normalized event out local-first (authoritative JSONL), then to each
     # independently configured remote sink, persisting recursion-safe local
@@ -406,7 +396,7 @@ def main():
     # correlated (invocation-context) path: the legacy claude CLI stream must keep
     # emitting exactly [agent_init, agent_result] (US6 backend-parity guarantee).
     observed_mode = {"value": None}
-    if context:
+    if context and constructor_error is None:
         start_mode, start_reason, start_signals = observability_start(args.provider_format)
         observed_mode["value"] = start_mode
         emit_event(
@@ -414,6 +404,30 @@ def main():
             provider_format=args.provider_format, role=context.role,
             supported_signals=start_signals,
         )
+    if constructor_error is not None:
+        # The adapter could not start (T023): announce the degraded capability —
+        # only the coarse terminal result is trustworthy — and parse plain output.
+        observed_mode["value"] = "degraded"
+        emit_event(
+            "agent_observability", mode="degraded",
+            reason=("stream adapter for '%s' failed to start — parsing plain output"
+                    % args.provider_format),
+            provider_format=args.provider_format,
+            **({"role": context.role} if context else {}),
+            supported_signals="result",
+        )
+
+    # Adapter-fault policy (T023): the first 3 adapter faults per pass get a
+    # diagnostic; later ones are only counted. Every fault sets the malformed
+    # flag on the terminal sidecar and the pass carries on with the next line.
+    adapter_errors = {"count": 0}
+
+    def handle_adapter_error(exc):
+        adapter_errors["count"] += 1
+        malformed["flag"] = True
+        if adapter_errors["count"] <= 3:
+            emit_event("agent_diagnostic", code="adapter_error", severity="error",
+                       message=str(exc)[:200])
 
     try:
         for raw in sys.stdin:
@@ -422,16 +436,32 @@ def main():
             raw = raw.strip()
             if not raw:
                 continue
+            if adapter is None:
+                # Unknown format or a failed adapter start: every line passes
+                # through raw, exactly as before the tap existed.
+                print(raw)
+                continue
+            missing = object()
             try:
                 record = json.loads(raw)
             except ValueError:
-                if isinstance(adapter, PrimeAdapter):
-                    outcome = adapter.consume_raw(raw)
-                else:
+                record = missing
+            if record is missing:
+                consume_raw = getattr(adapter, "consume_raw", None)
+                if consume_raw is None:
                     print(raw)
                     continue
+                try:
+                    outcome = consume_raw(raw)
+                except Exception as error:  # noqa: BLE001 — degrade (T023)
+                    handle_adapter_error(error)
+                    continue
             else:
-                outcome = adapter.consume(record)
+                try:
+                    outcome = adapter.consume(record)
+                except Exception as error:  # noqa: BLE001 — degrade (T023)
+                    handle_adapter_error(error)
+                    continue
             for event, fields in outcome.events:
                 emit_event(event, **fields)
                 if event == "agent_diagnostic" and fields.get("code") == "malformed_json":
@@ -475,31 +505,38 @@ def main():
             sys.stdout.flush()
         finish = getattr(adapter, "finish", None)
         if finish:
-            outcome = finish()
-            for event, fields in outcome.events:
-                emit_event(event, **fields)
-            if outcome.terminal:
-                last_terminal["value"] = outcome.terminal
-            if outcome.terminal and not context:
-                terminal = outcome.terminal
-                emit_event(
-                    "agent_result",
-                    model=terminal.get("model"),
-                    is_error=terminal.get("status") != "success",
-                    subtype=terminal.get("stop_reason") or terminal.get("reason_code"),
-                    reason_code=terminal.get("reason_code"),
-                    reason=terminal.get("reason"),
-                    cost_usd=terminal.get("cost_usd"),
-                    duration_ms=terminal.get("duration_ms"),
-                    num_turns=terminal.get("num_turns"),
-                    input_tokens=terminal.get("input_tokens"),
-                    output_tokens=terminal.get("output_tokens"),
-                    cache_read_tokens=terminal.get("cache_read_tokens"),
-                    cache_creation_tokens=terminal.get("cache_creation_tokens"),
-                )
-            for line in outcome.output:
-                print(line)
-            sys.stdout.flush()
+            # finish() is called at most once per process (T023), and a fault in
+            # it degrades into a diagnostic exactly like a consume fault.
+            try:
+                outcome = finish()
+            except Exception as error:  # noqa: BLE001 — degrade (T023)
+                handle_adapter_error(error)
+                outcome = None
+            if outcome is not None:
+                for event, fields in outcome.events:
+                    emit_event(event, **fields)
+                if outcome.terminal:
+                    last_terminal["value"] = outcome.terminal
+                if outcome.terminal and not context:
+                    terminal = outcome.terminal
+                    emit_event(
+                        "agent_result",
+                        model=terminal.get("model"),
+                        is_error=terminal.get("status") != "success",
+                        subtype=terminal.get("stop_reason") or terminal.get("reason_code"),
+                        reason_code=terminal.get("reason_code"),
+                        reason=terminal.get("reason"),
+                        cost_usd=terminal.get("cost_usd"),
+                        duration_ms=terminal.get("duration_ms"),
+                        num_turns=terminal.get("num_turns"),
+                        input_tokens=terminal.get("input_tokens"),
+                        output_tokens=terminal.get("output_tokens"),
+                        cache_read_tokens=terminal.get("cache_read_tokens"),
+                        cache_creation_tokens=terminal.get("cache_creation_tokens"),
+                    )
+                for line in outcome.output:
+                    print(line)
+                sys.stdout.flush()
     except BrokenPipeError:
         pass
     finally:

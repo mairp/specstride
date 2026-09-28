@@ -27,6 +27,14 @@ COMMAND_KEYS = {"command", "cmd", "script"}
 _PATH_TOKEN = re.compile(r"(?:^|/)(?:\.?[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_-]+)?$")
 
 
+def snake_key(key):
+    """camelCase / PascalCase dict key to snake_case (the shared header formula).
+
+    ``filePath`` → ``file_path``, ``notebookPath`` → ``notebook_path``; keys
+    that are already snake_case come back unchanged."""
+    return re.sub(r"([A-Z]+)", r"_\1", str(key)).lower()
+
+
 @dataclass(frozen=True)
 class SanitizedValue:
     value: Any
@@ -152,14 +160,14 @@ class ObservabilityPolicy:
         def visit(item, key=""):
             if isinstance(item, dict):
                 for child_key, child in item.items():
-                    visit(child, str(child_key).lower())
+                    visit(child, str(child_key))
             elif isinstance(item, (list, tuple)):
                 for child in item:
                     visit(child, key)
             elif isinstance(item, str):
-                if key in TARGET_KEYS:
+                if key.lower() in TARGET_KEYS or snake_key(key) in TARGET_KEYS:
                     candidates.append(item)
-                elif key in COMMAND_KEYS:
+                elif key.lower() in COMMAND_KEYS:
                     commands.append(item)
 
         visit(value)

@@ -1,0 +1,14 @@
+{
+  "contract": "specstride-provider-terminal/v1",
+  "malformed_stream": false,
+  "provider_terminal": {
+    "input_tokens": 18,
+    "model": null,
+    "num_turns": 1,
+    "output_tokens": 4,
+    "status": "success",
+    "stop_reason": "end_turn",
+    "total_tokens": 22,
+    "turns": 1
+  }
+}

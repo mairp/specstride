@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "model": "fixture", "tools": []}
+{"type": "assistant", "message": {"content": [{"type": "text", "text": "Working on the task."}]}}

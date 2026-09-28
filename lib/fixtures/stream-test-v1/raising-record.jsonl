@@ -1,0 +1,4 @@
+{"type":"text","text":"about to fail"}
+{"type":"boom"}
+{"type":"tool","name":"write_file","id":"t1","input":{"filePath":"{EVIDENCE}"}}
+{"type":"result","status":"success","duration_ms":5,"num_turns":2,"model":"test-model"}

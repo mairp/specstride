@@ -1,0 +1,3 @@
+{"type": "system", "subtype": "init", "model": "fixture", "tools": ["Read"]}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Write", "input": {"file_path": "/tmp/stream-golden/GATE9-EVIDENCE.md"}}]}}
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "tool-1", "name": "Write", "input": {"file_path": "/tmp/stream-golden/GATE2-EVIDENCE.md"}}]}}

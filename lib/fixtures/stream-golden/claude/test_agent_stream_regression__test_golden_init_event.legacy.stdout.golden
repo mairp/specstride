@@ -1,0 +1,2 @@
+  · init model=fixture-model tools=3
+  ✗ result: missing_terminal (stream ended before result)

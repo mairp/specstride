@@ -1,0 +1,2 @@
+{"type":"tool","name":"apply_patch","id":"t1","input":{"file_path":"{EVIDENCE}"}}
+{"type":"result","status":"success","duration_ms":12,"num_turns":2,"model":"test-model"}

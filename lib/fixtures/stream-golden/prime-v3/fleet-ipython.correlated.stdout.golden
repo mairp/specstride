@@ -1,0 +1,3 @@
+  · init prime-v3 session=fixture-session-fleet-ipython
+  → ipython {"script": "open('lib/example.py').read()"}
+  ← ipython done
