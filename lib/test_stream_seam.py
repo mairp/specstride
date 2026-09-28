@@ -652,3 +652,83 @@ def test_fault_list_formats_prints_canonical_and_no_events(monkeypatch, tmp_path
     assert not events_path.exists()
 
 
+# ── T029: registry field + SH-1 CLI modes (stream / invocation-model) ────────
+
+import backends  # noqa: E402
+import subprocess  # noqa: E402
+
+_BACKENDS_PY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backends.py")
+
+
+def _run_backends(*args):
+    return subprocess.run(
+        [sys.executable, _BACKENDS_PY, *args], capture_output=True, text=True)
+
+
+def test_registry_cli_stream_empty_for_every_shipped_name():
+    for name in backends.names("proposer"):
+        result = _run_backends("stream", "--backend", name)
+        assert result.returncode == 0
+        assert result.stdout == ""
+
+
+def test_registry_cli_stream_unknown_name_fails_quietly():
+    result = _run_backends("stream", "--backend", "nope")
+    assert result.returncode == 1
+    assert result.stdout == ""
+
+
+def test_registry_cli_stream_is_byte_stable():
+    first = _run_backends("stream", "--backend", "codex")
+    second = _run_backends("stream", "--backend", "codex")
+    assert (first.stdout, first.returncode) == (second.stdout, second.returncode)
+
+
+def _stream_values_registered(entries):
+    canonical = set(agent_stream.FORMATS.canonical())
+    for entry in entries:
+        if entry.stream is not None and entry.stream not in canonical:
+            raise AssertionError(
+                "stream value not a canonical format: %s" % entry.stream)
+
+
+def test_registry_stream_values_are_registered():
+    _stream_values_registered(backends.REGISTRY)  # shipped entries: all clear
+
+    # Negative self-tests: the check must actually reject a bad stream value.
+    bad_alias = (backends.Backend(
+        "badalias", (("proposer", backends.Qualifier("none")),),
+        stream="claude-stream-json"),  # an alias, not a canonical name
+    )
+    with pytest.raises(AssertionError, match="claude-stream-json"):
+        _stream_values_registered(bad_alias)
+    bad_name = (backends.Backend(
+        "badname", (("proposer", backends.Qualifier("none")),), stream="nope"),)
+    with pytest.raises(AssertionError, match="nope"):
+        _stream_values_registered(bad_name)
+
+
+def test_legacy_branches_declare_no_stream():
+    by_name = {entry.name: entry for entry in backends.REGISTRY}
+    for name in ("claude", "bebop", "prime"):
+        assert by_name[name].stream is None
+
+
+def test_invocation_model_table():
+    # (SPEC, --model, expected stdout, expected rc)
+    cases = (
+        (("invocation-model", "--backend", "codex"), "", 0),
+        (("invocation-model", "--backend", "codex", "--model", "M"), "M\n", 0),
+        (("invocation-model", "--backend", "dsh:prov/m"), "prov/m\n", 0),
+        (("invocation-model", "--backend", "prime:v"), "", 0),
+        (("invocation-model", "--backend", "bebop:n"), "", 0),
+        (("invocation-model", "--backend", "dsh:prov/m", "--model", "M"), "", 0),
+        (("invocation-model", "--backend", "nope"), "", 1),
+    )
+    for args, expected_out, expected_rc in cases:
+        result = _run_backends(*args)
+        assert result.returncode == expected_rc, args
+        assert result.stdout == expected_out, args
+    first = _run_backends("invocation-model", "--backend", "dsh:prov/m")
+    second = _run_backends("invocation-model", "--backend", "dsh:prov/m")
+    assert first.stdout == second.stdout

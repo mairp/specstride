@@ -63,6 +63,14 @@ secret-looking keys are redacted to `[REDACTED]`, provider thinking/reasoning co
 entirely, and oversized payloads are truncated with `truncated=true`. `metadata.json` and
 `result.json` are therefore safe to retain even when the raw content is not.
 
+**Adapter-supplied keys.** For backends routed through the stream seam, the provider
+terminal (mirrored into `result.json`'s terminal record) may carry one optional extra
+key: `no_activity` (`true`/`false`), stamped only on `success` terminals by adapters
+whose format declaration opts into the flag — it records whether the invocation
+produced any tool activity. `metadata.json`'s `provider_format` for such a backend is
+the canonical format name taken from its registry entry's `stream` value (never a
+literal in the caller).
+
 **Atomicity.** `atomic_write_json` writes to a temp file in the same directory, `fsync`s, then
 `os.replace`s into place — a reader never sees a half-written record, and a crash mid-write leaves
 the prior file intact (or, for the first write, no file at all).

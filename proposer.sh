@@ -108,6 +108,11 @@ Telemetry is local-first: a sink ships only when its URL flag is passed, and a
 failed configured sink is surfaced as an operator-visible degradation, never
 silently dropped.
 
+A backend whose registry entry (lib/backends.py) names a stream format is parsed
+by that format's adapter, with the same invocation artifacts as Prime.
+SPECSTRIDE_AGENT_STREAM=false turns that off even with -j (unlike prime, where
+-j keeps the tap on).
+
 EXIT
   0  evidence file appeared      4  max-iter reached without evidence
   6  stopped via stop.flag       1  bad usage
@@ -192,6 +197,10 @@ DEBUG="false"
 # events (agent_tool/agent_text/agent_result) regardless of telemetry. Opt out
 # with SPECSTRIDE_AGENT_STREAM=false (restores the raw output path).
 AGENT_STREAM="${SPECSTRIDE_AGENT_STREAM:-true}"
+# T032: the operator's stream request, captured BEFORE the availability check
+# below can force AGENT_STREAM=false — the switch-off reason must be told apart
+# from the tap-unavailable reason. -j/--stream-json plays no part here.
+AGENT_STREAM_REQUESTED="${SPECSTRIDE_AGENT_STREAM:-true}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -313,6 +322,32 @@ PRIME_STRUCTURED="false"
 if [[ "$BACKEND" == prime || "$BACKEND" == prime:* ]] \
    && [[ "$AGENT_STREAM" == "true" || "$STREAM_JSON" == "true" ]]; then
   PRIME_STRUCTURED="true"
+fi
+
+# ── Registry-routed stream resolution (SH-3, once per run) ───────────────────
+# The backend's stream format comes ONLY from its registry entry (SH-1), read
+# through the specstride-lib.sh shims; no backend name appears in this block.
+# Every failure degrades into a reason the pass announces and then parses plain
+# output — it never aborts. -j/--stream-json plays no part in this decision.
+STREAM_FORMAT="$(specstride_backend_stream "${BACKEND%%:*}")"
+STREAM_ROUTED="false"
+STREAM_ROUTE_REASON=""
+if [[ -n "$STREAM_FORMAT" ]]; then
+  if [[ "$AGENT_STREAM_REQUESTED" == "false" ]]; then
+    STREAM_ROUTE_REASON="structured capture disabled by SPECSTRIDE_AGENT_STREAM=false — parsing plain output"
+  elif [[ "$AGENT_STREAM" != "true" ]]; then
+    STREAM_ROUTE_REASON="stream tap unavailable (agent_stream.py or python3 missing) — parsing plain output"
+  elif ! specstride_stream_formats | grep -qFx -- "$STREAM_FORMAT"; then
+    STREAM_ROUTE_REASON="stream format '$STREAM_FORMAT' has no registered adapter — parsing plain output"
+  else
+    STREAM_ROUTED="true"
+  fi
+fi
+# The invocation model is the registry's R5 answer (a --model, or a qualifier
+# SH-1 labels provider/model); bash does not parse the qualifier itself.
+INVOCATION_MODEL=""
+if [[ "$STREAM_ROUTED" == "true" ]]; then
+  INVOCATION_MODEL="$(specstride_invocation_model "$BACKEND" "$MODEL")"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -552,6 +587,41 @@ try:
     os.replace(tmp, path)
 finally:
     try: os.unlink(tmp)
+    except FileNotFoundError: pass
+PY
+}
+
+# Invocation metadata.json for a registry-routed backend (SH-3). Same key set
+# and serialisation as the Prime heredoc above (specstride-invocation/v1), with
+# provider_format taken from the registry instead of a literal and `backend`
+# recorded as $BACKEND was passed, qualifier included. The Prime heredoc is
+# deliberately NOT refactored into this function (FR-008). Stdlib one-shot;
+# tmp + fsync + os.replace so the finalizer never reads a partial file.
+write_invocation_metadata() {
+  python3 - "$1/metadata.json" "$RUN_ID" "$FEATURE" "$2" "$BACKEND" \
+    "$PHASE" "$ATTEMPT" "$iter" "$invocation_id" "$EVIDENCE" "$ROLE" <<'PY'
+import json, os, sys, tempfile
+(path, run_id, feature, provider_format, backend, phase, attempt, iteration,
+ invocation_id, evidence, role) = sys.argv[1:]
+value = {
+    "contract": "specstride-invocation/v1", "run_id": run_id, "feature": feature,
+    "role": role, "backend": backend, "phase": int(phase),
+    "attempt": int(attempt), "iteration": int(iteration),
+    "invocation_id": invocation_id, "observability_mode": "structured",
+    "provider_format": provider_format,
+    "expected_evidence": os.path.abspath(evidence),
+}
+os.makedirs(os.path.dirname(path), exist_ok=True)
+fd, temporary = tempfile.mkstemp(prefix=".metadata.", suffix=".tmp", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, sort_keys=True, indent=2)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+finally:
+    try: os.unlink(temporary)
     except FileNotFoundError: pass
 PY
 }
@@ -1438,6 +1508,14 @@ run_iteration() {
       reason "structured schema unavailable — parsing plain output" \
       role "$ROLE" supported_signals "text,result"
   fi
+  # Registry-routed stream (SH-3): when the registry named a stream format but
+  # this pass still parses plain output, say WHY — same visibility rule as the
+  # Prime fallback above, keyed on flags only.
+  if [[ -n "$STREAM_ROUTE_REASON" ]]; then
+    specstride_emit agent_observability mode raw-text \
+      reason "$STREAM_ROUTE_REASON" \
+      role "$ROLE" provider_format "$STREAM_FORMAT" supported_signals "text,result"
+  fi
   # Shared agent args. Claude/bebop use --dangerously-skip-permissions --verbose;
   # codex has its own bypass flag inside run_agent.
   local -a shared=()
@@ -1459,7 +1537,8 @@ run_iteration() {
     fi
   fi
   if [[ ( "$AGENT_STREAM" == "true" && ( "$BACKEND" == claude || "$BACKEND" == bebop || "$BACKEND" == bebop:* ) ) \
-        || "$PRIME_STRUCTURED" == "true" ]]; then
+        || "$PRIME_STRUCTURED" == "true" \
+        || "$STREAM_ROUTED" == "true" ]]; then
     local invocation_id
     if [[ -n "$INVOCATION_ID_BASE" ]]; then
       invocation_id="${INVOCATION_ID_BASE}-iter-${iter}"
@@ -1472,6 +1551,7 @@ PY
     fi
     local stream_backend="$BACKEND_LABEL"
     [[ "$BACKEND" == prime || "$BACKEND" == prime:* ]] && stream_backend="$BACKEND"
+    [[ "$STREAM_ROUTED" == "true" ]] && stream_backend="$BACKEND"
     local invocation_dir="$STATE_DIR/features/$FEATURE/debug/invocations/$RUN_ID/$ROLE/phase-$PHASE/attempt-$ATTEMPT/iter-$iter/$invocation_id"
     # Publish this pass's invocation dir so the controller loop (which spawned
     # run_iteration in the background) can locate the artifacts to reconcile the
@@ -1512,6 +1592,9 @@ finally:
     except FileNotFoundError: pass
 PY
     fi
+    if [[ "$STREAM_ROUTED" == "true" ]]; then
+      write_invocation_metadata "$invocation_dir" "$STREAM_FORMAT"
+    fi
     local -a tap_args=( --events "$SPECSTRIDE_EVENTS" --run-id "$RUN_ID"
                         --task "$TASK_NAME" --backend "$stream_backend" --iteration "$iter" )
     if [[ "$BACKEND" == prime || "$BACKEND" == prime:* ]]; then
@@ -1519,6 +1602,13 @@ PY
                   --attempt "$ATTEMPT" --invocation-id "$invocation_id"
                   --expected-evidence "$EVIDENCE" --provider-format prime-v3
                   --terminal-sidecar "$invocation_dir/provider-terminal.json" )
+    fi
+    if [[ "$STREAM_ROUTED" == "true" ]]; then
+      tap_args+=( --feature "$FEATURE" --role "$ROLE" --phase "$PHASE"
+                  --attempt "$ATTEMPT" --invocation-id "$invocation_id"
+                  --expected-evidence "$EVIDENCE" --provider-format "$STREAM_FORMAT"
+                  --terminal-sidecar "$invocation_dir/provider-terminal.json" )
+      [[ -n "$INVOCATION_MODEL" ]] && tap_args+=( --invocation-model "$INVOCATION_MODEL" )
     fi
     # Dual-ship: the tap fans out to whichever sinks are enabled (either/both/neither).
     [[ "$LOKI_ENABLED" == "true" ]] && tap_args+=( --loki "$LOKI_URL" )
@@ -1927,7 +2017,7 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   # halt/continue with the reason code. This replaces the historical tail-scan for
   # Prime — the count is derived from this invocation's identity, not the last
   # event in a shared log.
-  if [[ "$PRIME_STRUCTURED" == "true" ]]; then
+  if [[ "$PRIME_STRUCTURED" == "true" || "$STREAM_ROUTED" == "true" ]]; then
     last_invocation_dir=""
     [[ -f "$STATE_DIR/.last-invocation-dir" ]] && last_invocation_dir="$(cat "$STATE_DIR/.last-invocation-dir" 2>/dev/null)"
     if [[ -n "$last_invocation_dir" && -f "$last_invocation_dir/metadata.json" ]]; then
