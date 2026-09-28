@@ -344,6 +344,14 @@ if [[ "$VERIFICATION" != "off" && -n "$TEST_PLAN" ]]; then
   esac
 fi
 
+# SH-2: the throwaway-config-home scope knob (SPECSTRIDE_<BACKEND>_OVERLAY) is
+# operator config, so an invalid value — or an invalid declaration anywhere in
+# the registry — is E_SPEC, rejected HERE, in the config-validation block,
+# before any proposer attempt starts. `--quiet`: the orchestrator itself never
+# warns about a backend without a declaration (the proposer's own startup call
+# is where the operator sees that warning); this check only validates.
+python3 "$LIB_DIR/backend_overlay.py" scope "$PROPOSER_BACKEND" --quiet >/dev/null || exit "$E_SPEC"
+
 # ── spec resolution (Phase 0): find the spec when -s was NOT given ──────────────
 # An explicit -s always wins (resolved above). Otherwise walk an ordered discovery
 # so a GitHub Spec Kit project starts with zero flags, without ever silently picking
