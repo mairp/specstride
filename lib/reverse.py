@@ -1310,10 +1310,22 @@ def guard(src, baseline_path, out):
                 problems.append("changed: %s" % path)
         if not problems:
             problems.append("fingerprint differs from the baseline")
-    if os.path.isdir(os.path.join(src, "testautomation")) and \
+    landed = " (verification output landed in the source;" \
+             " pass --test-plan/--generate-tests under the state dir)"
+    if "testautomation" in baseline:
+        was = baseline["testautomation"]
+        if was is None and os.path.isdir(os.path.join(src, "testautomation")):
+            problems.append("added: testautomation/%s" % landed)
+        was = was or {}
+        for path, entry in sorted((reverse_inventory.testautomation_snapshot(src) or {}).items()):
+            if path not in was:
+                problems.append("added: %s%s" % (path, landed))
+            elif entry != was[path]:
+                problems.append("changed: %s%s" % (path, landed))
+    elif os.path.isdir(os.path.join(src, "testautomation")) and \
             not any(p.startswith("testautomation/") for p in before):
-        problems.append("added: testautomation/ (verification output landed in the source;"
-                        " pass --test-plan/--generate-tests under the state dir)")
+        # a baseline from before the snapshot existed: any testautomation/ is new
+        problems.append("added: testautomation/%s" % landed)
     if baseline.get("walk") == "git":
         head = reverse_inventory.git_head(src)
         if head != baseline.get("git_head"):
