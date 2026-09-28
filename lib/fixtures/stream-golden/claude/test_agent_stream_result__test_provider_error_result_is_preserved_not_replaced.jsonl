@@ -1,0 +1,2 @@
+{"type": "system", "subtype": "init", "model": "fixture", "tools": []}
+{"type": "result", "subtype": "error_during_execution", "is_error": true, "duration_ms": 5, "num_turns": 1, "usage": {"output_tokens": 2}}

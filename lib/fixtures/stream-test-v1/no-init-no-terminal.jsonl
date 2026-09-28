@@ -1,0 +1,2 @@
+{"type":"text","text":"working"}
+{"type":"tool","name":"write_file","id":"t1","input":{"filePath":"{EVIDENCE}"}}

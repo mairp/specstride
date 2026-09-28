@@ -1,0 +1,18 @@
+{
+  "contract": "specstride-provider-terminal/v1",
+  "malformed_stream": false,
+  "provider_terminal": {
+    "cache_creation_tokens": null,
+    "cache_read_tokens": null,
+    "cost_usd": null,
+    "duration_ms": 5,
+    "input_tokens": null,
+    "model": "fixture",
+    "num_turns": 1,
+    "output_tokens": 2,
+    "reason": "Provider reported an error",
+    "reason_code": "provider_error",
+    "status": "error",
+    "stop_reason": "error_during_execution"
+  }
+}

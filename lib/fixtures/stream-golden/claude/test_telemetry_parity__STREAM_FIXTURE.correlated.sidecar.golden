@@ -1,0 +1,16 @@
+{
+  "contract": "specstride-provider-terminal/v1",
+  "malformed_stream": false,
+  "provider_terminal": {
+    "cache_creation_tokens": 5,
+    "cache_read_tokens": 10,
+    "cost_usd": 0.5,
+    "duration_ms": 4200,
+    "input_tokens": 100,
+    "model": "claude-opus-4",
+    "num_turns": 3,
+    "output_tokens": 50,
+    "status": "success",
+    "stop_reason": "success"
+  }
+}

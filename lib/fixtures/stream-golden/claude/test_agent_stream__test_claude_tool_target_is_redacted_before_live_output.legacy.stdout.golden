@@ -1,0 +1,2 @@
+  → Bash curl -H '[REDACTED]' example.invalid
+  ✗ result: missing_terminal (stream ended before result)

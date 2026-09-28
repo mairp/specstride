@@ -1,0 +1,4 @@
+  · init model=claude-opus-4 tools=1
+Working
+  → Read x.py
+  ✓ result: success  cost=$0.5000  turns=3  out_tok=50  4200ms

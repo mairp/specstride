@@ -1,0 +1,4 @@
+{"ts":"0.000000","time":"1970-01-01T00:00:00+0000","event":"agent_init","run_id":"run-golden","task":"golden","backend":"claude","model":"claude-opus-4","tools":1}
+{"ts":"0.000000","time":"1970-01-01T00:00:00+0000","event":"agent_text","run_id":"run-golden","task":"golden","backend":"claude","text":"Working","redacted":false,"truncated":false,"original_bytes":7,"retained_bytes":7}
+{"ts":"0.000000","time":"1970-01-01T00:00:00+0000","event":"agent_tool","run_id":"run-golden","task":"golden","backend":"claude","tool":"Read","target":"x.py","targets":["x.py"],"redacted":false,"truncated":false,"original_bytes":21,"retained_bytes":21}
+{"ts":"0.000000","time":"1970-01-01T00:00:00+0000","event":"agent_result","run_id":"run-golden","task":"golden","backend":"claude","model":"claude-opus-4","is_error":false,"subtype":"success","cost_usd":0.5,"duration_ms":4200,"num_turns":3,"input_tokens":100,"output_tokens":50,"cache_read_tokens":10,"cache_creation_tokens":5}

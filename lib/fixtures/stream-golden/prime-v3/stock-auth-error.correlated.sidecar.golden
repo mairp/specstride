@@ -1,0 +1,10 @@
+{
+  "contract": "specstride-provider-terminal/v1",
+  "malformed_stream": false,
+  "provider_terminal": {
+    "reason": "Provider authentication was rejected",
+    "reason_code": "provider_auth",
+    "status": "error",
+    "stop_reason": "error"
+  }
+}

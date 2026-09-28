@@ -1,0 +1,9 @@
+{
+  "contract": "specstride-provider-terminal/v1",
+  "malformed_stream": false,
+  "provider_terminal": {
+    "model": null,
+    "status": "success",
+    "stop_reason": "end_turn"
+  }
+}
