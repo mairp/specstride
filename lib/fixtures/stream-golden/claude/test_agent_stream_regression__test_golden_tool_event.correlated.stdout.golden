@@ -1,0 +1,2 @@
+  → Read lib/foo.py
+  ✗ result: missing_terminal (stream ended before result)

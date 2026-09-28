@@ -1,0 +1,1 @@
+{"type": "assistant", "message": {"content": [{"type": "tool_use", "id": "toolu-1", "name": "Read", "input": {"file_path": "lib/foo.py"}}]}}

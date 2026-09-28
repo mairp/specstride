@@ -1,0 +1,3 @@
+  · init prime-v3 session=fixture-session-stock-retry
+  ! provider_retry: temporary provider unavailable
+Recovered after an internal retry.

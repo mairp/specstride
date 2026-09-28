@@ -1,0 +1,2 @@
+  → Write /tmp/stream-golden/GATE2-EVIDENCE.md
+  ✗ result: missing_terminal (stream ended before result)

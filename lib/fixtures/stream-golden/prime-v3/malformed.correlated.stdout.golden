@@ -1,0 +1,2 @@
+  · init prime-v3 session=fixture-session-malformed
+  ! malformed_json: Malformed Prime JSON: Expecting value: line 1 column 1 (char 0)

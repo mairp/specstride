@@ -1,0 +1,1 @@
+{"type": "system", "subtype": "init", "model": "fixture-model", "tools": ["Read", "Write", "Bash"]}

@@ -1,0 +1,10 @@
+{
+  "contract": "specstride-provider-terminal/v1",
+  "malformed_stream": false,
+  "provider_terminal": {
+    "model": null,
+    "reason": "Provider stream ended without a terminal result",
+    "reason_code": "missing_terminal",
+    "status": "error"
+  }
+}

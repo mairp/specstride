@@ -1,0 +1,2 @@
+{"ts":"0.000000","time":"1970-01-01T00:00:00+0000","event":"agent_init","run_id":"run-golden","task":"golden","backend":"prime","schema_version":3,"session_id":"fixture-session-truncated","cwd":"/work/project"}
+{"ts":"0.000000","time":"1970-01-01T00:00:00+0000","event":"agent_diagnostic","run_id":"run-golden","task":"golden","backend":"prime","code":"malformed_json","severity":"error","message":"Malformed Prime JSON: Unterminated string starting at: line 1 column 104 (char 103)","redacted":false,"truncated":false,"original_bytes":83,"retained_bytes":83}
