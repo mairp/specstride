@@ -39,6 +39,10 @@ class Backend:
     name: str
     roles: tuple  # ordered (role, Qualifier) pairs
     stream: str | None = None  # canonical stream format (SH-3); absent = raw text
+    # Optional throwaway config-home declaration, read only by
+    # lib/backend_overlay.py: {"vars": (...), "seeds": (...)} or None. No
+    # shipped entry sets it; that module defines what each field means.
+    overlay: dict = None
 
     def qualifier(self, role):
         return dict(self.roles)[role]

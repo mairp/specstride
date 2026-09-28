@@ -105,6 +105,7 @@ See `.env.example` for the full set. The load-bearing ones:
 | `SPECSTRIDE_PRIME_AGENT_BIN` | `prime-agent` | standard Prime Agent executable used by bare `prime` |
 | `SPECSTRIDE_PRIME_FLEET_BIN` | `prime` | optional fleet launcher used by `prime:<variant>` |
 | `SPECSTRIDE_PRIME_BIN` | — | legacy alias for the fleet launcher override |
+| `SPECSTRIDE_OPENCODE_OVERLAY` | `pass` | throws the backend's harness a throwaway config home instead of your real one, so a run cannot touch global config, carry memory between runs, or leave files behind. `<BACKEND>` is the backend name without its qualifier, upper-cased; this example is for bare `opencode` and its qualified forms. `pass` = fresh one per proposer pass; `attempt` = one per attempt (warm caches); any other value stops the run before the first pass (exit 3). A backend with no such config home ignores the knob with one warning; the critic always uses its own per-call copy |
 | `SPECSTRIDE_MAX_REJECTS` | `3` | reject attempts per phase before halt (exit 2) |
 | `SPECSTRIDE_MAX_ITER` | — | max headless proposer iterations per pass |
 | `SPECSTRIDE_PROPOSER_TIMEOUT` | `1800` | per-pass timeout (seconds) |
