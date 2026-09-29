@@ -1330,7 +1330,7 @@ if kind == "grep":
     if not isinstance(pattern, str) or not pattern:
         die("resume_when.pattern (an extended regular expression) is required for kind 'grep'")
     try:
-        re.compile(pattern)
+        re.compile(pattern, re.MULTILINE)
     except re.error as exc:
         die("resume_when.pattern is not a valid regular expression: %s" % exc)
 if kind == "command":
@@ -1399,7 +1399,11 @@ if kind == "file_stable":
 
 if kind == "grep":
     target = resolve(predicate_path)
-    pattern = re.compile(resume_when["pattern"])
+    # MULTILINE: the natural way to wait for a line is "^DONE" / "^DECISION: APPROVED",
+    # and without it `^` matches only the start of the WHOLE file, so a marker on any
+    # later line never resumed the yield (project A 004 phase 16, 2026-09-29:
+    # a "^DECISION: APPROVED" wait stayed blocked until the line was moved to line 1).
+    pattern = re.compile(resume_when["pattern"], re.MULTILINE)
     try:
         size = os.path.getsize(target)
         with open(target, "rb") as handle:

@@ -555,3 +555,22 @@ def test_the_resume_prompt_lists_a_failure_the_log_slice_elides(tmp_path):
     assert "[NEW]" in resume and "FAIL lab-acl not Ready=True" in resume
     ledger = tmp_path / ".specstride" / "features" / "f" / "failure-ledger.jsonl"
     assert ledger.exists()
+
+
+def test_a_grep_predicate_anchored_with_caret_matches_a_later_line(tmp_path):
+    """`^MARKER` must match the marker at the start of ANY line, not only at the
+    start of the file (project A 004 phase 16, 2026-09-29: a
+    `^DECISION: APPROVED` wait never resumed because the line was not line 1)."""
+    decision = tmp_path / "DECISION.md"
+    decision.write_text("# heading\nsome text\n")
+    document = _yield_json(
+        job={"mode": "launch",
+             "argv": ["/bin/sh", "-c", f'sleep 2; printf "DECISION: APPROVED\\n" >> {decision}']},
+        resume_when={"kind": "grep", "path": str(decision), "pattern": "^DECISION: APPROVED"},
+        deadline_sec=30)
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1)
+
+    resumes = [e for e in events if e["event"] == "yield_resume"]
+    assert resumes, result.stderr
+    assert [e for e in events if e["event"] == "yield_timeout"] == []
