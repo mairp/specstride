@@ -1,0 +1,47 @@
+# no-session-links — no AI-assistant session or conversation may be exposed by this repository:
+# not in a tracked file, a commit message, or a pull request's title, body, comments or reviews.
+# The scan is .github/scripts/no-session-links.sh. On a pull request it sets the commit status
+# `no-session-links` on the PR's head, which the Mergify queue requires; comment and review
+# events re-run it, so a link added after CI still blocks the merge.
+name: no-session-links
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, edited]
+  pull_request_review_comment:
+    types: [created, edited]
+  issue_comment:
+    types: [created, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  statuses: write
+
+concurrency:
+  group: no-session-links-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: session-link scan
+    # issue_comment also fires for plain issues; only pull request conversations are scanned.
+    if: github.event_name != 'issue_comment' || github.event.issue.pull_request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan files, commit messages and the pull request conversation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.event.after }}
+        run: bash .github/scripts/no-session-links.sh
