@@ -18,6 +18,8 @@
 # Environment (set by .github/workflows/no-session-links.yml): GH_TOKEN, GITHUB_REPOSITORY,
 # EVENT_NAME, PR_NUMBER (empty on push), PUSH_BEFORE, PUSH_AFTER.
 set -euo pipefail
+# Every test is an `if`, never `cond && action`: a false `&&` list as a function's last command
+# is its non-zero return, which errexit turns into a silent failure.
 
 vendor="$(printf '\143\154\141\165\144\145')"
 re="${vendor}\\.ai|^[[:space:]]*${vendor}-session:"
@@ -27,14 +29,14 @@ has() { printf '%s' "$1" | grep -qiE "$re"; }
 
 # ---- tracked files (the checked-out tree)
 while IFS= read -r loc; do
-  [[ -n "$loc" ]] && hit "tracked file $loc"
+  if [[ -n "$loc" ]]; then hit "tracked file $loc"; fi
 done < <(git grep -nIiE "$re" -- . | cut -d: -f1,2 || true)
 
 # ---- commit messages of a push
 if [[ "${EVENT_NAME:-}" == push && -n "${PUSH_AFTER:-}" ]]; then
   if [[ -z "${PUSH_BEFORE:-}" || "$PUSH_BEFORE" =~ ^0+$ ]]; then range="$PUSH_AFTER^!"; else range="$PUSH_BEFORE..$PUSH_AFTER"; fi
   for c in $(git rev-list "$range"); do
-    has "$(git log -1 --format=%B "$c")" && hit "commit ${c:0:12} message"
+    if has "$(git log -1 --format=%B "$c")"; then hit "commit ${c:0:12} message"; fi
   done
 fi
 
@@ -43,12 +45,12 @@ if [[ -n "${PR_NUMBER:-}" ]]; then
   api="repos/$GITHUB_REPOSITORY"
   pr="$(gh api "$api/pulls/$PR_NUMBER")"
   head="$(jq -r .head.sha <<<"$pr")"
-  has "$(jq -r '.title // ""' <<<"$pr")" && hit "PR #$PR_NUMBER title"
-  has "$(jq -r '.body // ""' <<<"$pr")" && hit "PR #$PR_NUMBER body"
+  if has "$(jq -r '.title // ""' <<<"$pr")"; then hit "PR #$PR_NUMBER title"; fi
+  if has "$(jq -r '.body // ""' <<<"$pr")"; then hit "PR #$PR_NUMBER body"; fi
   scan_list() { # $1 = api path, $2 = jq expression yielding "<id>\t<base64 text>", $3 = label
     while IFS=$'\t' read -r id b64; do
       [[ -z "$id" ]] && continue
-      has "$(printf '%s' "$b64" | base64 -d)" && hit "PR #$PR_NUMBER $3 $id"
+      if has "$(printf '%s' "$b64" | base64 -d)"; then hit "PR #$PR_NUMBER $3 $id"; fi
     done < <(gh api --paginate "$1" --jq "$2")
   }
   scan_list "$api/pulls/$PR_NUMBER/commits?per_page=100" '.[] | [.sha[0:12], (.commit.message | @base64)] | @tsv' "commit"
