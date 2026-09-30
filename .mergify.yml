@@ -17,7 +17,16 @@ queue_rules:
       - label != do-not-merge
       - check-success = lint
       - check-success = test
+      # No AI-assistant session or conversation may be exposed (.github/workflows/no-session-links.yml):
+      # the status covers files, commit messages and the whole PR conversation; title and body are
+      # also refused here directly.
+      - check-success = no-session-links
+      - -title ~= (?i)claude[.]ai
+      - -body ~= (?i)claude[.]ai
     merge_conditions:
+      - check-success = no-session-links
+      - -title ~= (?i)claude[.]ai
+      - -body ~= (?i)claude[.]ai
       - check-success = lint
       - check-success = test
     merge_method: squash
