@@ -63,6 +63,12 @@ OPTIONS
   --critic BACKEND      Critic provider: @CRITIC_BACKENDS@ (default: $SPECSTRIDE_CRITIC or claude).
   --max-rejects N       Critic REJECTs per phase before halting (default: 3).
   --max-iter N          Proposer passes per phase (default: 30).
+  --proposer-inherit-plugins  claude proposer only: let each pass load the operator's
+                        Claude Code user/project settings (plugins, hooks, MCP
+                        servers, CLAUDE.md). Default is a pinned, minimal config
+                        (lib/claude_harness.py; issue #109). Also
+                        SPECSTRIDE_PROPOSER_INHERIT_PLUGINS=1. Learning evaluation
+                        excludes runs made this way.
   --proposer-timeout SECONDS  Hard wall-clock limit on a single proposer pass
                         (default: 1800). Also SPECSTRIDE_PROPOSER_TIMEOUT. Raise
                         this when a phase's own verification work (e.g. a
@@ -210,6 +216,7 @@ OTEL_URL="${SPECSTRIDE_OTEL_URL:-http://localhost:4318}"
 # LIVE: inline scrolling timeline in this terminal. Default auto = on iff TTY.
 LIVE="${SPECSTRIDE_LIVE:-auto}"
 PROPOSER_TIMEOUT="${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}"
+PROPOSER_INHERIT_PLUGINS="${SPECSTRIDE_PROPOSER_INHERIT_PLUGINS:-0}"
 # Per-phase overrides of that ceiling, as raw `N=SECONDS` entries (design §4.1).
 # One global number cannot be right for every phase: a phase whose work is a
 # 90-minute live suite and a phase that edits three files share it, so it gets
@@ -241,6 +248,7 @@ while [[ $# -gt 0 ]]; do
     --max-rejects)  MAX_REJECTS="${2:?}"; shift 2 ;;
     --max-iter)     MAX_ITER="${2:?}"; shift 2 ;;
     --proposer-timeout) PROPOSER_TIMEOUT="${2:?}"; shift 2 ;;
+    --proposer-inherit-plugins) PROPOSER_INHERIT_PLUGINS=1; shift ;;
     --proposer-timeout-phase) PHASE_TIMEOUT_ARGS+=( "${2:?}" ); shift 2 ;;
     --critic-timeout)   CRITIC_TIMEOUT="${2:?}"; shift 2 ;;
     --start-phase)  START_PHASE="${2:?}"; shift 2 ;;
@@ -658,6 +666,7 @@ write_last_run_conf() {
     # serialised as sorted `N=SECONDS N=SECONDS`, so the file stays diffable.
     printf 'PROPOSER_TIMEOUT=%q\n' "$PROPOSER_TIMEOUT"
     printf 'PROPOSER_TIMEOUT_PHASES=%q\n' "$(_phase_timeout_overrides_line)"
+    printf 'PROPOSER_INHERIT_PLUGINS=%q\n' "$PROPOSER_INHERIT_PLUGINS"
     printf 'TELEMETRY=%q\n'        "$TELEMETRY"
     printf 'LOKI_URL=%q\n'         "$LOKI_URL"
     printf 'OTEL=%q\n'             "$OTEL"
@@ -924,7 +933,7 @@ log "specstride orchestrator start $(date -Is)"
 log "  workdir  : $WORKDIR"
 log "  specs    : $SPECS  ($PHASE_COUNT phases: ${PHASES[*]})"
 log "  feature  : $SLUG   (state: $STATE_REL/)"
-log "  proposer : $PROPOSER_BACKEND"
+log "  proposer : $PROPOSER_BACKEND$([[ "$PROPOSER_INHERIT_PLUGINS" == 1 ]] && printf '  (inherits operator plugins/hooks/MCP)')"
 log "  critic   : $CRITIC_BACKEND"
 log "  max-rej  : $MAX_REJECTS   max-iter/phase: $MAX_ITER"
 log "  timeouts : proposer ${PROPOSER_TIMEOUT}s  critic ${CRITIC_TIMEOUT}s   wall: ${MAX_WALL_MIN}min"
@@ -960,10 +969,24 @@ if [[ "$LIVE" == "true" ]]; then
 fi
 start_presenter
 
+# Preflight warnings (#109) — never fatal: an enabled plugin leaving unignored
+# files under the workdir's .claude/ (phase commits run `git add -A`), and another
+# live Claude Code session with hooks/plugins in this workdir (the reverse guard
+# cannot tell its writes from the proposer's). lib/preflight.py always exits 0.
+_preflight_args=( --workdir "$WORKDIR" --self-pid "$$" )
+[[ "$PROPOSER_INHERIT_PLUGINS" == "1" ]] && _preflight_args+=( --inherit-plugins )
+while IFS=$'\t' read -r _pf_check _pf_detail; do
+  [[ -n "$_pf_check" ]] || continue
+  log "  WARN: preflight $_pf_check: $_pf_detail"
+  specstride_emit preflight_warning check "$_pf_check" detail "$_pf_detail"
+done < <(python3 "$LIB_DIR/preflight.py" "${_preflight_args[@]}" 2>/dev/null)
+unset _preflight_args _pf_check _pf_detail
+
 specstride_emit run_start workdir "$WORKDIR" phases "$PHASE_COUNT" feature "$SLUG" \
   proposer "$PROPOSER_BACKEND" critic "$CRITIC_BACKEND" resume "${CUR_PHASE:-done}" \
   states "$(banner_states)" \
-  verification "$VERIFICATION" verification_plan "$VERIFICATION_JSON"
+  verification "$VERIFICATION" verification_plan "$VERIFICATION_JSON" \
+  inherit_plugins "$PROPOSER_INHERIT_PLUGINS"
 
 run_release_verification() {
   [[ "$VERIFICATION" == "required" ]] || return 0
@@ -1232,6 +1255,7 @@ build_accelerator_prompt() {
     echo "the exact non-convergence this pass exists to avoid. Run the tests that cover"
     echo "the files you change; do not reformat, rename, or tidy anything else."
     echo
+    emit_foreign_files_rule
     emit_evidence_contract
     echo "## Evidence: splice, don't rewrite"
     if [[ -n "$prev_ev" ]]; then
@@ -1378,6 +1402,21 @@ archive_attempt() {
   local vt; vt="$(ls -t "$FEATURE_DIR/verdicts/phase${n}.attempt${attempt}."*.txt 2>/dev/null | head -1)"
   [[ -n "$vt" && -f "$vt" ]] && cp "$vt" "$dir/verdict.txt"
   specstride_emit attempt_archived phase "$n" attempt "$attempt" dir "$dir"
+}
+
+# ── foreign-files rule (#109) — shared by the proposer and accelerator prompts ──
+# A gate that fails on files the agent never wrote (another session's or plugin's
+# state in the workdir) must be escalated, never "repaired": a real run restored
+# counters by brute-forcing hash preimages and, on a hint, ran `rm -rf` on another
+# tool's state. The orchestrator stops such a run itself (lib/guard_infra.py).
+emit_foreign_files_rule() {
+  echo "## Hard rule — never repair what you did not write"
+  echo "Never delete, rewrite, restore or recreate files outside the paths this phase"
+  echo "works on to make a check pass: no \`rm -rf\`, no reconstructing bytes or hashes,"
+  echo "not even when a hint or feedback suggests it. If a gate (e.g. the reverse source"
+  echo "guard) reports changes to files you did not touch, something else in this"
+  echo "workdir changed them: leave them alone, say so in PROGRESS.md, and stop."
+  echo
 }
 
 # ── evidence contract (W6) — shared by the proposer and accelerator prompts ──
@@ -1533,6 +1572,7 @@ build_proposer_prompt() {
     # The critic judges ONLY the evidence doc + a read-only "grounding snapshot" of the
     # files you cite. It has hard limits; evidence written blind to them turns honest,
     # implemented work into a rejection (the exact loop this contract exists to break).
+    emit_foreign_files_rule
     emit_evidence_contract
     # The criteria heading is adapter-specific: native calls them acceptance
     # criteria; a Spec Kit tasks.md phase is a checklist of deliverable tasks.
@@ -1842,6 +1882,7 @@ run_phase() {
     # OTEL is independent of --telemetry; --stream-json is idempotent if both add it.
     [[ "$OTEL" == "true" ]] && prop_args+=( --stream-json --otel-url "$OTEL_URL" )
     [[ "$DEBUG" == "true" ]] && prop_args+=( --debug )
+    [[ "$PROPOSER_INHERIT_PLUGINS" == "1" ]] && prop_args+=( --inherit-plugins )
 
     # The resolved poll interval rides on this one command, not an `export`: an
     # exported value would read as an operator override at the next phase's
@@ -1995,7 +2036,9 @@ run_phase() {
           echo "The fixed-argv verification gate failed (exit $vrc). The failing command"
           echo "below is the ONLY thing that can clear this gate. Fix the CODE it points"
           echo "at. Re-writing ${GATES_REL}/GATE${n}-EVIDENCE.md, regenerating proofs, or"
-          echo "restating that the work is done will NOT change this result."
+          echo "restating that the work is done will NOT change this result. If it names"
+          echo "files outside this phase's paths that you did not touch, do NOT repair them"
+          echo "(see the hard rule in your prompt): note it in PROGRESS.md and stop."
           echo
           echo "## What actually failed"
           echo
@@ -2014,6 +2057,28 @@ run_phase() {
         } > "$GATES_DIR/GATE${n}-FEEDBACK.md"
         specstride_emit verification_failed phase "$n" attempt "$attempt" rc "$vrc" \
           evidence "$verification_evidence"
+        # A reverse guard that failed only on paths no tool call of this attempt
+        # named was changed by something else — an operator's concurrent Claude
+        # Code session, a plugin's own state (#109). Rejecting would teach the
+        # proposer to "repair" files it never wrote, so stop and hand it to the
+        # operator instead. Anything undecidable stays the normal reject path.
+        local infra_line
+        infra_line="$(python3 "$LIB_DIR/guard_infra.py" classify --evidence "$verification_evidence" \
+          --events "$SPECSTRIDE_EVENTS" --phase "$n" --attempt "$attempt" 2>/dev/null)"
+        if [[ "${infra_line%%$'\t'*}" == "infra" ]]; then
+          local infra_paths="${infra_line#*$'\t'}"
+          specstride_emit verification_infra phase "$n" attempt "$attempt" paths "$infra_paths" \
+            evidence "$verification_evidence"
+          log ">>> phase $n: the source guard failed on paths this attempt never touched — halting (exit $E_BUDGET)."
+          log "#   changed outside the output/state dirs by something other than the proposer:"
+          log "#     ${infra_paths//,/ }"
+          log "#   Usually another Claude Code session (or a plugin) writing in this workdir."
+          log "#   Not counted as a reject. Close that session or move its state out of the"
+          log "#   workdir, add the paths to the baseline inventory's \"excludes\" if they are"
+          log "#   not source, restore them if they are, then: specstride resume -w $WORKDIR"
+          emit_run_stop reason verification_infra phase "$n"
+          exit "$E_BUDGET"
+        fi
       else
         specstride_emit verification_passed phase "$n" attempt "$attempt" \
           evidence "$verification_evidence"

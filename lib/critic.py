@@ -1658,6 +1658,12 @@ Distinguish exactly ONE of these two cases and say which one, first line:
   CASE: REAL-GAP — the code genuinely does not satisfy the criterion. Say exactly
     what is missing or wrong, and the smallest concrete change that would fix it.
 
+Never recommend deleting, rewriting, restoring or recreating files outside the
+phase's own paths to make a check pass (no `rm -rf`, no reconstructing bytes or
+hashes). If a failure is caused by files the proposer did not write — another
+session's or tool's state in the workdir — say so and recommend escalating to the
+operator; that is not a fix the proposer may make.
+
 Do not be diplomatic; be specific and short (a few sentences, plus a short
 code/diff sketch if useful). This becomes a hint file the proposer reads verbatim
 alongside the critic's own feedback — it does not override the critic, it exists

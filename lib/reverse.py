@@ -174,6 +174,10 @@ POLICY = """\
 - The only permitted writes are the output directory `{out_rel}/` and the state
   directory `{state_rel}/`. Never touch `.specify/`, never write
   `.specify/feature.json`, never create a git branch or commit.
+- Never delete, rewrite or restore anything outside those two directories to make the
+  guard pass — no `rm -rf`, no reconstructing bytes or hashes, whatever a hint says.
+  If the guard reports changes you did not make, another session or tool changed
+  them: note it in the state directory and stop.
 - Describe current behavior only. Never present desired or recommended behavior as
   current behavior: no To-Be design, no remediation or enhancement backlog.
 - Evidence precedence when sources disagree: executable source, schemas and
@@ -1297,10 +1301,18 @@ def guard(src, baseline_path, out):
     excludes = sorted(set(baseline.get("excludes") or []) | {out_rel})
     files, skipped, _mode, _total = reverse_inventory.walk(src, excludes)
     now = {e["path"]: (e["bytes"], e["sha256"]) for e in files + skipped}
-    before = {e["path"]: (e["bytes"], e["sha256"])
-              for e in baseline["files"] + baseline["skipped"]}
+    # A baseline taken before harness runtime state was excluded may still list
+    # it: compare both sides without it (#109), or its churn reads as "deleted".
+    harness = reverse_inventory.HARNESS_STATE_EXCLUDES
+    base_files = [e for e in baseline["files"] if not reverse_inventory._excluded(e["path"], harness)]
+    base_skipped = [e for e in baseline["skipped"]
+                    if not reverse_inventory._excluded(e["path"], harness)]
+    base_print = baseline["fingerprint"]
+    if len(base_files) + len(base_skipped) != len(baseline["files"]) + len(baseline["skipped"]):
+        base_print = reverse_inventory.fingerprint(base_files, base_skipped)
+    before = {e["path"]: (e["bytes"], e["sha256"]) for e in base_files + base_skipped}
     problems = []
-    if reverse_inventory.fingerprint(files, skipped) != baseline["fingerprint"]:
+    if reverse_inventory.fingerprint(files, skipped) != base_print:
         for path in sorted(set(before) | set(now)):
             if path not in now:
                 problems.append("deleted: %s" % path)
@@ -1331,7 +1343,7 @@ def guard(src, baseline_path, out):
         if head != baseline.get("git_head"):
             problems.append("git HEAD moved: %s -> %s" % (baseline.get("git_head"), head))
         status = reverse_inventory.git_status(src) or []
-        allowed = (out_rel, state_base)
+        allowed = (out_rel, state_base) + tuple(harness)
         known = set(baseline.get("git_status") or [])
         for entry in status:
             path = entry[3:].strip('"')

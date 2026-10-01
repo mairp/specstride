@@ -1048,12 +1048,15 @@ events come from the proposer's stream-json tap (`lib/agent_stream.py`, gated by
 | `attempt_archived` | orchestrator | a rejected evidence file was archived before retry |
 | `verdict` | critic | the critic's APPROVED/REJECTED decision |
 | `reject` | orchestrator | phase N rejected (attempt M) with feedback |
+| `verification_infra` | orchestrator | the reverse source guard failed only on `paths` no tool call of the attempt named: something outside the run changed them. Not a reject; the run stops (exit 4, `run_stop reason=verification_infra`) |
+| `preflight_warning` | orchestrator | a non-fatal start-up `check` (`plugin_unignored_writes` \| `concurrent_claude_session`) with its `detail` |
 | `diagnostician_trigger` / `diagnostician_start` / `diagnostician_done` / `diagnostician_error` | orchestrator / critic | a NEW unmet-criteria signature: one tool-free full-file pass wrote `GATE<N>-HINT.md`. `diagnostician_done` carries `bytes` and `case` — the diagnostician's declared first line, `grounding` (the proposer cites badly), `real_gap` (the work is incomplete) or `unknown`; a read-only metric, counted per phase by `learn.py summarize` and never read by the gate |
 | `accelerator_start` | orchestrator | attempt M is an accelerator pass (narrowed prompt) acting on the hint for `criteria` |
 | `acceleration_note` | orchestrator | `GATE<N>-ACCELERATION.md` written: what the accelerator pass changed |
 | `git_checkpoint` / `gates_migrated` | orchestrator | per-phase commit / one-time relocation of pre-v2 state into `features/default/` |
 | `agent_observability` | agent tap | the capability this invocation begins with — `mode` (`structured` \| `degraded` \| `raw-text`) + `supported_signals` + `reason` + `provider_format` + `role`. Re-emitted if a fatal schema diagnostic degrades `structured`→`degraded` mid-stream, so a loss of fine-grained capture is explicit, never silent |
 | `agent_init` | agent tap | once per pass: model + tool count |
+| `harness_config` | agent tap | once per `claude` pass, from the child's own `init` record: `plugins`, `mcp_servers`, `skills`/`slash_commands`/`tools` counts, `setting_sources`, `inherit_plugins`, and a 16-hex `fingerprint` over them. Absent when the `init` reports no plugin fields. `learn.py` flags evaluations across fingerprints as `confounded` |
 | `agent_tool` | agent tap | every proposer tool call: tool name + compact target |
 | `agent_text` | agent tap | first line of each assistant message (thinking/narration) |
 | `agent_diagnostic` | agent tap | a bounded parse warning (`code`, e.g. `malformed_json` / `unsupported_schema` / `absent_schema`) — capped, never a flood; schema-fatal codes drive the `structured`→`degraded` transition above |

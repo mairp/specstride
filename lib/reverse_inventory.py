@@ -63,6 +63,12 @@ DEFAULT_MD_BUDGET = 24000
 SNIFF_BYTES = 8192
 
 STATE_DIRS = (specstride_env.STATE_DIRNAME, specstride_env.LEGACY_STATE_DIRNAME, ".lisa")
+# Harness runtime state that lives in a workdir but is never source (#109): an
+# operator's Claude Code session or plugin rewrites it while a run is live (the
+# autoharness plugin's per-project counters; the permissions an interactive
+# session saves). Always excluded from the walk, so neither a fresh baseline nor
+# the reverse guard ever sees it — old baselines that recorded it included.
+HARNESS_STATE_EXCLUDES = (".claude/autoharness", ".claude/settings.local.json")
 DENY_DIRS = (".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
              "target", "vendor", "testautomation") + STATE_DIRS
 
@@ -344,7 +350,8 @@ def walk(src, excludes=(), environ=None):
     environ = dict(os.environ if environ is None else environ)
     max_file = _env_int("SPECSTRIDE_REVERSE_MAX_FILE_BYTES", DEFAULT_MAX_FILE_BYTES, environ)
     src = os.path.realpath(src)
-    excludes = sorted({e.strip("/") for e in excludes if e and e.strip("/")})
+    excludes = sorted({e.strip("/") for e in excludes if e and e.strip("/")}
+                      | set(HARNESS_STATE_EXCLUDES))
     paths, mode = _candidate_paths(src, excludes)
     files, skipped = [], []
     total = 0

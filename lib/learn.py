@@ -99,7 +99,9 @@ Output schema (``specstride.learn.summary/2``)
 ``/4`` adds ``attempts[*].diagnostician_case`` and ``phases[*].diagnostician_cases``;
 ``/5`` adds ``phases[*].episodes`` and ``phases[*].pass_samples`` (item 4's primaries);
 ``/6`` adds ``attempts[*].critic_prompt_bytes`` (with ``--verdicts-dir``);
-``/7`` adds ``runs[*].tampered`` and the caps' ``arm``/``yield_poll_arm``/``tamper_bracket``.
+``/7`` adds ``runs[*].tampered`` and the caps' ``arm``/``yield_poll_arm``/``tamper_bracket``;
+``/8`` adds ``attempts[*].harness`` (the ``harness_config`` fingerprints its passes ran
+under) and ``runs[*].inherit_plugins`` (#109).
 {
   "schema": "specstride.learn.summary/1",
   "inputs": [<event file paths>],
@@ -356,6 +358,7 @@ class _Attempt:
         self.gate_live_share: Optional[float] = None
         self.diagnostician_case: Optional[str] = None
         self.critic_prompt_bytes: Optional[int] = None   # from --verdicts-dir
+        self.harness: set = set()   # harness_config fingerprints, one per pass's child (#109)
 
     def key(self) -> Tuple[str, int, int]:
         return (self.run, self.phase, self.attempt)
@@ -407,6 +410,7 @@ class _Attempt:
             "gate_live_share": self.gate_live_share,
             "diagnostician_case": self.diagnostician_case,
             "critic_prompt_bytes": self.critic_prompt_bytes,
+            "harness": sorted(self.harness),
             "passes_detail": passes,
         }
 
@@ -431,6 +435,7 @@ class _Run:
         # per attempt, the values are resolved once per phase: dedupe on (run, phase).
         self.caps: "OrderedDict[int, dict]" = OrderedDict()
         self.tampered = False
+        self.inherit_plugins = False   # the run let the claude child inherit operator plugins (#109)
 
     def attempt(self) -> Optional[_Attempt]:
         if self.cur_phase is None or self.cur_attempt is None:
@@ -474,6 +479,7 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
             run.feature = ev.get("feature")
             run.backend = ev.get("backend")
             run.resume_from = _int(ev.get("resume"))
+            run.inherit_plugins = run.inherit_plugins or _truthy(ev.get("inherit_plugins"))
         elif name == "phase_start":
             run.cur_phase, run.cur_title, run.cur_attempt, run.cur_pass = phase, ev.get("title", ""), None, None
             run.cur_shape = ev.get("shape") or None
@@ -578,6 +584,14 @@ def summarize(events: List[dict], verification_dir: Optional[str] = None,
             # the orchestrator saw bytes that predated a pass rewritten during it
             # (05-evaluate-design.md §4): this run is excluded from every evaluation
             run.tampered = True
+        elif name == "harness_config":
+            # the claude child's own init record, fingerprinted by the stream tap
+            # (#109). A missing or odd fingerprint is ignored, never fatal.
+            run.inherit_plugins = run.inherit_plugins or _truthy(ev.get("inherit_plugins"))
+            fp = ev.get("fingerprint")
+            a = _locate(run, phase, attempt)
+            if a is not None and isinstance(fp, str) and re.fullmatch(r"[0-9a-f]{8,64}", fp):
+                a.harness.add(fp)
         elif name == "run_stop":
             run.stopped = ts
             run.stop_reason = ev.get("reason")
@@ -717,6 +731,7 @@ def _render(runs, run_log_live_invocations: Optional[int],
             "non_approved_cost_usd": non_approved,
             "non_approved_cost_share": (round(non_approved / cost, 3) if cost else None),
             "tampered": run.tampered,
+            "inherit_plugins": run.inherit_plugins,
         }
 
     caps: Dict[int, List[dict]] = {}
@@ -1448,6 +1463,21 @@ def guardrail_counts(attempts: List[dict], runs_meta: dict, phase: int) -> dict:
     }
 
 
+def _truthy(value) -> bool:
+    return value is True or str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _untrusted(run_meta: dict) -> bool:
+    """A run neither arm may use: its event stream was tampered with, or its claude
+    child inherited the operator's plugins — an unreviewed second learning channel
+    whose drift no fingerprint sees (#109)."""
+    return bool(run_meta.get("tampered") or run_meta.get("inherit_plugins"))
+
+
+def _fps(atts: List[dict]) -> set:
+    return {f for a in atts for f in a.get("harness") or []}
+
+
 def record_baseline(summary: dict, phase: int, shape: Optional[str], source_runs: List[str]) -> dict:
     """What `apply` stores beside a decision: the samples that produced it, under
     the backend label of the most recent source run (runs under another label are
@@ -1457,10 +1487,10 @@ def record_baseline(summary: dict, phase: int, shape: Optional[str], source_runs
     backend = next((runs_meta.get(r, {}).get("backend") for r in reversed(source_runs)
                     if r in runs_meta), None)
     base_runs = [r for r in source_runs if runs_meta.get(r, {}).get("backend") == backend
-                 and not runs_meta.get(r, {}).get("tampered")]
+                 and not _untrusted(runs_meta.get(r, {}))]
     atts = _phase_attempts(summary, phase, shape, base_runs)
     cost, wall = _samples(atts)
-    return {"backend": backend, "shape": shape, "runs": base_runs,
+    return {"backend": backend, "shape": shape, "runs": base_runs, "harness": sorted(_fps(atts)),
             "cost": [[r, v] for r, v in cost], "wall": [[r, v] for r, v in wall],
             "guardrails": guardrail_counts(atts, runs_meta, phase)}
 
@@ -1534,7 +1564,7 @@ def evaluate_decision(summary: dict, decision: dict, current_shape: Optional[str
                       reason=f"backend changed from {backend!r} to {runs_meta[latest].get('backend')!r}; "
                              "applied-arm samples discarded")
         return result
-    excluded = set(excluded_runs) | {r for r, m in runs_meta.items() if m.get("tampered")}
+    excluded = set(excluded_runs) | {r for r, m in runs_meta.items() if _untrusted(m)}
     applied = [r for r in _applied_runs(summary, decision)
                if r not in excluded and runs_meta.get(r, {}).get("backend") == backend]
     result["applied_runs"] = applied
@@ -1544,6 +1574,11 @@ def evaluate_decision(summary: dict, decision: dict, current_shape: Optional[str
     cost = compare_arms(cost_a, [tuple(x) for x in base.get("cost") or []], "cost")
     wall = compare_arms(wall_a, [tuple(x) for x in base.get("wall") or []], "wall")
     applied_counts = guardrail_counts(atts, runs_meta, phase)
+    # Harness confounding (#109): the arms (or one arm) ran under more than one
+    # claude harness setup. Flagged, not a label input; None = not recorded.
+    fa, fb = _fps(atts), set(base.get("harness") or [])
+    result.update(confounded=(None if not fa or not fb else len(fa | fb) > 1),
+                  harness={"applied": sorted(fa), "baseline": sorted(fb)})
     result.update(cost=cost, wall=wall, label=_combine(cost, wall), applied_guardrails=applied_counts,
                   guardrails=evaluate_guardrails(base.get("guardrails") or guardrail_counts([], {}, phase),
                                                  applied_counts))
@@ -1723,7 +1758,7 @@ def _last_evaluation(applied_file: Optional[str], run_id: str) -> Optional[dict]
 def _signature(result: dict) -> tuple:
     return (result.get("label"), result.get("reset"), result.get("action_taken"),
             result["cost"]["n_a"], result["cost"]["n_b"], result["wall"]["n_a"], result["wall"]["n_b"],
-            json.dumps(result.get("guardrails"), sort_keys=True))
+            json.dumps(result.get("guardrails"), sort_keys=True), result.get("confounded"))
 
 
 def record_evaluation(result: dict, applied_file: str, events_file: Optional[str]) -> Optional[dict]:
@@ -1739,7 +1774,7 @@ def record_evaluation(result: dict, applied_file: str, events_file: Optional[str
     _append_jsonl(events_file, {
         "event": "knob_evaluated", "ts": _now_ts(), "knob": result["knob"], "phase": result["phase"],
         "label": result["label"], "action": result.get("action_taken") or "evaluated",
-        "reset": result.get("reset"),
+        "reset": result.get("reset"), "confounded": result.get("confounded"),
         "cost_r": result["cost"]["r"], "cost_mde": result["cost"]["mde"],
         "wall_r": result["wall"]["r"], "wall_mde": result["wall"]["mde"],
         "n_applied": result["cost"]["n_a"], "n_baseline": result["cost"]["n_b"],
@@ -1769,6 +1804,8 @@ def format_evaluation(result: dict) -> str:
         unknown = sum(1 for g in guards.values() if g.get("state") == "unknown")
         tail += (f"; guardrails: BREACH {','.join(bad)}" if bad
                  else f"; guardrails ok ({unknown} unknown below their minimum n)")
+    if result.get("confounded"):
+        tail += " (confounded: harness changed)"
     if result.get("action_taken"):
         tail += f" [{result['action_taken']}]"
     return head + tail
