@@ -109,6 +109,8 @@ See `.env.example` for the full set. The load-bearing ones:
 | `SPECSTRIDE_MAX_REJECTS` | `3` | reject attempts per phase before halt (exit 2) |
 | `SPECSTRIDE_MAX_ITER` | — | max headless proposer iterations per pass |
 | `SPECSTRIDE_PROPOSER_TIMEOUT` | `1800` | per-pass timeout (seconds) |
+| `SPECSTRIDE_PROPOSER_INHERIT_PLUGINS` | `0` | `1` = a `claude` proposer/accelerator pass loads the operator's Claude Code user, project and local settings (plugins, hooks, MCP servers, CLAUDE.md), as an interactive session would. Default: a pinned, minimal child (`--setting-sources "" --strict-mcp-config`, plus one `--settings` JSON carrying only your user settings' `env`, `effortLevel` and, when no `--model` is given, `model`). Also `--proposer-inherit-plugins`; saved in `last-run.conf`. [Learning](Learning) evaluation excludes runs made this way. See [Harness isolation](#harness-isolation-claude) |
+| `SPECSTRIDE_PROPOSER_SKILLS` | `0` | `1` = don't pass `--disable-slash-commands` to a `claude`/`bebop` pass (skills and slash commands back on) |
 | `SPECSTRIDE_CRITIC_TIMEOUT` | `300` | per-critic-call timeout (seconds) |
 | `SPECSTRIDE_MAX_WALL_MIN` | `0` | whole-run wall-clock budget (0 = unlimited) |
 | `SPECSTRIDE_CRITIC_GROUNDING` | on | critic's read-only grounding pass |
@@ -121,6 +123,40 @@ See `.env.example` for the full set. The load-bearing ones:
 | `SPECSTRIDE_LEARNING` | unset (= `off`) | the [learning loop](Learning): unset/`off` = inert; `suggest` = write per-phase observations at `phase_done`; `apply` = also read applied values into the run |
 | `SPECSTRIDE_LEARNING_THROUGH` | unset | the `run_id` of the last `applied.json` decision a mixture-of-loops contract bound. `resolve` ignores every `apply` after it until a re-derivation binds it; reverts after it (an auto-revert, `--revert`, `--off`) still count, since they only move a knob toward its default. A bound value is therefore an upper bound on what runs, not a promise; the `arm` on `proposer_cap` records what did |
 | `SPECSTRIDE_YIELD_POLL` | `30` | how often a yielded pass's resume predicate is polled (seconds). Setting it at all, even to 30, overrides a learned `yield_poll_interval` |
+
+## Harness isolation (claude)
+
+A `claude -p` started in a workdir would otherwise load everything an interactive session
+loads: every enabled plugin with its hooks, MCP servers and SessionStart context, your user
+hooks, and the target repo's `.claude/settings*.json` and `CLAUDE.md`. A run then depends on
+what you turned on for interactive use. For example, a self-learning plugin writes under the
+workdir (and into phase commits), forks reflector sessions on the same account, and injects
+context the critic never sees.
+
+So every `claude` child Specstride starts runs pinned (`lib/claude_harness.py`, the one place
+that builds its harness flags):
+
+- `--setting-sources ""`: no settings file is read, so no plugin, hook, settings-declared MCP
+  server or auto-loaded `CLAUDE.md`. OAuth still works.
+- `--strict-mcp-config`: no MCP server from `~/.claude.json` or Claude account connectors either.
+- One `--settings` JSON: your user settings' `env` (e.g. the OTEL exporter variables),
+  `effortLevel`, and `model` when the run passes no `--model`. Nothing else is carried. claude
+  does not merge two `--settings` flags (the last one replaces the first), so anything else a
+  pass needs in settings goes into this same object.
+
+Each pass records what its child actually loaded as a `harness_config` event, read from the
+child's own stream-json `init` record: `plugins`, `mcp_servers`, the `skills`,
+`slash_commands` and `tools` counts, `setting_sources`, `inherit_plugins`, and a 16-hex
+`fingerprint` over all of it. An `init` without plugin fields (older CLIs) emits none; an odd
+one degrades to empty lists.
+
+At start the orchestrator also logs two non-fatal `preflight_warning` events
+(`lib/preflight.py`): `plugin_unignored_writes` (untracked, unignored files under the
+workdir's `.claude/` while a plugin is enabled; phase commits run `git add -A`) and
+`concurrent_claude_session` (another live Claude Code process with hooks or plugins in the
+same workdir, whose writes the reverse guard can't tell from the proposer's).
+
+`--proposer-inherit-plugins` / `SPECSTRIDE_PROPOSER_INHERIT_PLUGINS=1` turns pinning off.
 
 ## Privacy controls
 

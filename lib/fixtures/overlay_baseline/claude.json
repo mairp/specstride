@@ -4,11 +4,13 @@
     "arg0": "<TMP>/bin/claude",
     "argv": [
       "-p",
+      "--setting-sources",
+      "--strict-mcp-config",
       "--dangerously-skip-permissions",
       "--verbose",
       "--disable-slash-commands"
     ],
-    "argv_nul_count": 4,
+    "argv_nul_count": 7,
     "env": {
       "HOME": "<TMP>/home",
       "IS_SANDBOX": "1",

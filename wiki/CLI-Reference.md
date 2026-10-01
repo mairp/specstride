@@ -50,6 +50,7 @@ Common launch flags:
 | `--test-plan /abs/path` · `--generate-tests /abs/dir` | override feature-scoped projection/scaffolds; paths must resolve inside workdir |
 | `--live` / `--no-live` · `--no-color` | live presenter control |
 | `--debug` · `--telemetry` · `--loki-url URL` · `--otel` · `--otel-url URL` | debug + [Telemetry](Telemetry) |
+| `--proposer-inherit-plugins` | a `claude` proposer/accelerator pass loads your Claude Code plugins, hooks, MCP servers and CLAUDE.md instead of running pinned (see [Configuration](Configuration#harness-isolation-claude)); kept on `resume`; learning evaluation excludes the run. Also `SPECSTRIDE_PROPOSER_INHERIT_PLUGINS=1` |
 
 ## Feature-awareness
 

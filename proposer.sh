@@ -50,6 +50,10 @@ OPTIONS
   --timeout SECONDS       Absolute backstop on a single agent pass regardless
                           of progress (default: 1800). Not the primary kill
                           switch — see --idle-timeout.
+  --inherit-plugins       claude only: let the child load the operator's user/project
+                          settings (plugins, hooks, MCP servers, CLAUDE.md). Default is a
+                          pinned, minimal config (lib/claude_harness.py). Env:
+                          SPECSTRIDE_PROPOSER_INHERIT_PLUGINS=1.
   --idle-timeout SECONDS  Kill the pass only after this many seconds with NO
                           cpu-time growth anywhere in its process tree
                           (default: 900) — an actually-hung pass, not one that
@@ -139,6 +143,12 @@ EOF
 WORKDIR="" EVIDENCE="" PROMPT_FILE=""
 BACKEND="${SPECSTRIDE_PROPOSER:-dsh}"
 MODEL=""
+# Issue #109: a claude child runs with a pinned, minimal harness config (no user
+# plugins, hooks, MCP servers or auto-loaded CLAUDE.md; lib/claude_harness.py)
+# unless the operator opts back in. Exported so the stream tap's
+# harness_config event records which way the pass ran (exported only when on, so
+# no other backend's child environment changes).
+SPECSTRIDE_PROPOSER_INHERIT_PLUGINS="${SPECSTRIDE_PROPOSER_INHERIT_PLUGINS:-}"
 MAX_ITER="${SPECSTRIDE_MAX_ITER:-30}"
 SLEEP_SECS=2
 TIMEOUT="${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}"
@@ -209,6 +219,7 @@ while [[ $# -gt 0 ]]; do
     -f|--prompt-file) PROMPT_FILE="${2:?}"; shift 2 ;;
     --backend)        BACKEND="${2:?}"; shift 2 ;;
     --model)          MODEL="${2:?}"; shift 2 ;;
+    --inherit-plugins) SPECSTRIDE_PROPOSER_INHERIT_PLUGINS=1; shift ;;
     -n|--max-iter)    MAX_ITER="${2:?}"; shift 2 ;;
     -s|--sleep)       SLEEP_SECS="${2:?}"; shift 2 ;;
     --timeout)        TIMEOUT="${2:?}"; shift 2 ;;
@@ -260,6 +271,7 @@ DSH_PLUGIN_REQUEST="$STATE_DIR/features/${SPECSTRIDE_FEATURE:-default}/dsh-plugi
 DSH_PLUGIN_ARCHIVE="$STATE_DIR/features/${SPECSTRIDE_FEATURE:-default}/plugin-installs"
 DSH_PLUGIN_PROCESSOR="$LIB_DIR/dsh_plugin_requests.py"
 export SPECSTRIDE_EVENTS
+[[ "$SPECSTRIDE_PROPOSER_INHERIT_PLUGINS" == "1" ]] && export SPECSTRIDE_PROPOSER_INHERIT_PLUGINS
 
 # Autonomous headless loops always pass --dangerously-skip-permissions, which Claude
 # Code refuses under root unless IS_SANDBOX=1 — and when refused, every pass silently
@@ -576,8 +588,15 @@ run_agent() {
       prompt_file="$(mktemp "${TMPDIR:-/tmp}/specstride-prompt.XXXXXX")"
       printf '%s' "$prompt" > "$prompt_file"
       backend_overlay_prefix claude || return 1
+      # Pinned harness (#109): one helper decides the setting sources, MCP and the
+      # single --settings JSON (claude does not merge two --settings flags).
+      local -a harness=()
+      local -a harness_opts=()
+      [[ "$SPECSTRIDE_PROPOSER_INHERIT_PLUGINS" == "1" ]] && harness_opts+=( --inherit )
+      [[ -n "$MODEL" ]] && harness_opts+=( --model-given )
+      mapfile -d '' -t harness < <(python3 "$LIB_DIR/claude_harness.py" args "${harness_opts[@]}")
       SPECSTRIDE_STDIN_FILE="$prompt_file" \
-        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" claude -p "${args[@]}"
+        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${BACKEND_OVERLAY_PREFIX[@]}" claude -p "${harness[@]}" "${args[@]}"
       local rc=$?; backend_overlay_release; rm -f "$prompt_file"; return "$rc"
       ;;
     codex)
