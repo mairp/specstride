@@ -20,12 +20,14 @@ source ~/.bashrc
 
 mkdir -p /tmp/specstride-demo/specs/001-greeting
 cp examples/speckit-tasks.example.md /tmp/specstride-demo/specs/001-greeting/tasks.md
-specstride run -w /tmp/specstride-demo       # discovers specs/001-greeting/tasks.md
+specstride run -w /tmp/specstride-demo --verification off   # discovers specs/001-greeting/tasks.md
 ```
 
 Not set up the alias yet? Call the script directly:
-`"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo`, or `./specstride run -w /tmp/specstride-demo` from
+`"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo --verification off`, or `./specstride run -w /tmp/specstride-demo --verification off` from
 inside the clone.
+
+`--verification off` skips the pre-loop test plan: the default (`required`) needs a test command it can discover, and the empty demo directory has none yet, so it would stop with exit 3. Leave verification on in a real project.
 
 The bundled `examples/speckit-tasks.example.md` is a small, verifiable Spec Kit task list, so
 you can watch the whole loop end to end. In a real project, generate the feature with Spec Kit
