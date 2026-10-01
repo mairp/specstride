@@ -142,7 +142,9 @@ that builds its harness flags):
 - One `--settings` JSON: your user settings' `env` (e.g. the OTEL exporter variables),
   `effortLevel`, and `model` when the run passes no `--model`. Nothing else is carried. claude
   does not merge two `--settings` flags (the last one replaces the first), so anything else a
-  pass needs in settings goes into this same object.
+  pass needs in settings goes into this same object. With [OTEL traces](Telemetry) on, the
+  child's `OTEL_RESOURCE_ATTRIBUTES` (its place in the run trace) is added there, overriding
+  the same key from your `env`.
 
 Each pass records what its child actually loaded as a `harness_config` event, read from the
 child's own stream-json `init` record: `plugins`, `mcp_servers`, the `skills`,
