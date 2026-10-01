@@ -34,6 +34,13 @@
 #                                        SPECSTRIDE_LEARNING=apply. --summarize prints
 #                                        the metric JSON and --evaluate what evaluate
 #                                        would conclude now; both read-only.
+#   specstride doctor    [-w DIR] [--proposer B] [--critic B] [--proposer-inherit-plugins] [--strict]
+#                                        read-only: what a run in DIR would start with —
+#                                        the claude child's harness flags, the critic's
+#                                        model and prompt window — and the preflight
+#                                        warnings (unignored plugin files under .claude/,
+#                                        another live Claude Code session with hooks).
+#                                        Exit 0; with --strict, 3 when anything warns.
 #   specstride reverse   <SRC> [--out DIR] [--name SLUG] [--tasks done|open] [--dry-run] […]
 #                                        reverse-engineer SRC, read-only, into a Spec Kit
 #                                        feature directory that describes it as it is
@@ -60,7 +67,8 @@ LIB_DIR="$SCRIPT_DIR/lib"          # Python components live here
 . "$SCRIPT_DIR/specstride-lib.sh"
 
 usage() {
-  sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'
+  # the whole leading comment block, however long it grows
+  awk 'NR > 1 && !/^#/ { exit } NR > 1' "$0" | sed 's/^# \{0,1\}//'
 }
 
 # ── Single front door ──────────────────────────────────────────────────────
@@ -739,6 +747,65 @@ for o in keep[-5:]:
         exit 1
         ;;
     esac
+    ;;
+
+  doctor)
+    # Read-only (#113): the same checks a run logs at start (lib/preflight.py), plus
+    # the resolved harness the run would launch with, on demand and before a launch.
+    # .env fills in what the caller did not export, as orchestrator.sh does.
+    if [[ -f "$SCRIPT_DIR/.env" ]]; then
+      _caller_env="$(export -p)"
+      set -a; # shellcheck source=/dev/null
+      . "$SCRIPT_DIR/.env"; set +a
+      eval "$_caller_env"
+      specstride_env_compat
+    fi
+    d_strict="false"; d_inherit="${SPECSTRIDE_PROPOSER_INHERIT_PLUGINS:-0}"
+    d_proposer="${SPECSTRIDE_PROPOSER:-dsh}"; d_critic="${SPECSTRIDE_CRITIC:-claude}"
+    for (( i = 0; i < ${#EXTRA[@]}; i++ )); do
+      case "${EXTRA[i]}" in
+        --strict)                   d_strict="true" ;;
+        --proposer-inherit-plugins) d_inherit="1" ;;
+        --proposer)                 d_proposer="${EXTRA[i+1]:-$d_proposer}"; i=$((i + 1)) ;;
+        --critic)                   d_critic="${EXTRA[i+1]:-$d_critic}"; i=$((i + 1)) ;;
+        *) echo "specstride doctor: unknown option '${EXTRA[i]}'" >&2; exit 1 ;;
+      esac
+    done
+    echo "specstride doctor — $WORKDIR"
+    echo "  proposer : $d_proposer"
+    if [[ "$d_proposer" == claude ]]; then
+      d_opts=(); [[ "$d_inherit" == "1" ]] && d_opts+=( --inherit )
+      mapfile -d '' -t d_harness < <(python3 "$LIB_DIR/claude_harness.py" args "${d_opts[@]}")
+      python3 - "${d_harness[@]}" <<'PYEOF'
+import json, sys
+argv = sys.argv[1:]
+if not argv:
+    print("  harness  : inherits the operator's Claude Code settings (plugins, hooks, MCP, CLAUDE.md)")
+else:
+    shown = []
+    for i, a in enumerate(argv):
+        if a == "--setting-sources":
+            shown.append('--setting-sources "%s"' % argv[i + 1])
+        elif a == "--strict-mcp-config":
+            shown.append(a)
+        elif a == "--settings":
+            shown.append("--settings {%s}" % ", ".join(sorted(json.loads(argv[i + 1]))))
+    print("  harness  : pinned — %s" % " ".join(shown))
+PYEOF
+    fi
+    IFS=$'\t' read -r d_model d_window < <(python3 "$LIB_DIR/critic.py" --describe "$d_critic" 2>/dev/null)
+    echo "  critic   : $d_critic  (model ${d_model:-?}, window ${d_window:-?} tokens)"
+    d_args=( --workdir "$WORKDIR" --self-pid "$$" )
+    [[ "$d_inherit" == "1" ]] && d_args+=( --inherit-plugins )
+    d_warn=0
+    while IFS=$'\t' read -r d_check d_detail; do
+      [[ -n "$d_check" ]] || continue
+      echo "  WARN: $d_check: $d_detail"
+      d_warn=$((d_warn + 1))
+    done < <(python3 "$LIB_DIR/preflight.py" "${d_args[@]}" 2>/dev/null)
+    (( d_warn )) || echo "  preflight: ok"
+    [[ "$d_strict" == "true" && "$d_warn" -gt 0 ]] && exit 3
+    exit 0
     ;;
 
   ""|-h|--help|help)

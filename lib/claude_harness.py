@@ -31,6 +31,11 @@ stream-json `init` record:
   so callers that need settings MUST pass them through here, never as a second
   flag.
 
+Two built-in plugins (`cc-plugin-agents-md`, `cc-plugin-telemetry`) still load and
+show in `init.plugins`; they are left on on purpose (#113): switching them off
+changed nothing observable (an AGENTS.md canary stayed out of context, OTEL export
+was unaffected), and their names are CLI internals. The fingerprint records them.
+
 `--disable-slash-commands` stays where it was (proposer.sh's shared args,
 SPECSTRIDE_PROPOSER_SKILLS).
 
