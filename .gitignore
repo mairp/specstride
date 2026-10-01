@@ -3,6 +3,9 @@ PLAN.md
 
 # Local Claude Code settings (host-specific permission allowlist).
 .claude/settings.local.json
+# Harness runtime state a Claude Code plugin writes into the workdir (autoharness
+# counters/runs). Never source; the reverse guard already excludes it (#109).
+.claude/autoharness/
 
 # Orchestrator/loop runtime state.
 .specstride/

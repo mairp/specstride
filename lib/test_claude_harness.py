@@ -151,7 +151,7 @@ printf '%s\n' '{"type":"result","subtype":"success","total_cost_usd":0,"num_turn
 """
 
 
-def _run_proposer(tmp_path, *extra, inherit_env=None, init=INIT, model=True):
+def _run_proposer(tmp_path, *extra, inherit_env=None, init=INIT, model=True, more_env=None):
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
     fake = fake_bin / "claude"
@@ -180,6 +180,7 @@ def _run_proposer(tmp_path, *extra, inherit_env=None, init=INIT, model=True):
     })
     if inherit_env is not None:
         env[claude_harness.INHERIT_ENV] = inherit_env
+    env.update(more_env or {})
     argv = ["bash", str(PROPOSER), "-w", str(work),
             "-e", str(work / ".specstride" / "features" / "f" / "gates" / "GATE1-EVIDENCE.md"),
             "-f", str(prompt), "--backend", "claude", "-n", "1", "-s", "0",
@@ -227,3 +228,25 @@ def test_proposer_survives_a_malformed_init(tmp_path):
     assert "agent_result" in names
     harness = [e for e in events if e["event"] == "harness_config"]
     assert harness and harness[0]["plugins"] == []
+
+
+def test_trace_attributes_ride_in_the_one_pinned_settings_json(tmp_path):
+    """#112: the run-trace nesting sets OTEL_RESOURCE_ATTRIBUTES for the child. A
+    second --settings flag would replace the pinned one whole (claude does not
+    merge them), dropping the operator's env and model; it must go through the
+    helper into the same object."""
+    import ralph_otel_spans
+    state = tmp_path / "otel-state"
+    state.mkdir()
+    tracker = ralph_otel_spans.SpanTracker({}, state_dir=str(state))
+    tracker.on_event("run_start", {"run_id": "run-112", "ts": "100.0"})
+    tracker.on_event("proposer_start", {"run_id": "run-112", "ts": "101.0", "phase": "1",
+                                        "attempt": "1"})
+    traced = {"SPECSTRIDE_OTEL_ENABLED": "true", "SPECSTRIDE_RUN_ID": "run-112",
+              "SPECSTRIDE_OTEL_STATE_DIR": str(state)}
+    argv, _ = _run_proposer(tmp_path, model=False, more_env=traced)
+    env = _settings(argv)["env"]  # asserts exactly one --settings
+    assert "specstride.run_id=run-112" in env["OTEL_RESOURCE_ATTRIBUTES"]
+    assert env["OTEL_EXPORTER_OTLP_ENDPOINT"] == USER["env"]["OTEL_EXPORTER_OTLP_ENDPOINT"]
+    assert _settings(argv)["model"] == "opus"
+    assert argv[:4] == ["-p", "--setting-sources", "", "--strict-mcp-config"]

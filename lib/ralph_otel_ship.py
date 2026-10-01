@@ -122,13 +122,15 @@ class Otel:
         self._batch_seq = 0                      # monotonic per-instance batch counter
 
     # -- ingest -------------------------------------------------------------
-    def add(self, event, line, attrs=None, fields=None):
+    def add(self, event, line, attrs=None, fields=None, span_content=None):
         """Buffer one log record and accumulate its metrics.
 
         event  : event name (log attr + metric selector)
         line   : logfmt body (kept identical to the Loki line for parity)
         attrs  : extra log attributes (e.g. {"model": ...}) — mirrors Loki labels
         fields : the raw typed field dict; drives metrics and typed log attributes
+        span_content : span-only attributes (ralph_otel_spans.content_attrs): reach
+                 the trace span, never the log record
         """
         ts = str(time.time_ns())
         rec = {"event": event}
@@ -141,7 +143,8 @@ class Otel:
         ids = None
         if self._spans is not None:
             try:
-                ids = self._spans.on_event(event, fields if fields is not None else rec)
+                ids = self._spans.on_event(event, fields if fields is not None else rec,
+                                           content=span_content)
             except Exception as e:  # noqa: BLE001 — spans are best-effort
                 warn("trace span error: %s" % e)
         self._logs.append((ts, line, rec, ids))
@@ -149,7 +152,7 @@ class Otel:
         if fields is not None:
             self._accumulate(event, attrs or {}, fields)
 
-    def add_prime(self, event, fields):
+    def add_prime(self, event, fields, span_content=None):
         """Map a normalized Prime event (agent_init/text/tool/evidence_writing/
         diagnostic/result) onto an OTLP log record + additive metrics.
 
@@ -162,7 +165,8 @@ class Otel:
         """
         model = fields.get("model")
         self.add(event, logfmt(fields),
-                 attrs={"model": model} if model else None, fields=fields)
+                 attrs={"model": model} if model else None, fields=fields,
+                 span_content=span_content)
 
     def _add_sum(self, name, value, attrs, is_double, unit=""):
         if value is None:
