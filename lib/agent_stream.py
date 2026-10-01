@@ -16,6 +16,10 @@ from stream_seam import (
     Capability, StreamFormat, SharedBehaviour, build_registry,
 )
 from telemetry_delivery import LocalFirstFanout
+try:  # the harness_config event is best-effort: a missing helper drops it (V)
+    import claude_harness
+except Exception:  # noqa: BLE001
+    claude_harness = None
 import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
@@ -108,6 +112,13 @@ class ClaudeAdapter:
             outcome.output.append("  · init model=%s tools=%d" % (
                 self.model_seen or "?", tool_count,
             ))
+            harness = claude_harness.harness_config(record) if claude_harness else None
+            if harness:
+                outcome.events.append(("harness_config", harness))
+                outcome.output.append("  · harness %s sources=%r plugins=%s mcp=%s" % (
+                    harness["fingerprint"], harness["setting_sources"],
+                    ",".join(harness["plugins"]) or "-", ",".join(harness["mcp_servers"]) or "-",
+                ))
         elif record_type == "assistant":
             message = record.get("message", {}) or {}
             self.model_seen = message.get("model") or self.model_seen
