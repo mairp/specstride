@@ -46,7 +46,9 @@ class LocalFirstFanout:
         # handing sinks a sanitized view. Defaults to identity for tests.
         self._sanitize = sanitize or (lambda fields: fields)
 
-    def emit(self, event, fields):
+    def emit(self, event, fields, span_content=None):
+        """``span_content``: span-only attributes (already redacted/capped) for sinks
+        that build trace spans (the OTLP shipper); never written locally."""
         fields = dict(fields)
         # Local authority is written synchronously, before any remote round-trip,
         # so an event survives a total remote outage. The local sink returns the
@@ -66,7 +68,10 @@ class LocalFirstFanout:
         remote_fields = self._sanitize(dict(enriched))
         for sink in self._sinks.values():
             try:
-                sink.add_prime(event, dict(remote_fields))
+                if span_content and hasattr(sink, "_spans"):
+                    sink.add_prime(event, dict(remote_fields), span_content=span_content)
+                else:
+                    sink.add_prime(event, dict(remote_fields))
             except Exception:  # noqa: BLE001 — one broken sink must not stall peers
                 pass
 
