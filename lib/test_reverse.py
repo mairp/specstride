@@ -437,6 +437,43 @@ def test_guard_catches_a_moved_head(tmp_path):
     assert any(p.startswith("git HEAD moved") for p in guard(result))
 
 
+@pytest.mark.parametrize("with_git", [True, False], ids=["git", "walk"])
+def test_harness_runtime_state_is_never_inventoried_or_guarded(tmp_path, with_git):
+    """#109: an operator's Claude Code session/plugin rewrites .claude/autoharness/
+    while a run is live. A fresh baseline leaves it out and the guard ignores its
+    churn, but a real file elsewhere under .claude/ is still source."""
+    def harness_state(src):
+        (src / ".claude" / "autoharness" / "runs").mkdir(parents=True)
+        (src / ".claude" / "autoharness" / "requests").write_text("5")
+        (src / ".claude" / "skills" / "s").mkdir(parents=True)
+        (src / ".claude" / "skills" / "s" / "SKILL.md").write_text("# skill\n")
+    src, result = baselined(tmp_path, with_git, prepare=harness_state)
+    paths = {e["path"] for e in json.load(open(result["inventory"]))["files"]}
+    assert ".claude/skills/s/SKILL.md" in paths
+    assert not any(p.startswith(".claude/autoharness") for p in paths)
+    (src / ".claude" / "autoharness" / "requests").write_text("7")
+    (src / ".claude" / "autoharness" / "session-ce106bff").write_text("1")
+    (src / ".claude" / "autoharness" / "runs" / "r.json").write_text("{}")
+    (src / ".claude" / "settings.local.json").write_text("{}")
+    assert guard(result) == []
+    (src / ".claude" / "skills" / "s" / "SKILL.md").write_text("# rewritten\n")
+    assert any(".claude/skills/s/SKILL.md" in p for p in guard(result))
+
+
+@pytest.mark.parametrize("with_git", [True, False], ids=["git", "walk"])
+def test_guard_ignores_harness_state_an_older_baseline_recorded(tmp_path, with_git, monkeypatch):
+    def harness_state(src):
+        (src / ".claude" / "autoharness").mkdir(parents=True)
+        (src / ".claude" / "autoharness" / "requests").write_text("5")
+    monkeypatch.setattr(reverse_inventory, "HARNESS_STATE_EXCLUDES", ())
+    src, result = baselined(tmp_path, with_git, prepare=harness_state)
+    assert any(e["path"] == ".claude/autoharness/requests"
+               for e in json.load(open(result["inventory"]))["files"])
+    monkeypatch.undo()
+    shutil.rmtree(src / ".claude" / "autoharness")  # the run's rm -rf, or the plugin's own churn
+    assert guard(result) == []
+
+
 def test_guard_cli_exit_codes(tmp_path):
     src, result = baselined(tmp_path)
     argv = ["guard", result["src"], "--baseline", result["inventory"], "--out", result["out"]]

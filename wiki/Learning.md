@@ -100,6 +100,19 @@ on, the orchestrator brackets each proposer pass and emits `events_tampered` if 
 shortened or rewrote bytes of `events.jsonl`, `applied.json` or `phase-<N>.json` that predated
 it; such a run is excluded from every evaluation. Appends are normal and not flagged.
 
+**Harness confounding.** A `claude` proposer pass records a `harness_config` event taken from the
+child's own `init` record, with a `fingerprint` of its plugins, MCP servers, skills, slash
+commands and setting sources. The baseline stores the fingerprints its samples ran under, and
+the evaluation reports `confounded: true` when the two arms together, or either arm on its own,
+span more than one fingerprint. It reports `null` when either side recorded none (older runs,
+non-claude backends). The flag is printed as `(confounded: harness changed)`. It never changes
+the label or the guardrails. A run that let the child inherit the operator's plugins
+(`--proposer-inherit-plugins`, marked `inherit_plugins` on `run_start` and `harness_config`) is
+excluded from both arms like a tampered one: a self-learning plugin is a second, unreviewed
+learning channel, and its learned-skill drift does not show in the fingerprint. Baselines
+recorded before this change carry no fingerprint and may have run with such a plugin, so collect
+at least 6 fresh pinned baseline passes for a phase before its first `--apply`.
+
 ## Under mixture-of-loops: who decides what
 
 When a [mixture-of-loops](https://github.com/mairp/mixture-of-loops) contract drives the run,

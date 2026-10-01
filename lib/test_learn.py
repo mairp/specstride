@@ -1054,10 +1054,12 @@ def test_diagnostician_case_is_counted_per_phase():
 
 # -- evaluate (item 4): baseline, primaries, the MDE rule, the four labels --
 def _episode(run, phase, costs, *, backend="prime:sol", shape="S1", cap=None, futile=0,
-             secs=600.0, t0=1000.0, extra=()):
+             secs=600.0, t0=1000.0, extra=(), harness=None):
     """One run touching one phase: one billed pass per entry of `costs` (each its
     own attempt, rejected until the last, which is approved), then `futile`
-    futility-killed passes. `cap` = (seconds, source[, arm]) stamps proposer_cap."""
+    futility-killed passes. `cap` = (seconds, source[, arm]) stamps proposer_cap;
+    `harness` (a fingerprint, or attempt → fingerprint) stamps each pass's
+    harness_config the way the stream tap does (no phase/attempt fields)."""
     events, ts = [], [t0]
 
     def emit(ev):
@@ -1080,6 +1082,10 @@ def _episode(run, phase, costs, *, backend="prime:sol", shape="S1", cap=None, fu
                 c["arm"] = cap[2]
             emit(c)
         emit({"event": "iter_start", "run_id": run, "iter": 1})
+        if harness is not None:
+            fp = harness(attempt) if callable(harness) else harness
+            emit({"event": "harness_config", "run_id": run, "fingerprint": fp,
+                  "inherit_plugins": False, "setting_sources": "", "plugins": [], "mcp_servers": []})
         if cost is None:
             emit({"event": "pass_killed", "run_id": run, "iter": 1, "reason": "repeat_stall", "elapsed": 99})
             emit({"event": "agent_result", "run_id": run, "is_error": True, "subtype": "missing_terminal"})
@@ -1435,6 +1441,87 @@ def test_a_tampered_run_is_excluded_from_every_evaluation(tmp_path):
     # nor can a tampered run be a baseline sample
     base = learn.record_baseline(summary, 3, "S1", ["base-1", "app-1"])
     assert base["runs"] == ["base-1"]
+
+
+# -- harness confounding (#109): the claude child's harness_config fingerprint --
+_FP_A, _FP_B = "a" * 16, "b" * 16
+
+
+def _fingerprinted_decision(tmp_path, base_fp=_FP_A):
+    applied, events_file = _applied_paths(tmp_path)
+    base = (_episode("base-1", 3, _BASE_COSTS[:3], secs=1200.0, harness=base_fp)
+            + _episode("base-2", 3, _BASE_COSTS[3:], secs=1300.0, t0=2000.0, harness=base_fp))
+    entry = learn.apply_proposer_timeout(learn.summarize(base, phase_shapes={3: "S1"}), 3, 1800, applied,
+                                          events_file=events_file, run_id="learn-fp", shape="S1")
+    return base, entry
+
+
+def test_a_harness_config_fingerprint_lands_on_its_attempt_and_in_the_baseline(tmp_path):
+    base, entry = _fingerprinted_decision(tmp_path)
+    assert entry["baseline"]["harness"] == [_FP_A]
+    assert all(a["harness"] == [_FP_A] for a in learn.summarize(base)["attempts"])
+
+
+def test_the_same_fingerprint_on_both_arms_is_not_confounded(tmp_path):
+    base, entry = _fingerprinted_decision(tmp_path)
+    arm = _arm(entry, [0.1] * 3, harness=_FP_A) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0, harness=_FP_A)
+    result = learn.evaluate_decision(learn.summarize(base + arm), entry, "S1")
+    assert result["confounded"] is False and result["label"] == "helped"
+    assert "confounded" not in learn.format_evaluation(result)
+
+
+def test_a_fingerprint_change_across_the_arms_is_confounded(tmp_path):
+    base, entry = _fingerprinted_decision(tmp_path)
+    arm = _arm(entry, [0.1] * 3, harness=_FP_B) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0, harness=_FP_B)
+    result = learn.evaluate_decision(learn.summarize(base + arm), entry, "S1")
+    assert result["confounded"] is True
+    assert result["harness"] == {"applied": [_FP_B], "baseline": [_FP_A]}
+    assert result["label"] == "helped"                        # flagged, never relabelled
+    assert learn.format_evaluation(result).endswith("(confounded: harness changed)")
+
+
+def test_two_fingerprints_inside_one_arm_are_confounded(tmp_path):
+    base, entry = _fingerprinted_decision(tmp_path)
+    arm = (_arm(entry, [0.1] * 3, harness=lambda a: _FP_A if a == 1 else _FP_B)
+           + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0, harness=_FP_A))
+    result = learn.evaluate_decision(learn.summarize(base + arm), entry, "S1")
+    assert result["confounded"] is True
+
+
+def test_no_harness_config_leaves_confounding_unknown(tmp_path):
+    _applied, _ev, entry = _applied_decision(tmp_path)
+    arm = _arm(entry, [0.1] * 3, harness=_FP_A) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0)
+    result = learn.evaluate_decision(learn.summarize(_baseline_events() + arm), entry, "S1")
+    assert entry["baseline"]["harness"] == [] and result["confounded"] is None
+
+
+def test_a_malformed_harness_config_is_ignored(tmp_path):
+    base, entry = _fingerprinted_decision(tmp_path)
+    odd = [{"event": "harness_config", "run_id": "app-1", "fingerprint": fp}
+           for fp in (None, 42, "not-hex!", ["x"])]
+    arm = _arm(entry, [0.1] * 3, harness=_FP_A, extra=odd) + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0,
+                                                                   harness=_FP_A)
+    summary = learn.summarize(base + arm)
+    result = learn.evaluate_decision(summary, entry, "S1")
+    assert result["confounded"] is False and result["applied_runs"] == ["app-1", "app-2"]
+
+
+def test_a_run_that_inherited_plugins_is_excluded_from_both_arms(tmp_path):
+    base, entry = _fingerprinted_decision(tmp_path)
+    inherited = _arm(entry, [0.1] * 3, harness=_FP_A)
+    inherited[0]["inherit_plugins"] = "1"            # run_start, as bash emits it
+    arm = inherited + _arm(entry, [0.1] * 3, run="app-2", t0=6000.0, harness=_FP_A)
+    summary = learn.summarize(base + arm)
+    assert summary["runs"]["app-1"]["inherit_plugins"] is True
+    assert summary["runs"]["app-2"]["inherit_plugins"] is False
+    result = learn.evaluate_decision(summary, entry, "S1")
+    assert result["applied_runs"] == ["app-2"] and result["excluded_runs"] == ["app-1"]
+    assert learn.record_baseline(summary, 3, "S1", ["base-1", "app-1"])["runs"] == ["base-1"]
+    # the tap's harness_config can mark the run just as well
+    tapped = _arm(entry, [0.1] * 3, run="app-3", t0=7000.0,
+                  extra=[{"event": "harness_config", "run_id": "app-3", "fingerprint": _FP_A,
+                          "inherit_plugins": True}])
+    assert learn.summarize(base + tapped)["runs"]["app-3"]["inherit_plugins"] is True
 
 
 # -- SPECSTRIDE_LEARNING_THROUGH: what a contract bound (item 6) --------------
