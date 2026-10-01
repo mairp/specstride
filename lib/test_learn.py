@@ -1476,8 +1476,32 @@ def test_a_fingerprint_change_across_the_arms_is_confounded(tmp_path):
     result = learn.evaluate_decision(learn.summarize(base + arm), entry, "S1")
     assert result["confounded"] is True
     assert result["harness"] == {"applied": [_FP_B], "baseline": [_FP_A]}
-    assert result["label"] == "helped"                        # flagged, never relabelled
+    # a gain a harness change can explain is never credited (#111)
+    assert result["label"] == "insufficient" and "confounded" in result["reason"]
     assert learn.format_evaluation(result).endswith("(confounded: harness changed)")
+
+
+def test_a_confounded_regression_still_counts(tmp_path):
+    """Reverting only moves a knob toward its default, so a regression under a
+    harness change keeps its label (and its auto-revert)."""
+    base, entry = _fingerprinted_decision(tmp_path)
+    arm = _arm(entry, [9.0] * 3, harness=_FP_B) + _arm(entry, [9.0] * 3, run="app-2", t0=6000.0, harness=_FP_B)
+    result = learn.evaluate_decision(learn.summarize(base + arm), entry, "S1")
+    assert result["confounded"] is True and result["label"] == "regressed"
+
+
+def test_the_baseline_keeps_only_the_newest_harness(tmp_path):
+    """#111: like the backend label, the newest source run's fingerprint picks the
+    baseline; unfingerprinted (pre-#109) runs drop out once one is fingerprinted."""
+    old = _episode("base-0", 3, _BASE_COSTS[:3], secs=1200.0, t0=500.0)
+    other = _episode("base-1", 3, _BASE_COSTS[:3], secs=1200.0, harness=_FP_B)
+    new = _episode("base-2", 3, _BASE_COSTS[3:], secs=1300.0, t0=2000.0, harness=_FP_A)
+    summary = learn.summarize(old + other + new, phase_shapes={3: "S1"})
+    base = learn.record_baseline(summary, 3, "S1", ["base-0", "base-1", "base-2"])
+    assert base["runs"] == ["base-2"] and base["harness"] == [_FP_A]
+    # nothing fingerprinted: unchanged behaviour
+    plain = learn.summarize(_baseline_events(), phase_shapes={3: "S1"})
+    assert learn.record_baseline(plain, 3, "S1", ["base-1", "base-2"])["runs"] == ["base-1", "base-2"]
 
 
 def test_two_fingerprints_inside_one_arm_are_confounded(tmp_path):

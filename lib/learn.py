@@ -1478,6 +1478,19 @@ def _fps(atts: List[dict]) -> set:
     return {f for a in atts for f in a.get("harness") or []}
 
 
+def _same_harness(summary: dict, phase: int, shape: Optional[str], runs: List[str]) -> List[str]:
+    """Keep the runs whose passes ran under the newest run's harness fingerprint
+    (#111), the way the baseline already keeps one backend label. Once any run is
+    fingerprinted, unfingerprinted runs (from before #109, possibly under an
+    inherited self-learning plugin) are left out rather than mixed in. With no
+    fingerprint anywhere the list is returned unchanged."""
+    per_run = {r: _fps(_phase_attempts(summary, phase, shape, [r])) for r in runs}
+    newest = next((per_run[r] for r in reversed(runs) if per_run[r]), None)
+    if not newest:
+        return list(runs)
+    return [r for r in runs if per_run[r] and per_run[r] <= newest]
+
+
 def record_baseline(summary: dict, phase: int, shape: Optional[str], source_runs: List[str]) -> dict:
     """What `apply` stores beside a decision: the samples that produced it, under
     the backend label of the most recent source run (runs under another label are
@@ -1488,6 +1501,7 @@ def record_baseline(summary: dict, phase: int, shape: Optional[str], source_runs
                     if r in runs_meta), None)
     base_runs = [r for r in source_runs if runs_meta.get(r, {}).get("backend") == backend
                  and not _untrusted(runs_meta.get(r, {}))]
+    base_runs = _same_harness(summary, phase, shape, base_runs)
     atts = _phase_attempts(summary, phase, shape, base_runs)
     cost, wall = _samples(atts)
     return {"backend": backend, "shape": shape, "runs": base_runs, "harness": sorted(_fps(atts)),
@@ -1579,7 +1593,13 @@ def evaluate_decision(summary: dict, decision: dict, current_shape: Optional[str
     fa, fb = _fps(atts), set(base.get("harness") or [])
     result.update(confounded=(None if not fa or not fb else len(fa | fb) > 1),
                   harness={"applied": sorted(fa), "baseline": sorted(fb)})
-    result.update(cost=cost, wall=wall, label=_combine(cost, wall), applied_guardrails=applied_counts,
+    label = _combine(cost, wall)
+    if result["confounded"] and label == "helped":
+        # A harness change can explain the gain, so it is never credited (#111). A
+        # regression still counts: reverting only moves a knob toward its default.
+        label = "insufficient"
+        result["reason"] = "confounded: the arms ran under different harness setups; a gain is not credited"
+    result.update(cost=cost, wall=wall, label=label, applied_guardrails=applied_counts,
                   guardrails=evaluate_guardrails(base.get("guardrails") or guardrail_counts([], {}, phase),
                                                  applied_counts))
     return result
