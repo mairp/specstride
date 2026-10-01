@@ -366,7 +366,7 @@ ensure_long_job() {
   # unrelated, long-past run silently satisfy a brand-new run's same-numbered
   # attempt — the new run then reasons over that OLD run's stale/incomplete
   # evidence and never launches its own job at all. Confirmed live
-  # (2026-08-30, ainetops-demo): a `.done` marker written for one run's
+  # (2026-08-30, project C): a `.done` marker written for one run's
   # phase8-attempt1 silently suppressed a wholly different, later run's
   # phase8-attempt1 from ever launching, so the proposer worked from a stale,
   # mid-idempotence-check cycles.run.log left over from a run stopped hours
@@ -447,7 +447,7 @@ ensure_long_job() {
 #  deliberately outlives this process) holds that flock forever, so killing
 #  the orchestrator does not release the lock while the job is still running:
 #  a relaunch then fails with "another run holds the lock" even though no
-#  orchestrator is alive. Confirmed live (2026-08-30, ainetops-demo). Close
+#  orchestrator is alive. Confirmed live (2026-08-30, project C). Close
 #  ONLY this subshell's copy of the fd (a subshell's fd table is independent
 #  after fork, so this cannot affect the holder's own open lock) before
 #  backgrounding the job. `eval` is required: `exec $LOCK_FD>&-` is a single
@@ -477,7 +477,7 @@ specstride_launch_owned_job() {
 #  long_job_status_line — tell the agent the truth about its long job so it
 #  never has to burn a whole pass discovering it
 #
-#  Confirmed live (2026-08-31, ainetops-demo phase 8): once a long job is
+#  Confirmed live (2026-08-31, project C phase 8): once a long job is
 #  correctly launched detached, it no longer NEEDS a giant per-pass timeout —
 #  the job keeps running whether the pass is 20 minutes or 3 hours. But the
 #  proposer had no way to KNOW that, so it kept treating "the job isn't done

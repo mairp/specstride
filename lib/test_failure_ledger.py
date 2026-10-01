@@ -1,6 +1,6 @@
 """The failure ledger: every failure in a yielded job's whole log, NEW vs RECURRING.
 
-Pinned on the agentic-netops-srl 004 phase-15 incident (2026-09-25/27): a
+Pinned on the project A 004 phase-15 incident (2026-09-25/27): a
 failure printed in the middle of a 20-hour job log (`lab-acl` never created) was
 reported by two consecutive jobs and fixed by neither resuming pass, because the
 resume prompt only showed the log's head and tail.

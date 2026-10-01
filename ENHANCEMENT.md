@@ -2,7 +2,7 @@
 
 Status as of 2026-07-25. All PENDING items below are now done and functionally
 verified (see "VERIFICATION RESULTS"). The approved plan lives at
-`/root/.claude/plans/still-the-observability-at-hidden-popcorn.md`.
+an internal plan.
 
 ## Goal (recap)
 
@@ -198,7 +198,7 @@ the `--quiet` and `--mode plain` piped paths hit it).
 
 Status 2026-07-26. Adds OpenTelemetry as a second, independent telemetry backend
 alongside Loki. Approved plan:
-`/root/.claude/plans/migrate-the-loki-to-concurrent-brook.md`.
+an internal plan.
 
 ## Goal
 
