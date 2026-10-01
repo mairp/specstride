@@ -107,7 +107,7 @@ BYTES_PER_TOKEN = 3.18            # measured on this fleet's actual prompts (see
 # ARE the real, authoritative ceiling for those two providers:
 #   ~/llama-swap/config.yaml       — qwen3.8-27b: 229,376, the MEASURED maximum
 #                                        that loads on this host's 3090 (ctx sweep log).
-#   /root/cc-compass-shim/.env          — QWEN_CTX_MAP, the ceiling every harness on
+#   ~/cc-compass-shim/.env          — QWEN_CTX_MAP, the ceiling every harness on
 #                                        this host reconciles against for muse/nemotron/
 #                                        auto (131,072 each); gpt-5*:300,000 (the
 #                                        SHIM's own enforced guard for a dsh/bebop

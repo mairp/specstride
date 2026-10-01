@@ -1268,7 +1268,7 @@ def test_spec_dir_relative_citation_grounds_the_file():
 def test_brace_shorthand_citation_grounds_each_file():
     """`sweep-{night,daylight}.json` cites two sibling artefacts. Taken literally
     the token exists nowhere and both real files read MISSING (project B
-     003 phase 5, 2026-09-12: 25 false MISSING lines, one rejection).
+    003 phase 5, 2026-09-12: 25 false MISSING lines, one rejection).
     Each expansion must be grounded on its own; a member that is truly absent
     still reads MISSING."""
     with tempfile.TemporaryDirectory() as d:
