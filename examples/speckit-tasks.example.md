@@ -15,7 +15,7 @@ becomes a required deliverable the critic gates on. Run it with:
 
 ```bash
 mkdir -p /tmp/specstride-speckit && cp examples/speckit-tasks.example.md /tmp/specstride-speckit/tasks.md
-./specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md
+./specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md --verification off
 # format is auto-detected (a file named tasks.md → speckit-tasks); force it with
 #   --spec-format speckit-tasks   or   SPECSTRIDE_SPEC_FORMAT=speckit-tasks
 ```

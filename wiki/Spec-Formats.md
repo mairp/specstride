@@ -41,7 +41,7 @@ Runnable example: [`examples/speckit-tasks.example.md`](../examples/speckit-task
 
 ```bash
 mkdir -p /tmp/specstride-speckit && cp examples/speckit-tasks.example.md /tmp/specstride-speckit/tasks.md
-specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md
+specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md --verification off
 ```
 
 ## `openspec-change`
