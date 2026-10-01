@@ -158,6 +158,16 @@ workdir's `.claude/` while a plugin is enabled; phase commits run `git add -A`) 
 `concurrent_claude_session` (another live Claude Code process with hooks or plugins in the
 same workdir, whose writes the reverse guard can't tell from the proposer's).
 
+`specstride doctor` runs the same checks on demand, before a launch, and prints the harness a
+`claude` pass would get.
+
+A pinned child still reports two built-in plugins in `init.plugins`: `cc-plugin-agents-md` and
+`cc-plugin-telemetry`. They are left on deliberately (#113). With them switched off
+(`enabledPlugins: {"…@builtin": false}`), nothing observable changed on claude 2.1.286: a canary
+in the workdir's `AGENTS.md` stayed out of the child's context, and the OTEL metrics export
+reached the collector either way. Their names are CLI internals, and `harness_config` records
+them in every pass's fingerprint.
+
 `--proposer-inherit-plugins` / `SPECSTRIDE_PROPOSER_INHERIT_PLUGINS=1` turns pinning off.
 
 ## Privacy controls
