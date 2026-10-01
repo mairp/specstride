@@ -97,21 +97,34 @@ and every run's exit print each active decision's latest evaluation.
 Every `proposer_cap` records its `arm` (`applied` while a decision is in effect, even one equal to
 the default, else `baseline`); arms are compared before/after, never alternated. With the layer
 on, the orchestrator brackets each proposer pass and emits `events_tampered` if the pass
-shortened or rewrote bytes of `events.jsonl`, `applied.json` or `phase-<N>.json` that predated
-it; such a run is excluded from every evaluation. Appends are normal and not flagged.
+shortened or rewrote bytes of `events.jsonl` that predated it (appends there are normal), or
+changed `applied.json` or `phase-<N>.json` in any way: created, appended to, rewritten or
+deleted. Only `specstride learn` and the orchestrator between passes write those two, so any
+change during a pass is a forged decision or observation. Such a run is excluded from every
+evaluation.
 
 **Harness confounding.** A `claude` proposer pass records a `harness_config` event taken from the
 child's own `init` record, with a `fingerprint` of its plugins, MCP servers, skills, slash
 commands and setting sources. The baseline stores the fingerprints its samples ran under, and
 the evaluation reports `confounded: true` when the two arms together, or either arm on its own,
 span more than one fingerprint. It reports `null` when either side recorded none (older runs,
-non-claude backends). The flag is printed as `(confounded: harness changed)`. It never changes
-the label or the guardrails. A run that let the child inherit the operator's plugins
+non-claude backends). The flag is printed as `(confounded: harness changed)`. A confounded
+`helped` becomes `insufficient` (a harness change can explain the gain, so it is never
+credited); a confounded `regressed` keeps its label, since reverting only moves a knob toward
+its default. The guardrails are unchanged. Like the backend label, the newest source run's
+fingerprint selects the baseline: once any source run is fingerprinted, runs under another
+fingerprint, or none, are left out of it. A run that let the child inherit the operator's plugins
 (`--proposer-inherit-plugins`, marked `inherit_plugins` on `run_start` and `harness_config`) is
 excluded from both arms like a tampered one: a self-learning plugin is a second, unreviewed
 learning channel, and its learned-skill drift does not show in the fingerprint. Baselines
 recorded before this change carry no fingerprint and may have run with such a plugin, so collect
-at least 6 fresh pinned baseline passes for a phase before its first `--apply`.
+at least 6 fresh pinned baseline passes for a phase before its first `--apply`; the baseline
+filter above enforces it, leaving the decision `insufficient` until they exist.
+
+There is no per-pass detector for changes to the workdir's own context files (`.claude/skills`,
+`.claude/settings*.json`, `CLAUDE.md`). A pinned child (`--setting-sources ""`) reads none of
+them, and its `harness_config` records that per pass, so such a change cannot reach it; the only
+mode that reads them, `--proposer-inherit-plugins`, is already excluded from evaluation.
 
 ## Under mixture-of-loops: who decides what
 

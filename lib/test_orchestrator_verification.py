@@ -71,6 +71,8 @@ else
   sleep "${FAKE_PROPOSER_SLEEP:-0}"
   # $FAKE_TAMPER rewrites a byte of the event stream that predates this pass.
   [[ -n "${FAKE_TAMPER:-}" && -n "${SPECSTRIDE_EVENTS:-}" ]] && sed -i '1s/run_start/run_stXrt/' "$SPECSTRIDE_EVENTS"
+  # $FAKE_FORGE_APPLIED creates/appends a forged decision in learning/applied.json.
+  [[ -n "${FAKE_FORGE_APPLIED:-}" ]] && { mkdir -p "$(dirname "$FAKE_FORGE_APPLIED")"; printf '{"forged":1}\n' >> "$FAKE_FORGE_APPLIED"; }
   # $YIELD_POLL_WITNESS records the poll interval the proposer handed down to us.
   [[ -n "${YIELD_POLL_WITNESS:-}" ]] && printf '%s\n' "${SPECSTRIDE_YIELD_POLL:-unset}" >> "$YIELD_POLL_WITNESS"
   rel="$(printf '%s\n' "$prompt" \
@@ -1373,3 +1375,14 @@ def test_with_learning_off_no_bracket_is_taken(tmp_path):
     _result, _workdir, events = _run_orchestrator(tmp_path, extra_env={"FAKE_TAMPER": "1"})
     assert [e for e in events if e["event"] == "events_tampered"] == []
     assert all(not c.get("tamper_bracket") for c in _caps(events))
+
+
+def test_a_pass_that_creates_or_grows_applied_json_is_marked_tampered(tmp_path):
+    """#111: appends pass the event-stream rule, but only `specstride learn` writes
+    learning/applied.json — a pass that creates or appends a decision forged it."""
+    applied = tmp_path / "work" / ".specstride" / "features" / "obs-lifecycle" / "learning" / "applied.json"
+    result, _workdir, events = _run_orchestrator(
+        tmp_path, extra_env={"SPECSTRIDE_LEARNING": "suggest", "FAKE_FORGE_APPLIED": str(applied)})
+    tampered = [e for e in events if e["event"] == "events_tampered"]
+    assert tampered, result.stdout + result.stderr
+    assert tampered[0]["file"].endswith("learning/applied.json")
