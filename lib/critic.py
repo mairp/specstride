@@ -177,6 +177,33 @@ _CODEX_MODEL_CONTEXT_TOKENS = {
 }
 
 
+def _dsh_critic_model_ref(model_ref=None):
+    """The dsh critic's `provider/model` (or bare model) ref, resolved the ONE way the
+    call does it: a `dsh:<ref>` qualifier, else SPECSTRIDE_DSH_CRITIC_MODEL, else
+    SPECSTRIDE_DSH_MODEL. Empty when none is set (dsh then uses its own default)."""
+    return (model_ref or os.environ.get("SPECSTRIDE_DSH_CRITIC_MODEL")
+            or os.environ.get("SPECSTRIDE_DSH_MODEL") or "")
+
+
+def critic_model(provider):
+    """The model a critic call for `provider` uses, or None when critic.py cannot see
+    it (Prime, an unset dsh model). Prompt sizing and the call share this resolver so
+    they cannot drift apart (#110: a plain `--critic dsh` used to be sized for the
+    98304-token default while it called SPECSTRIDE_DSH_CRITIC_MODEL)."""
+    if provider == "claude":
+        return os.environ.get("SPECSTRIDE_CLAUDE_CRITIC_MODEL", "claude-opus-4-8")
+    if provider == "codex":
+        return os.environ.get("SPECSTRIDE_CODEX_CRITIC_MODEL", "gpt-5")
+    if provider == "dsh" or provider.startswith("dsh:"):
+        return _dsh_critic_model_ref(provider.partition(":")[2]) or None
+    if provider == "bebop":
+        # the http route names SPECSTRIDE_BEBOP_CRITIC_MODEL (a bare `compass` gateway
+        # has no model of its own and is refused there); the shell route runs the backend
+        return (os.environ.get("SPECSTRIDE_BEBOP_CRITIC_MODEL")
+                or os.environ.get("SPECSTRIDE_BEBOP_BACKEND", "compass"))
+    return None
+
+
 def _critic_context_tokens(provider):
     """The critic backend's real context window, in tokens. SPECSTRIDE_CRITIC_CONTEXT_TOKENS
     always wins when set — it is the only correct answer for a host-specific model these
@@ -189,23 +216,19 @@ def _critic_context_tokens(provider):
             return int(override)
         except ValueError:
             warn("SPECSTRIDE_CRITIC_CONTEXT_TOKENS=%r is not an integer; ignoring" % override)
+    model = critic_model(provider)
     if provider == "claude":
-        model = os.environ.get("SPECSTRIDE_CLAUDE_CRITIC_MODEL", "claude-opus-4-8")
         # fallback = Haiku 4.5's window, the smallest in the current Claude lineup —
         # safer than assuming an unrecognized future model matches the 1M majority.
         return _CLAUDE_MODEL_CONTEXT_TOKENS.get(model, 200000)
     if provider == "codex":
-        model = os.environ.get("SPECSTRIDE_CODEX_CRITIC_MODEL", "gpt-5")
         # fallback: a conservative modern-API floor, well under verified "gpt-5"
         # (400,000) — an unrecognized model name could be an older/smaller one.
         return _CODEX_MODEL_CONTEXT_TOKENS.get(model, 128000)
     if provider == "dsh" or provider.startswith("dsh:"):
-        model_ref = provider.partition(":")[2] if provider.startswith("dsh:") else ""
-        model = model_ref.rpartition("/")[2] if "/" in model_ref else model_ref
+        model = (model or "").rpartition("/")[2]
         return _LOCAL_MODEL_CONTEXT_TOKENS.get(model, _DEFAULT_CONTEXT_TOKENS)
     if provider == "bebop":
-        backend = os.environ.get("SPECSTRIDE_BEBOP_BACKEND", "compass")
-        model = os.environ.get("SPECSTRIDE_BEBOP_CRITIC_MODEL") or backend
         return _LOCAL_MODEL_CONTEXT_TOKENS.get(model, _DEFAULT_CONTEXT_TOKENS)
     # prime / prime:<variant> — the backing model is never visible from critic.py
     # (call_prime_shell takes no model argument), so there is nothing to key a table
@@ -2148,8 +2171,7 @@ def call_dsh_shell(prompt, timeout, workdir=None, model_ref=None):
     # The tool-disabling patch above is pure composition, so --patch is the right
     # layer for it. The model selection is not: it must go in the settings layer.
     overlay_home = _dsh_home_overlay(
-        model_ref or os.environ.get("SPECSTRIDE_DSH_CRITIC_MODEL")
-        or os.environ.get("SPECSTRIDE_DSH_MODEL"),
+        _dsh_critic_model_ref(model_ref) or None,
         os.environ.get("SPECSTRIDE_DSH_CRITIC_PROVIDER")
         or os.environ.get("SPECSTRIDE_DSH_PROVIDER"),
     )
@@ -2765,6 +2787,12 @@ def main():
     if budget_notes:
         warn("critic prompt trimmed to fit the %d-token window: %s"
              % (_critic_context_tokens(args.provider), "; ".join(budget_notes)))
+        if any(note.startswith("STILL OVER") for note in budget_notes):
+            # Grounding was squeezed to its floor and the prompt still doesn't fit: the
+            # critic will reject on missing grounding, not on the work (#110).
+            emit(events_path, "critic_over_budget", phase=n, attempt=args.attempt,
+                 provider=args.provider, model=critic_model(args.provider) or "",
+                 window=_critic_context_tokens(args.provider), notes="; ".join(budget_notes))
 
     if args.debug:
         with open(os.path.join(debug_dir, "critic-prompt.phase%d.att%d.txt" % (n, args.attempt)), "w") as fh:
@@ -2772,6 +2800,7 @@ def main():
         warn("[debug] nonce=%s provider=%s prompt bytes=%d" % (nonce, args.provider, len(prompt)))
 
     emit(events_path, "critic_start", phase=n, attempt=args.attempt, provider=args.provider,
+         model=critic_model(args.provider) or "", window=_critic_context_tokens(args.provider),
          **_write_prompt_file(feature_dir, n, prompt))
     # Announce the critic's capability mode so an operator can distinguish a
     # structured (JSON-mode) Prime critic from a raw-text fallback (T060/SC-012).
@@ -2913,5 +2942,14 @@ def _finish_reject(gates_dir, n, title, args, nonce, prompt, reply, verdict, det
     sys.exit(10)
 
 
+def describe(provider):
+    """`model<TAB>window` for the run header: what the critic will call and the window
+    its prompts are sized for (#110 — a mismatch used to show only in trim lines)."""
+    return "%s\t%d" % (critic_model(provider) or "?", _critic_context_tokens(provider))
+
+
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--describe"]:
+        print(describe(sys.argv[2] if len(sys.argv) > 2 else os.environ.get("SPECSTRIDE_CRITIC", "claude")))
+        sys.exit(0)
     main()
