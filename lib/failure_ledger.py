@@ -4,7 +4,7 @@
 The yield resume block shows a job's log as head + tail with the middle elided.
 That is the right default for reading a log, and the wrong one for acting on it:
 a 20-hour live chain prints its failures in the middle, and the agent that
-resumes from it only sees what survived the elision. In agentic-netops-srl 004
+resumes from it only sees what survived the elision. In project A 004
 phase 15 (2026-09-25/27), one quickstart failure (`lab-acl` never created) was
 reported by two consecutive walks. Neither resuming pass fixed it, and it was
 only acted on once a human pointed at it.

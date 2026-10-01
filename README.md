@@ -351,14 +351,14 @@ run against Lisa is:
 
 ```bash
 SPECSTRIDE_AGENT_STREAM=true SPECSTRIDE_LIVE_DETAIL=full \
-/home/marlon.lopez/specstride/specstride run \
-  --workdir /home/marlon.lopez/lisa \
-  --specs /home/marlon.lopez/lisa/specs/specification-bundle-v2/tasks.md \
+$SPECSTRIDE_HOME/specstride run \
+  --workdir ~/projects/app \
+  --specs ~/projects/app/specs/specification-bundle-v2/tasks.md \
   --spec-format speckit-tasks \
   --feature specification-bundle-v2 \
   --verification required \
-  --test-plan /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/TEST_PLAN.md \
-  --generate-tests /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/generated \
+  --test-plan ~/projects/app/testautomation/specification-bundle-v2/TEST_PLAN.md \
+  --generate-tests ~/projects/app/testautomation/specification-bundle-v2/generated \
   --live \
   --debug \
   --telemetry \
@@ -371,13 +371,13 @@ Planning can also be run independently, before any loop:
 
 ```bash
 /usr/bin/python3 \
-  /home/marlon.lopez/specstride/lib/verification_plan.py create \
-  --workdir /home/marlon.lopez/lisa \
-  --specs /home/marlon.lopez/lisa/specs/specification-bundle-v2/tasks.md \
+  $SPECSTRIDE_HOME/lib/verification_plan.py create \
+  --workdir ~/projects/app \
+  --specs ~/projects/app/specs/specification-bundle-v2/tasks.md \
   --format speckit-tasks \
-  --output /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/TEST_PLAN.md \
-  --json-output /home/marlon.lopez/lisa/.specstride/verification/verification-plan.json \
-  --generate-tests /home/marlon.lopez/lisa/testautomation/specification-bundle-v2/generated \
+  --output ~/projects/app/testautomation/specification-bundle-v2/TEST_PLAN.md \
+  --json-output ~/projects/app/.specstride/verification/verification-plan.json \
+  --generate-tests ~/projects/app/testautomation/specification-bundle-v2/generated \
   --required
 ```
 
@@ -1353,7 +1353,7 @@ guarded, all cheap:
   | idle | no cpu-time growth anywhere in the pass's process tree — a genuinely hung pass, not a slow one (a busy `docker exec` child counts as progress) | `--idle-timeout` / `SPECSTRIDE_PROPOSER_IDLE_TIMEOUT` (900s) |
   | disk stall | nothing created or modified under the workdir, however busy the tree is (`.git`/`.specstride`/`node_modules`/`.venv` excluded — the harness and a detached long job write there on their own) | `--progress-timeout` / `SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT` (1800s, 0 = off) |
   | repetition | the same tool call (identical tool + target) issued N times in one pass **and still the agent's most recent action** — a retry loop, invisible to any cpu or wall-clock measure. A pass that retried something and moved on is untouched | `--repeat-limit` / `SPECSTRIDE_PROPOSER_REPEAT_LIMIT` (5, 0 = off) |
-  | repetition, process level | the same child **command line** re-spawned N times in one pass — the same detector one level down, so it also covers backends that emit no tool events at all (`dsh`, `codex`). Counted per **agent tool call x command line**: an agent that OCRs twelve screenshots runs one command line twelve times, once per image, from twelve different tool calls, and that is twelve pieces of work, not a retry loop (semantic-router-sovereign 003 phase 14, 2026-09-13 — a pass killed on the twelfth image). The same command line re-spawned under one tool call is still a retry loop and is still killed. `SPECSTRIDE_PROPOSER_REPEAT_IGNORE` is an extended regex of command lines never counted; its default covers the usual test runners, linters and type checkers (`pytest`, `ruff`, `mypy`, `go test`, `make test`, …) plus the per-file batch tools that have one command line and N inputs by construction (`tesseract`, `convert`, `magick`, `compare`, `ffmpeg`, `pdftotext`, `identify`, anchored at the command name). Set it to `` (empty) to count everything except `sleep` | `--repeat-limit` / `SPECSTRIDE_PROPOSER_REPEAT_LIMIT` (5, 0 = off), `SPECSTRIDE_PROPOSER_REPEAT_IGNORE` |
+  | repetition, process level | the same child **command line** re-spawned N times in one pass — the same detector one level down, so it also covers backends that emit no tool events at all (`dsh`, `codex`). Counted per **agent tool call x command line**: an agent that OCRs twelve screenshots runs one command line twelve times, once per image, from twelve different tool calls, and that is twelve pieces of work, not a retry loop (project B 003 phase 14, 2026-09-13 — a pass killed on the twelfth image). The same command line re-spawned under one tool call is still a retry loop and is still killed. `SPECSTRIDE_PROPOSER_REPEAT_IGNORE` is an extended regex of command lines never counted; its default covers the usual test runners, linters and type checkers (`pytest`, `ruff`, `mypy`, `go test`, `make test`, …) plus the per-file batch tools that have one command line and N inputs by construction (`tesseract`, `convert`, `magick`, `compare`, `ffmpeg`, `pdftotext`, `identify`, anchored at the command name). Set it to `` (empty) to count everything except `sleep` | `--repeat-limit` / `SPECSTRIDE_PROPOSER_REPEAT_LIMIT` (5, 0 = off), `SPECSTRIDE_PROPOSER_REPEAT_IGNORE` |
 - **Yield/resume — a pass may end cleanly while its job keeps running.** A pass
   boundary and a measurement boundary are independent. When a phase's evidence
   needs a job that cannot finish inside one pass, the proposer writes one JSON

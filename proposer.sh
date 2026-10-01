@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # proposer.sh — the "Ralph" role: a simplified headless coding-agent loop.
 #
-# A trimmed descendant of /root/utilities/ralph_loop.sh. It runs a FRESH headless
+# A trimmed descendant of an earlier ralph_loop.sh. It runs a FRESH headless
 # pass of a coding-agent CLI per iteration until the phase's evidence file appears,
 # then exits. Durable state lives on disk (gate files in .specstride/gates/ +
 # .specstride/PROGRESS.md), not in context.
@@ -165,7 +165,7 @@ TIMEOUT="${SPECSTRIDE_PROPOSER_TIMEOUT:-1800}"
 IDLE_TIMEOUT="${SPECSTRIDE_PROPOSER_IDLE_TIMEOUT:-900}"
 # PROGRESS_TIMEOUT / REPEAT_LIMIT are the futility detectors. IDLE_TIMEOUT above
 # only sees *idleness*; an agent stuck in a fast retry loop (confirmed live
-# 2026-08-31, ainetops-demo phase 8: ten failed builds of the same target, the
+# 2026-08-31, project C phase 8: ten failed builds of the same target, the
 # last five with an identical `make` error minutes apart) is maximally busy by
 # cpu measure while producing nothing, so the idle watchdog never trips and the
 # pass runs to the hard cap — which then throws the whole hour away. These two
@@ -176,7 +176,7 @@ PROGRESS_TIMEOUT="${SPECSTRIDE_PROPOSER_PROGRESS_TIMEOUT:-1800}"
 REPEAT_LIMIT="${SPECSTRIDE_PROPOSER_REPEAT_LIMIT:-12}"
 # Command lines the process-level repetition counter ignores (extended regex,
 # empty = none). A test-driven pass legitimately re-runs its suite many times
-# between edits (2026-09-08, semantic-router-sovereign phase 3: pytest x5 in 23
+# between edits (2026-09-08, project B phase 3: pytest x5 in 23
 # minutes of landing work was killed as a stall). Set it to the project's test
 # runners and linters, e.g. 'pytest|ruff|mypy'. The tool-level check still runs.
 # The default covers the usual test runners, linters and type checkers, plus the
@@ -754,7 +754,7 @@ PY
 #  `timeout` cannot distinguish "still legitimately working" from "hung" — it
 #  only knows duration, which is exactly the thing that varies per project,
 #  per phase, per model speed, with no value that fits all of them (confirmed
-#  live 2026-08-31, ainetops-demo: three consecutive passes each ran the FULL
+#  live 2026-08-31, project C: three consecutive passes each ran the FULL
 #  3-hour --timeout with zero progress; raising the number twice already this
 #  session did not and could not fix it, because a bigger number just delays
 #  the same failure). This function tracks cpu-time-seconds summed across the
@@ -769,7 +769,7 @@ PY
 #
 #  CPU progress alone is not enough: idleness and futility are different things,
 #  and this loop could only see the first. Confirmed live (2026-08-31,
-#  ainetops-demo phase 8): with the long job already DONE and no evidence
+#  project C phase 8): with the long job already DONE and no evidence
 #  written, the agent spent six consecutive passes rebuilding one binary — ten
 #  attempts, the last five failing with an identical `make` error minutes apart.
 #  That is maximally "active" by cpu measure, so the idle watchdog never tripped
@@ -841,7 +841,7 @@ _proc_tree_cmdlines() {
 # command line is NOT identical work: an agent reading twelve screenshots runs
 # `tesseract - - --psm 6` twelve times, once per image, each image piped on
 # stdin from a DIFFERENT tool call — twelve distinct pieces of work sharing one
-# argv (semantic-router-sovereign 003 phase 14, 2026-09-13: the pass was killed
+# argv (project B 003 phase 14, 2026-09-13: the pass was killed
 # as `repeat_stall` on the twelfth image; the event-level detector below, which
 # keys on the tool call, was not fooled). The count is therefore kept per
 # <tool call> x <argv>: twelve identical argv under twelve distinct tool calls
@@ -931,7 +931,7 @@ try:
                 continue
             # A file-mutating tool's target is only the path: five distinct edits
             # to one file look identical here, and editing one file repeatedly is
-            # how implementation work lands (2026-09-08, semantic-router-sovereign
+            # how implementation work lands (2026-09-08, project B
             # phase 4: seven Edits to selection.py in 6 minutes killed the pass).
             # A pass that edits without producing anything is the disk-progress
             # watchdog's case, not this one.
@@ -1040,7 +1040,7 @@ run_with_idle_watchdog() {
   # command itself carries a redirection, so a caller that piped into this
   # function never reached the agent. SPECSTRIDE_STDIN_FILE names a file to feed the
   # command instead: the claude backend uses it for the prompt, which as one argv
-  # string hits the kernel's 128 KiB per-argument limit (semantic-router-sovereign
+  # string hits the kernel's 128 KiB per-argument limit (project B
   # phase 17, 2026-09-08: 151 KB prompt, "Argument list too long" every pass).
   if [[ -n "${SPECSTRIDE_STDIN_FILE:-}" ]]; then
     "$@" < "$SPECSTRIDE_STDIN_FILE" &
@@ -1197,7 +1197,7 @@ EOF2
 #  failure: the pass was killed at the ceiling, counted as an agent error, its
 #  cost went unrecorded, and — worst — the kill took the measurement with it,
 #  because a job the agent started from its own Bash tool lives in the pass's
-#  process tree (semantic-router-sovereign phase 15, 2026-09-11: three passes,
+#  process tree (project B phase 15, 2026-09-11: three passes,
 #  4.5 hours, 79-85% of it literal `sleep`). The agent's own response was to
 #  hand-roll `setsid nohup` wrappers so its work would outlive the pass — a
 #  re-implementation of a primitive Specstride already had but could not express.
@@ -1420,7 +1420,7 @@ if kind == "grep":
     target = resolve(predicate_path)
     # MULTILINE: the natural way to wait for a line is "^DONE" / "^DECISION: APPROVED",
     # and without it `^` matches only the start of the WHOLE file, so a marker on any
-    # later line never resumed the yield (agentic-netops-srl 004 phase 16, 2026-09-29:
+    # later line never resumed the yield (project A 004 phase 16, 2026-09-29:
     # a "^DECISION: APPROVED" wait stayed blocked until the line was moved to line 1).
     pattern = re.compile(resume_when["pattern"], re.MULTILINE)
     try:
@@ -1925,7 +1925,7 @@ consec_err=0
 # it produced nothing, its tree is dead — and belong on the error breaker above.
 # hard_cap says only that the WORK DID NOT FIT the pass: the agent may have been
 # perfectly productive right up to the ceiling. Observed 2026-09-11
-# (semantic-router-sovereign phase 15): three passes killed at the 90-minute cap
+# (project B phase 15): three passes killed at the 90-minute cap
 # while running a 93-minute live suite, each landing in the error counter, and
 # the run continued only because an operator had already set
 # SPECSTRIDE_PROPOSER_MAX_ERRORS=30 to work around exactly this — which also
@@ -1948,7 +1948,7 @@ watchdog_kill_class() {
 # Consecutive-NO-PROGRESS breaker. The error breaker above keys on `is_error`, so a
 # pass that completes cleanly, reports success, and changes nothing resets it. That is
 # exactly what a phase blocked on an operator decision looks like: observed 2026-09-10
-# on semantic-router-sovereign phase 6, where the agent correctly refused to break a
+# on project B phase 6, where the agent correctly refused to break a
 # spec rule (FR-243), wrote its reasoning, and asked for a decision -- then the loop
 # re-ran it every ~60s for all 20 passes and halted with the generic "max-iter" message.
 # Twenty passes of nothing is not information; three is. Reuses _disk_progress_since,
@@ -1960,7 +1960,7 @@ consec_noprogress=0
 # yield, is almost always an agent ending its turn to WAIT on a background job. None
 # of the breakers sees it: it is not an error, it is not killed, and the job it waits
 # on keeps writing files, so the no-progress breaker counts it as progress. Each one
-# still burns an iteration (agentic-netops-srl 004 phase 15, 2026-09-25: passes 9-11
+# still burns an iteration (project A 004 phase 15, 2026-09-25: passes 9-11
 # and 13-17 lasted ~30 s each, 19 of 30 iterations gone before the agent was told
 # about the yield by hand). After SPECSTRIDE_SHORT_PASS_NUDGE_AFTER such passes in a
 # row, the next pass is told, in its own prompt, to yield instead. This is advice, not
@@ -2100,7 +2100,7 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   # Did the watchdog end this pass? A killed pass writes no agent_result, so the
   # legacy is_error tail-scan below reads it as a clean no-evidence pass and RESETS
   # the breaker — which is how six consecutive hard-cap kills (2026-08-31,
-  # ainetops-demo phase 8) burned 6.5 hours without the loop ever noticing. A kill
+  # project C phase 8) burned 6.5 hours without the loop ever noticing. A kill
   # is an erroring pass: count it, so N in a row halts and surfaces to the operator
   # instead of repeating.
   pass_kill_reason=""; pass_kill_elapsed=""; pass_kill_class=""

@@ -44,7 +44,7 @@ import verdict_pins  # noqa: E402  (W9 — per-criterion verdict pinning)
 GROUNDING_MAX_FILES   = int(os.environ.get("SPECSTRIDE_GROUNDING_MAX_FILES", 80))
                                    # hard cap on PRESENCE LINES (one per cited path).
                                    # Env-overridable: a 45-task polish phase cited 236
-                                   # paths (semantic-router-sovereign phase 17, 2026-09-08)
+                                   # paths (project B phase 17, 2026-09-08)
                                    # and 156 of them were never shown.
                                    # Must exceed the artifact count of the busiest
                                    # phase (Phase 1 cites ~65) so no cited path is
@@ -105,9 +105,9 @@ BYTES_PER_TOKEN = 3.18            # measured on this fleet's actual prompts (see
 # `dsh`/`bebop` genuinely route through this fleet's own local infrastructure
 # (llama-swap / cc-compass-shim), so that infra's own already-reconciled numbers
 # ARE the real, authoritative ceiling for those two providers:
-#   /root/llama-swap/config.yaml       — qwen3.8-27b: 229,376, the MEASURED maximum
+#   ~/llama-swap/config.yaml       — qwen3.8-27b: 229,376, the MEASURED maximum
 #                                        that loads on this host's 3090 (ctx sweep log).
-#   /root/cc-compass-shim/.env          — QWEN_CTX_MAP, the ceiling every harness on
+#   ~/cc-compass-shim/.env          — QWEN_CTX_MAP, the ceiling every harness on
 #                                        this host reconciles against for muse/nemotron/
 #                                        auto (131,072 each); gpt-5*:300,000 (the
 #                                        SHIM's own enforced guard for a dsh/bebop
@@ -121,7 +121,7 @@ BYTES_PER_TOKEN = 3.18            # measured on this fleet's actual prompts (see
 #                                        (CRITIC_BACKEND=dsh:compass-gpt5-high/gpt-5));
 #                                        QWEN_CTX=98304 is its own documented fallback
 #                                        for an unmapped model.
-#   /root/.dsh/settings.yaml            — glm-5.3-flash: contextWindow 128000 (GLM's
+#   ~/.dsh/settings.yaml            — glm-5.3-flash: contextWindow 128000 (GLM's
 #                                        declared standard window).
 _LOCAL_MODEL_CONTEXT_TOKENS = {
     "qwen3.8-27b": 229376, "qwen3.8-27b-q5": 229376, "qwen3.8-27b-q4": 229376,
@@ -130,11 +130,11 @@ _LOCAL_MODEL_CONTEXT_TOKENS = {
     "auto": 131072, "qwen-auto": 131072,
     "glm-5.3": 128000, "glm-5.3-flash": 128000,
     # W20a: 200000, NOT 300000. These reach Compass through this fleet's LiteLLM,
-    # and /root/.prime/agent/models.json — the config that route actually honours —
+    # and ~/.prime/agent/models.json — the config that route actually honours —
     # declares every one of them `"contextWindow": 200000`. At 300000 the scaled
     # grounding budget reaches ~491 KB and the call dies
     # `CONTEXT_WINDOW_EXCEEDED: pi-ai detected context overflow for model "gpt-5"`,
-    # which reads as MALFORMED and burns an attempt (semantic-router-sovereign
+    # which reads as MALFORMED and burns an attempt (project B
     # phase 2 attempt 3, 2026-09-10, once W20 made four large run notes groundable).
     # GROUNDING_TOTAL_CAP above was tuned against 200k and calls it "gpt-5's
     # window" in its own comment, so the table was contradicting the constant.
@@ -146,7 +146,7 @@ _DEFAULT_CONTEXT_TOKENS = 98304    # cc-compass-shim/.env's own QWEN_CTX fallbac
                                    # dsh/bebop model ref this table doesn't recognize.
 
 # `claude`/`codex` call the vendor APIs DIRECTLY (call_claude / call_openai_chat) --
-# NOT through this fleet's shim at all, so a number from /root/.prime/agent/models.json
+# NOT through this fleet's shim at all, so a number from ~/.prime/agent/models.json
 # or cc-compass-shim's QWEN_CTX_MAP is the WRONG source for these two (that number is
 # an internal operational ceiling Prime/Compass impose on themselves for a completely
 # different code path, not the vendor's real context window). First attempt at this
@@ -381,7 +381,7 @@ PATH_RE = re.compile(
 # Left on, the token failed to resolve and the snapshot printed "**MISSING** (does not
 # exist on disk)" for a file that was present, and the loose gap pass could not
 # resolve it either, so it was not reported as a tooling gap. Measured on
-# semantic-router-sovereign 002 (2026-09-11): such false MISSING lines in every
+# project B 002 (2026-09-11): such false MISSING lines in every
 # critic transcript from phase 2 on (41 in phase 4); phase 13 was REJECTED on one,
 # `conformance/runners/live/conftest.py:101`. The trailing-punctuation rstrip never
 # caught it because it strips characters, not the `:digits` run.
@@ -404,7 +404,7 @@ def _strip_line_suffix(cand):
 # W24: a brace shorthand names EVERY file it expands to. Proposers write
 # `runs/u2/sweep-{night,daylight}.json` or `contrast-table-{dark,light}.txt` for a
 # pair of sibling artefacts; taken literally the token exists nowhere and the
-# snapshot said MISSING for files that were all on disk (semantic-router-sovereign
+# snapshot said MISSING for files that were all on disk (project B
 # 003 phase 5, 2026-09-12: 25 false MISSING lines, one rejection). Expand each
 # `{a,b,…}` group — bounded, so a pathological citation cannot flood the snapshot.
 _BRACE_RE = re.compile(r'\{([^{}]*,[^{}]*)\}')
@@ -535,7 +535,7 @@ def grounding_search_dirs(gates_rel, workdir=None, specs_path=None):
     the natural way -- `contracts/live-runner.md`, `runs/us11-2026-09-11.md` --
     relative to that directory. The proposer's evidence copies the citation form,
     it resolves at neither the repo root nor the proof dirs, and a present file
-    reads MISSING. Observed 2026-09-11, semantic-router-sovereign 002 phase 13
+    reads MISSING. Observed 2026-09-11, project B 002 phase 13
     (F12 in the run's TROUBLESHOOTING.md). A spec outside the workdir adds nothing:
     grounding never resolves against a file the sandbox cannot see."""
     dirs = ["", os.path.join(gates_rel, "proofs"), gates_rel, "out"]
@@ -549,7 +549,7 @@ def grounding_search_dirs(gates_rel, workdir=None, specs_path=None):
         # component. A citation one directory deeper than the flat proofs/ layout was
         # therefore MISSING no matter how correct the file was.
         #
-        # Measured on ainetops-demo phase 8, 2026-09-03: `gates/proofs/
+        # Measured on project C phase 8, 2026-09-03: `gates/proofs/
         # tests.integration.log` resolved but `gates/proofs/cycles/provision-1.log`
         # did not, and the critic answered NEEDS-GROUNDING for 37 cycle artifacts that
         # were all present -- all 50 files of gates/proofs/cycles/ were on disk. This
@@ -749,7 +749,7 @@ def _member_hint(text, members):
 # `specs/002-extproc-data-path/runs/d0-2026-09-<dd>.md`, the Spec Kit spelling for
 # "a dated run note" — cited that path verbatim, the extractor resolved the literal
 # string `<dd>`, and every such criterion read MISSING no matter how complete the
-# work was. Confirmed live (2026-09-10, semantic-router-sovereign phase 2): the
+# work was. Confirmed live (2026-09-10, project B phase 2): the
 # critic rejected T322/T328/T339/T347 for four "missing" run notes while
 # d0-2026-09-09.md, d1-2026-09-10.md, d2-2026-09-10.md and d3-2026-09-10.md all sat
 # on disk, written that hour. Ten of those and the phase HALTs on a true criterion.
@@ -862,7 +862,7 @@ def _resolve_cited(p, workdir, search_dirs=None, members=None, hint=None):
     # drops the `cycles/` segment, so `gates/proofs/cycles/provision-1.log` (real,
     # on disk) is never checked; only `gates/proofs/provision-1.log` is, which
     # doesn't exist, so a genuinely-satisfied criterion reads MISSING forever.
-    # Confirmed live (2026-08-30, ainetops-demo phase 8): every `proofs/cycles/*`
+    # Confirmed live (2026-08-30, project C phase 8): every `proofs/cycles/*`
     # citation from tests/integration/cycles_runner.sh's own proof layout rejected
     # this way despite the files being present and complete.
     for d in search_dirs:
@@ -1255,7 +1255,7 @@ def grounding_section(section):
     render_phase_context() appends the cumulative gate's INHERITED obligations —
     earlier phases' items as compact one-liners, explicitly labelled "regression
     context ... already gated, not new work". Their titles carry backticked paths, so
-    extract_paths/extract_dirs grounded the ENTIRE feature: on ainetops-002 phase 6 the
+    extract_paths/extract_dirs grounded the ENTIRE feature: on project C 002 phase 6 the
     section yielded 90 paths and 29 directories for a gate judging 13 criteria, and the
     files those criteria actually name lost the budget competition. The unmet set then
     oscillated attempt to attempt (23,24,23,17,16,17,12,8,12) — the documented
@@ -1301,7 +1301,7 @@ def grounding_snapshot(paths, workdir, search_dirs=None, priority=None, anchors=
     # under `ui/`", "Port components into `ui/src/components/Chat/`") previously yielded
     # only a presence line — "directory, N entries" — so nothing inside was ever visible
     # and the critic had to answer NEEDS-GROUNDING for every file it needed. Observed
-    # 2026-09-02, ainetops-002 phase 6: 23 NEEDS-GROUNDING entries naming files that were
+    # 2026-09-02, project C 002 phase 6: 23 NEEDS-GROUNDING entries naming files that were
     # all present on disk, while the two criteria naming actual FILES were verified fine.
     # Expand a criterion-named directory into the files under it so the normal per-file
     # path (including whole-file emission, W15) applies. Build noise is skipped; the
@@ -1310,7 +1310,7 @@ def grounding_snapshot(paths, workdir, search_dirs=None, priority=None, anchors=
         expanded, extra_priority = [], set()
         # W16b: expansion must be bounded GLOBALLY and must skip over-broad
         # directories. The section the critic receives is not the phase slice — it
-        # carries the verification-plan obligations, so on ainetops-002 phase 6 it
+        # carries the verification-plan obligations, so on project C 002 phase 6 it
         # named 29 directories including `agents/` (a whole Python package). Expanding
         # each up to _GROUNDING_DIR_EXPAND_MAX produced ~1,160 candidates competing for
         # GROUNDING_MAX_FILES (80) presence slots, and crowded out the very ui/ files
@@ -1356,7 +1356,7 @@ def grounding_snapshot(paths, workdir, search_dirs=None, priority=None, anchors=
     # read by the critic: line-numbered excerpts the proposer staged for exactly the
     # criteria the feedback named. Order them first and treat them as priority so the
     # byte budget cannot elide them behind ordinary citations. Measured on
-    # semantic-router-sovereign phase 17 (2026-09-08): 45 slices, 189 KB, cited last
+    # project B phase 17 (2026-09-08): 45 slices, 189 KB, cited last
     # among 230 paths, every one "content excerpt omitted", four rejects in a row
     # each asking for the very slice that was on disk.
     proof_paths = [p for p in paths
@@ -1390,7 +1390,7 @@ def grounding_snapshot(paths, workdir, search_dirs=None, priority=None, anchors=
         if full is None and workdir and any(ch in p for ch in "*?["):
             # A wildcard citation (`examples/migrations/*.yaml`, a task's own path)
             # names every file it matches; taken literally it exists nowhere and the
-            # snapshot said MISSING for files that were all on disk (agentic-netops-srl
+            # snapshot said MISSING for files that were all on disk (project A
             # 004 phases 7 and 10, 2026-09-24: false rejections).
             matches = sorted(m for m in glob.glob(os.path.join(workdir, p))
                              if os.path.isfile(m))
@@ -1480,7 +1480,7 @@ def grounding_snapshot(paths, workdir, search_dirs=None, priority=None, anchors=
         # match (e.g. the spec says `GET /transport/config` while the code says
         # @app.get("/transport/config")) leaves that region unquoted and the critic
         # correctly reports NEEDS-GROUNDING for code that is present on disk.
-        # Observed 2026-09-02, ainetops-002 phase 4: two consecutive rejections naming
+        # Observed 2026-09-02, project C 002 phase 4: two consecutive rejections naming
         # the same 6 files (run-all.sh is 1,877 bytes — the entire file would have fit
         # several times over). Emitting the 19 phase-4 criterion-named files in full is
         # 170,720 bytes, inside GROUNDING_TOTAL_CAP.
@@ -1621,7 +1621,7 @@ def full_dump_snapshot(paths, workdir, search_dirs=None, members=None,
         truncated = len(data) > file_cap
         # W25: a binary file (font, image, archive) cited by a criterion must not be
         # dumped into the diagnostician prompt — a literal NUL poisons argv-based
-        # providers ("embedded null byte", semantic-router-sovereign 003 phase 10,
+        # providers ("embedded null byte", project B 003 phase 10,
         # 2026-09-13: the diagnostician died and the attempt ran without a hint).
         # Describe it, as grounding_snapshot already does.
         if b"\x00" in data[:8192]:
@@ -2621,7 +2621,7 @@ def main():
         # Empty priority does not merely lose ordering; it silently disables the two
         # mechanisms that make evidence verifiable: W15 whole-file emission is gated on
         # is_priority, and W17b halves the budget to GROUNDING_TOTAL_CAP // 2. Measured
-        # on ainetops-demo phase 8 (T079/T080, pure prose): 79 evidence-cited paths, 0
+        # on project C phase 8 (T079/T080, pure prose): 79 evidence-cited paths, 0
         # priority, 163,840-byte budget, whole-file emission off for every file. The
         # critic then answered NEEDS-GROUNDING for 15 artifacts that were all present on
         # disk -- provision-1/2/3.log, off-1/2/3.log, tests.integration/failure/traffic/

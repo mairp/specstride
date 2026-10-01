@@ -667,7 +667,7 @@ def spec_source_text(text):
     (``source.projection`` absent): the specification text as hashed for
     staleness, in which a ticked task checkbox
     (`- [x]`) reads as unticked. Spec Kit ticks tasks.md as work lands, which is
-    progress on the same spec, not a different one (semantic-router-sovereign
+    progress on the same spec, not a different one (project B
     phase 12, 2026-09-08: seven ticks made every gate report the plan stale)."""
     return _CHECKBOX_TICK.sub(r"\1[ ]", text)
 
@@ -712,7 +712,7 @@ def spec_projection(text, fmt, phases=None):
 
     The surrounding prose is deliberately NOT in here: a milestone closure map, a
     release-gate statement, a run note appended to the file. Phase 15 of
-    semantic-router-sovereign 002 (2026-09-11) had tasks whose own deliverable was
+    project B 002 (2026-09-11) had tasks whose own deliverable was
     rewriting the closure map inside tasks.md; the whole-file hash then refused the
     gate that the same phase's work had just earned, and no proposer attempt could
     ever clear it. A changed criterion, an added or removed task, a renamed or

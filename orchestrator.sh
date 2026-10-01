@@ -497,7 +497,7 @@ RUN_DIR="$FEATURE_DIR/runs/$SPECSTRIDE_RUN_ID"
 VERIFICATION_JSON="$RUN_DIR/verification/verification-plan.json"
 # The lock comes BEFORE the run directory, the workdir symlinks and last-run.conf:
 # a launch that loses the lock must leave no trace. Observed 2026-09-08 on
-# semantic-router-sovereign: a second `specstride run` exited 5 as designed but had
+# project B: a second `specstride run` exited 5 as designed but had
 # already retargeted .specstride/run.log and events.jsonl at its own empty run dir
 # and rewritten last-run.conf, so status/watch/tail went blank for the live run.
 mkdir -p "$STATE_DIR"
@@ -1460,7 +1460,7 @@ emit_evidence_contract() {
 #
 # Saying it out loud was not enough. The yield contract is appended LAST, so once
 # the unbudgeted parts of the prompt alone exceed the budget, it is the one block
-# that is always dropped (agentic-netops-srl 004, 2026-09-24/25: every phase from
+# that is always dropped (project A 004, 2026-09-24/25: every phase from
 # 5 on assembled 190-293 KB, so `yield_contract` was dropped every phase). The
 # agent never learned it could yield. In phase 15 it spent passes 9-17 ending
 # after ~30 s "to wait on the chain", 19 of 30 iterations. A protected block is
@@ -1654,7 +1654,7 @@ build_proposer_prompt() {
 # this script AND proposer.sh's own per-pass loop can call it -- calling it
 # only here, once per attempt before proposer.sh even starts, let a stale
 # .done marker starve an entire multi-hour attempt with no further chance to
-# launch (confirmed live 2026-08-30, ainetops-demo phase 8: two full 3h passes
+# launch (confirmed live 2026-08-30, project C phase 8: two full 3h passes
 # ran with no long job ever launched). See specstride-lib.sh for the full history.
 
 # ── resolve_proposer_timeout — this phase's pass ceiling, and where it came from
