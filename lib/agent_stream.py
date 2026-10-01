@@ -24,7 +24,16 @@ import specstride_env  # noqa: E402  (legacy env names map onto SPECSTRIDE_*)
 specstride_env.apply()
 
 
-TEXT_MAX = 160
+TEXT_MAX = 160   # agent_text in events.jsonl/Loki; trace spans get SPECSTRIDE_OTEL_TEXT_MAX
+
+
+def _span_text(text):
+    """Full agent text for the trace span only (redacted, capped at the trace cap)."""
+    try:
+        import ralph_otel_spans as spans
+        return spans.content_attrs("output.value", text, spans.text_max())
+    except Exception:  # noqa: BLE001 — spans are best-effort
+        return {}
 
 
 class EventSink:
@@ -149,6 +158,7 @@ class ClaudeAdapter:
                     "text": cleaned.value,
                     **cleaned.metadata(),
                 }))
+                outcome.span_content[len(outcome.events) - 1] = _span_text(text)
                 outcome.output.append(display.value)
         elif block_type == "tool_use":
             name = block.get("name", "?")
@@ -394,12 +404,12 @@ def main():
     last_terminal = {"value": None}
     malformed = {"flag": False}
 
-    def emit_event(event, **fields):
+    def emit_event(event, _span_content=None, **fields):
         # Fan-out writes locally (via sink.emit) AND ships to each configured sink;
         # with no sinks it degrades to a plain local write. Never double-writes.
         merged = {**fields, **common}
         if fanout:
-            fanout.emit(event, merged)
+            fanout.emit(event, merged, span_content=_span_content)
         else:
             sink.emit(event, **merged)
 
@@ -473,8 +483,9 @@ def main():
                 except Exception as error:  # noqa: BLE001 — degrade (T023)
                     handle_adapter_error(error)
                     continue
-            for event, fields in outcome.events:
-                emit_event(event, **fields)
+            span_content = getattr(outcome, "span_content", None) or {}
+            for index, (event, fields) in enumerate(outcome.events):
+                emit_event(event, _span_content=span_content.get(index), **fields)
                 if event == "agent_diagnostic" and fields.get("code") == "malformed_json":
                     malformed["flag"] = True
                 # A fatal schema diagnostic is a capability transition, not just a

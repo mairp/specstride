@@ -181,6 +181,8 @@ class AdapterOutcome:
     output: list = field(default_factory=list)
     terminal: dict | None = None
     telemetry: tuple | None = None
+    # events index -> span-only attributes (trace spans only, never events/Loki)
+    span_content: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
