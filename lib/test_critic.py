@@ -16,9 +16,12 @@ Run:  python3 lib/test_critic.py        (plain asserts, exit 0 = pass)
 """
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import critic as critic_mod  # noqa: E402 — module import, for monkeypatching critic_call
@@ -1090,6 +1093,67 @@ def test_context_tokens_prime_backing_model_unknown_uses_default(monkeypatch):
     monkeypatch.delenv("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", raising=False)
     assert _critic_context_tokens("prime") == _DEFAULT_CONTEXT_TOKENS
     assert _critic_context_tokens("prime:sol") == _DEFAULT_CONTEXT_TOKENS
+
+
+@pytest.fixture
+def _no_critic_model_env(monkeypatch):
+    for key in ("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", "SPECSTRIDE_DSH_CRITIC_MODEL", "SPECSTRIDE_DSH_MODEL",
+                "SPECSTRIDE_BEBOP_CRITIC_MODEL", "SPECSTRIDE_BEBOP_BACKEND"):
+        monkeypatch.delenv(key, raising=False)
+    return monkeypatch
+
+
+def test_a_plain_dsh_critic_is_sized_for_the_model_it_calls(_no_critic_model_env):
+    """#110: `--critic dsh` with SPECSTRIDE_DSH_CRITIC_MODEL=compass-gpt5-high/gpt-5 calls
+    GPT-5 (200000) but was sized for the 98304-token default."""
+    mp = _no_critic_model_env
+    assert _critic_context_tokens("dsh") == _DEFAULT_CONTEXT_TOKENS
+    mp.setenv("SPECSTRIDE_DSH_MODEL", "zai/glm-5.3")
+    assert critic_mod.critic_model("dsh") == "zai/glm-5.3"
+    assert _critic_context_tokens("dsh") == 128000
+    mp.setenv("SPECSTRIDE_DSH_CRITIC_MODEL", "compass-gpt5-high/gpt-5")   # the critic's own wins
+    assert _critic_context_tokens("dsh") == 200000
+    assert _critic_context_tokens("dsh:qwen3.8-27b") == 229376           # and a qualifier beats both
+    assert critic_mod.critic_model("dsh:qwen3.8-27b") == "qwen3.8-27b"
+
+
+def test_the_dsh_call_and_the_sizing_resolve_the_same_model(_no_critic_model_env, monkeypatch):
+    _no_critic_model_env.setenv("SPECSTRIDE_DSH_CRITIC_MODEL", "compass-gpt5-high/gpt-5")
+    seen = {}
+
+    def overlay(model_ref, provider=None):
+        seen["model_ref"] = model_ref
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(critic_mod, "_dsh_home_overlay", overlay)
+    with pytest.raises(RuntimeError):
+        critic_mod.critic_call("dsh", "prompt", 5, "/tmp")
+    assert seen["model_ref"] == critic_mod.critic_model("dsh") == "compass-gpt5-high/gpt-5"
+
+
+def test_critic_model_per_provider(_no_critic_model_env):
+    mp = _no_critic_model_env
+    mp.delenv("SPECSTRIDE_CLAUDE_CRITIC_MODEL", raising=False)
+    mp.delenv("SPECSTRIDE_CODEX_CRITIC_MODEL", raising=False)
+    assert critic_mod.critic_model("claude") == "claude-opus-4-8"
+    assert critic_mod.critic_model("codex") == "gpt-5"
+    assert critic_mod.critic_model("prime") is None and critic_mod.critic_model("dsh") is None
+    assert critic_mod.critic_model("bebop") == "compass"
+    mp.setenv("SPECSTRIDE_BEBOP_CRITIC_MODEL", "gpt-5")
+    assert critic_mod.critic_model("bebop") == "gpt-5" and _critic_context_tokens("bebop") == 200000
+
+
+def test_describe_prints_model_and_window_for_the_run_header(_no_critic_model_env):
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("SPECSTRIDE_CRITIC_CONTEXT_TOKENS", "SPECSTRIDE_DSH_MODEL")}
+    env["SPECSTRIDE_DSH_CRITIC_MODEL"] = "compass-gpt5-high/gpt-5"
+    out = subprocess.run([sys.executable, critic_mod.__file__, "--describe", "dsh"],
+                         capture_output=True, text=True, env=env, timeout=60)
+    assert out.returncode == 0 and out.stdout == "compass-gpt5-high/gpt-5\t200000\n"
+    env.pop("SPECSTRIDE_DSH_CRITIC_MODEL")
+    out = subprocess.run([sys.executable, critic_mod.__file__, "--describe", "prime"],
+                         capture_output=True, text=True, env=env, timeout=60)
+    assert out.stdout == "?\t%d\n" % _DEFAULT_CONTEXT_TOKENS
 
 
 def test_scaled_cap_is_identity_at_the_reference_window():
