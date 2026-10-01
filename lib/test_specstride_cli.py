@@ -453,3 +453,39 @@ def test_status_names_a_verification_infra_stop(workdir):
                              "phase": "33"})
     out = run("status", workdir)
     assert "HALTED at phase 33" in out and "no tool call of the attempt touched" in out
+
+
+# ── doctor (#113): the harness a run would start with, plus the preflight ─────
+def _doctor(wd, *args, home):
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SPECSTRIDE_", "CLAUDE_CONFIG_DIR"))}
+    env.update({"HOME": str(home), "SPECSTRIDE_DSH_CRITIC_MODEL": "compass-gpt5-high/gpt-5"})
+    p = subprocess.run(["bash", SPECSTRIDE, "doctor", "-w", str(wd), *args],
+                       capture_output=True, text=True, timeout=60, env=env)
+    return p.returncode, ANSI.sub("", p.stdout + p.stderr)
+
+
+def test_doctor_reports_harness_critic_and_a_clean_preflight(tmp_path):
+    wd, home = tmp_path / "wd", tmp_path / "home"
+    wd.mkdir()
+    (home / ".claude").mkdir(parents=True)
+    rc, out = _doctor(wd, "--proposer", "claude", "--critic", "dsh", home=home)
+    assert rc == 0, out
+    assert 'harness  : pinned — --setting-sources "" --strict-mcp-config' in out
+    assert "critic   : dsh  (model compass-gpt5-high/gpt-5, window 200000 tokens)" in out
+    assert "preflight: ok" in out
+    rc, out = _doctor(wd, "--proposer", "claude", "--proposer-inherit-plugins", home=home)
+    assert "inherits the operator's Claude Code settings" in out
+
+
+def test_doctor_strict_fails_on_a_preflight_warning(tmp_path):
+    wd, home = tmp_path / "wd", tmp_path / "home"
+    (wd / ".claude" / "autoharness").mkdir(parents=True)
+    (wd / ".claude" / "autoharness" / "requests").write_text("5")
+    subprocess.run(["git", "init", "-q", str(wd)], check=True)
+    (home / ".claude").mkdir(parents=True)
+    rc, out = _doctor(wd, home=home)
+    assert rc == 0 and "WARN: plugin_unignored_writes" in out, out
+    rc, _ = _doctor(wd, "--strict", home=home)
+    assert rc == 3
+    rc, out = _doctor(wd, "--bogus", home=home)
+    assert rc == 1 and "unknown option" in out
