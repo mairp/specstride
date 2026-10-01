@@ -186,7 +186,7 @@ def test_nested_subdir_citation_under_proof_root_resolves():
     segment, so `gates/proofs/cycles/provision-1.log` (real, on disk) is never
     checked; only `gates/proofs/provision-1.log` is, which doesn't exist, and a
     genuinely-satisfied criterion reads MISSING forever (confirmed live 2026-08-30,
-    ainetops-demo phase 8, tests/integration/cycles_runner.sh's proof layout)."""
+    project C phase 8, tests/integration/cycles_runner.sh's proof layout)."""
     with tempfile.TemporaryDirectory() as d:
         gates_rel = os.path.join(".specstride", "features", "default", "gates")
         subdir = os.path.join(d, gates_rel, "proofs", "cycles")
@@ -586,7 +586,7 @@ def test_dsh_task_args_never_starts_a_chunk_with_dash():
 
     The launcher emits "--" before the task, but that stops only the OUTER parser:
     DSH forwards the remaining argv to the booted profile's app, which parses it
-    again. Observed 2026-09-02 on ainetops-002 phase 3 — evidence quoting an
+    again. Observed 2026-09-02 on project C 002 phase 3 — evidence quoting an
     openssl command put "-out /tmp/tls.crt" at a chunk boundary and the critic
     died with: error: unknown option '-out ...' -> verdict MALFORMED.
 
@@ -631,7 +631,7 @@ def test_small_criterion_named_file_is_emitted_whole():
     information: if the criterion's symbol is not greppable in the source (spec says
     `GET /transport/config`, code says @app.get("/transport/config")) no window is
     quoted for that region and the critic reports NEEDS-GROUNDING for code that is
-    present on disk. Observed 2026-09-02 on ainetops-002 phase 4 — two consecutive
+    present on disk. Observed 2026-09-02 on project C 002 phase 4 — two consecutive
     rejections naming the same 6 files, one of which (run-all.sh) is 1,877 bytes.
     Large files must still be anchored so the snapshot stays bounded.
     """
@@ -660,7 +660,7 @@ def test_criterion_named_directory_is_expanded_to_its_files():
     "Create the Vite/React project structure under `ui/`" previously produced only a
     presence line — "directory, N entries" — so nothing inside was visible and the
     critic had to answer NEEDS-GROUNDING for files that were present on disk.
-    Observed 2026-09-02, ainetops-002 phase 6: 23 such entries, while the two criteria
+    Observed 2026-09-02, project C 002 phase 6: 23 such entries, while the two criteria
     naming actual FILES verified cleanly. Build noise must stay out, or a single `ui/`
     would drag node_modules into the prompt.
     """
@@ -690,7 +690,7 @@ def test_extract_dirs_finds_criterion_named_directories():
     "Create the Vite/React project structure under `ui/`" contributed nothing to the
     grounding snapshot, so the critic answered NEEDS-GROUNDING for files present on
     disk. extract_dirs supplies those directory tokens; grounding_snapshot expands
-    them (W16). Verified against ainetops-002 phase 6, where extract_paths returned
+    them (W16). Verified against project C 002 phase 6, where extract_paths returned
     only 2 ui-related paths while 5 directories were named.
     """
     import tempfile
@@ -715,7 +715,7 @@ def test_grounding_byte_budget_binds_priority_files_too():
     W1 exempted criterion-named files from GROUNDING_TOTAL_CAP so one could never be
     dropped. That was safe while they were anchored excerpts; combined with W15
     (whole files) and W16 (directory expansion) it made the spend UNBOUNDED —
-    ainetops-002 phase 6 attempt 4 emitted ~496 KB of grounding against a 262,144
+    project C 002 phase 6 attempt 4 emitted ~496 KB of grounding against a 262,144
     cap. An explicit, announced budget is strictly better than an unbounded prompt:
     every path still gets its presence line, only the excerpt is dropped.
     """
@@ -744,7 +744,7 @@ def test_grounding_section_excludes_inherited_obligations():
     render_phase_context() appends the cumulative gate's INHERITED obligations as
     compact one-liners, explicitly "regression context ... already gated, not new
     work". Their titles carry backticked paths, so path extraction grounded the whole
-    feature: ainetops-002 phase 6 yielded 90 paths / 29 dirs for a gate judging 13
+    feature: project C 002 phase 6 yielded 90 paths / 29 dirs for a gate judging 13
     criteria, the files those criteria name lost the budget, and the unmet set
     oscillated 23,24,23,17,16,17,12,8,12 — the documented evidence lottery.
 
@@ -839,7 +839,7 @@ if __name__ == "__main__":
 def test_w19_prose_criteria_fall_back_to_evidence_paths(tmp_path):
     """W19: a phase whose criteria are PROSE must still ground its evidence.
 
-    Regression for ainetops-demo phase 8 (T079/T080). Those tasks name no file --
+    Regression for project C phase 8 (T079/T080). Those tasks name no file --
     "Run three clean provision/test/off cycles ... publish evidence" -- so after W18
     narrowed spec_named to the phase's own text, priority collapsed to empty. That
     silently disabled W15 whole-file emission (gated on is_priority) and halved the
@@ -880,7 +880,7 @@ def test_w19_prose_criteria_fall_back_to_evidence_paths(tmp_path):
 def test_w20_search_dirs_cover_proof_subdirs(tmp_path):
     """W20: a proof staged one level under proofs/ must resolve.
 
-    Regression for ainetops-demo phase 8. cycles_runner.sh writes every
+    Regression for project C phase 8. cycles_runner.sh writes every
     provision/off/test log to gates/proofs/cycles/, and the evidence cites them the
     natural way -- `gates/proofs/cycles/provision-1.log`. Before W20 that resolved
     against nothing: "" gives <repo>/gates/..., and neither gates_rel nor
@@ -927,7 +927,7 @@ def test_w20_search_dirs_survive_a_missing_proofs_dir(tmp_path):
 #  Diagnostician (stuck-loop mitigation): full_dump_snapshot + run_diagnostician.
 #  Locks in the reason this exists — a phase whose cumulative citations blow
 #  GROUNDING_TOTAL_CAP degrades the SAME files to head/tail every attempt,
-#  deterministically, so the critic can never converge on it (agentic-netops
+#  deterministically, so the critic can never converge on it (project A
 #  003-datacenter-service-constructs phase 4, 29 attempts, 2026-09-06). The
 #  diagnostician must show a small, targeted file set with NO such degradation.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1070,9 +1070,9 @@ def test_context_tokens_dsh_resolves_the_real_local_window(monkeypatch):
     # 003-datacenter-service-constructs' saved run uses exactly
     # dsh:compass-gpt5-high/gpt-5) resolves to 200,000 -- NOT the direct-API codex
     # table's 400,000, and NOT cc-compass-shim's QWEN_CTX_MAP 300,000 either. The
-    # shim is not on this path: `dsh` answers to /root/.dsh/settings.yaml, which
+    # shim is not on this path: `dsh` answers to ~/.dsh/settings.yaml, which
     # declares this provider's gpt-5 `contextWindow: 200000`, and it dispatches
-    # through pi-ai, whose /root/.prime/agent/models.json says the same. Corrected
+    # through pi-ai, whose ~/.prime/agent/models.json says the same. Corrected
     # 2026-09-10 after a live call died `CONTEXT_WINDOW_EXCEEDED: pi-ai detected
     # context overflow for model "gpt-5"` with the budget scaled off 300,000.
     assert _critic_context_tokens("dsh:compass-gpt5-high/gpt-5") == 200000
@@ -1143,7 +1143,7 @@ def test_grounding_snapshot_respects_a_custom_total_cap(tmp_path):
 
 def test_w20_a_placeholder_citation_resolves_to_the_dated_file(tmp_path):
     """W20 — a criterion naming `runs/d0-2026-09-<dd>.md` must ground against the
-    dated note that satisfies it (semantic-router-sovereign phase 2, 2026-09-10:
+    dated note that satisfies it (project B phase 2, 2026-09-10:
     four true criteria rejected as MISSING while the notes sat on disk)."""
     work = tmp_path / "repo"
     (work / "specs" / "002-x" / "runs").mkdir(parents=True)
@@ -1233,7 +1233,7 @@ def test_spec_dir_relative_citation_grounds_the_file():
     """A Spec Kit feature keeps `contracts/` and `runs/` beside tasks.md and cites
     them relative to that directory (`contracts/live-runner.md`). The proposer
     copies the form, it resolves at neither the workdir root nor the proof dirs,
-    and a present file reads MISSING (semantic-router-sovereign 002 phase 13,
+    and a present file reads MISSING (project B 002 phase 13,
     2026-09-11). With `specs_path` the spec's own directory is searched too; a
     spec outside the workdir adds nothing and a truly-absent file still misses."""
     with tempfile.TemporaryDirectory() as d:
@@ -1267,8 +1267,8 @@ def test_spec_dir_relative_citation_grounds_the_file():
 # ── W24: a brace shorthand names every file it expands to ────────────────────
 def test_brace_shorthand_citation_grounds_each_file():
     """`sweep-{night,daylight}.json` cites two sibling artefacts. Taken literally
-    the token exists nowhere and both real files read MISSING (semantic-router-
-    sovereign 003 phase 5, 2026-09-12: 25 false MISSING lines, one rejection).
+    the token exists nowhere and both real files read MISSING (project B
+    003 phase 5, 2026-09-12: 25 false MISSING lines, one rejection).
     Each expansion must be grounded on its own; a member that is truly absent
     still reads MISSING."""
     with tempfile.TemporaryDirectory() as d:
@@ -1397,7 +1397,7 @@ def test_diagnostician_done_carries_the_case(tmp_path, monkeypatch):
 # ── a wildcard citation names every file it matches ─────────────────────────
 def test_wildcard_citation_grounds_its_matches():
     """A task path such as `examples/migrations/*.yaml` exists nowhere literally, and
-    the snapshot said MISSING for four files that were all on disk (agentic-netops-srl
+    the snapshot said MISSING for four files that were all on disk (project A
     004 phases 7 and 10, 2026-09-24: false rejections). A wildcard that matches must
     read present and name its matches; one that matches nothing still reads MISSING."""
     with tempfile.TemporaryDirectory() as d:

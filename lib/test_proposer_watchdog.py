@@ -2,7 +2,7 @@
 
 The idle watchdog can only see idleness. An agent stuck in a fast retry loop is
 maximally busy while producing nothing, so it ran to the hard cap — which threw
-the whole pass away (ainetops-demo phase 8, 2026-08-31: six consecutive passes,
+the whole pass away (project C phase 8, 2026-08-31: six consecutive passes,
 6.5 hours, zero evidence). These tests pin the three behaviours that close that
 hole: a repeating tool call ends the pass, a pass that writes nothing ends, and
 every kill leaves a checkpoint the next pass is told about.
@@ -155,7 +155,7 @@ def test_rerunning_one_command_ends_the_pass_without_any_agent_stream(tmp_path):
 def test_same_command_under_distinct_tool_calls_is_not_repetition(tmp_path):
     """Identical argv is not identical work. An agent OCRing six screenshots runs
     one command line six times, once per image, each from a DIFFERENT tool call
-    (semantic-router-sovereign 003 phase 14, 2026-09-13: `tesseract - - --psm 6`
+    (project B 003 phase 14, 2026-09-13: `tesseract - - --psm 6`
     x12 over twelve images was killed as a stall). The process counter is keyed
     per tool call, so each of these counts 1."""
     events = tmp_path / ".specstride" / "events.jsonl"
@@ -338,7 +338,7 @@ def test_repeated_futility_kills_halt_the_attempt(tmp_path):
 # A cap kill is a BUDGET signal, not a failure: the pass was productive right up
 # to the ceiling and the work simply did not fit. Conflating the two is what put
 # SPECSTRIDE_PROPOSER_MAX_ERRORS=30 into a real .env — disabling the error breaker for
-# genuine crashes as well (semantic-router-sovereign phase 15, 2026-09-11). The
+# genuine crashes as well (project B phase 15, 2026-09-11). The
 # two tests below pin the split: same watchdog, two counters, two exit codes.
 def _capped_body():
     """Busy and PRODUCTIVE until the ceiling: writes a file every second, so
@@ -409,7 +409,7 @@ def test_finished_long_job_prompt_forbids_new_open_ended_work(tmp_path):
 
 def test_claude_prompt_over_the_argv_limit_arrives_on_stdin(tmp_path):
     """A 151 KB phase prompt failed exec as one argv ("Argument list too long",
-    semantic-router-sovereign phase 17). The claude backend feeds it on stdin."""
+    project B phase 17). The claude backend feeds it on stdin."""
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     fake = fake_bin / "claude"

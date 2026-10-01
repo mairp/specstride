@@ -38,7 +38,7 @@ def project(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  A Spec Kit tasks.md in the real shape (modelled on semantic-router-sovereign
+#  A Spec Kit tasks.md in the real shape (modelled on project B
 #  specs/002-extproc-data-path/tasks.md): numbered phase headings carrying
 #  `- [ ] T### …` task lines, then a milestone closure map whose state column the
 #  last phase's own tasks are required to rewrite, then prose. The staleness rule
@@ -254,7 +254,7 @@ def test_stale_source_hash_fails_closed(tmp_path):
 
 
 def test_a_closure_map_edit_does_not_stale_the_plan(tmp_path):
-    """Phase 15 of semantic-router-sovereign 002 (2026-09-11): the last phase's own
+    """Phase 15 of project B 002 (2026-09-11): the last phase's own
     tasks rewrite the Milestone closure map inside tasks.md, and the whole-file hash
     then refused the gate that work had just earned, with no attempt able to clear
     it. The closure map is not in the projection the plan consumed."""
