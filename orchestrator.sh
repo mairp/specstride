@@ -1894,11 +1894,16 @@ run_phase() {
     # The tamper rule (05-evaluate-design.md §4), only with the learning layer on:
     # the proposer runs unsandboxed in this tree and appends to the same
     # events.jsonl, so appends are normal; rewriting any byte that existed before
-    # the pass is not. The bracket is taken here, by the parent, per invocation.
-    local -a bracket_files=() bracket_before=()
+    # the pass is not. The learning files are different (#111): only `specstride
+    # learn` and the orchestrator between passes write them, so during a pass they
+    # must stay byte-for-byte as they were — an appended or newly created `apply`
+    # entry is a forged decision. The bracket is taken here, by the parent, per
+    # invocation.
+    local -a bracket_files=() bracket_before=() bracket_whole=()
     if [[ -n "$bracket_on" ]]; then
       bracket_files=( "$SPECSTRIDE_EVENTS" "$FEATURE_DIR/learning/applied.json"
                       "$FEATURE_DIR/learning/phase-$n.json" )
+      bracket_whole=( "" 1 1 )
       local bf
       for bf in "${bracket_files[@]}"; do bracket_before+=( "$(prefix_digest "$bf")" ); done
     fi
@@ -1907,7 +1912,12 @@ run_phase() {
     local prc="${PIPESTATUS[0]}"
     local bi
     for bi in "${!bracket_files[@]}"; do
-      if ! prefix_intact "${bracket_files[$bi]}" "${bracket_before[$bi]}"; then
+      if [[ -n "${bracket_whole[$bi]}" ]]; then
+        if [[ "$(prefix_digest "${bracket_files[$bi]}")" != "${bracket_before[$bi]}" ]]; then
+          log "!!! learning: ${bracket_files[$bi]} changed during the proposer pass (only specstride learn writes it) — run excluded from every evaluation"
+          specstride_emit events_tampered phase "$n" attempt "$attempt" file "${bracket_files[$bi]}"
+        fi
+      elif ! prefix_intact "${bracket_files[$bi]}" "${bracket_before[$bi]}"; then
         log "!!! learning: ${bracket_files[$bi]} lost or rewrote bytes that predate this pass — run excluded from every evaluation"
         specstride_emit events_tampered phase "$n" attempt "$attempt" file "${bracket_files[$bi]}"
       fi
