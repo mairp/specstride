@@ -29,8 +29,10 @@ the proposer and `ANTHROPIC_API_KEY` for the critic, or swap in `codex` and `OPE
 ```bash
 git clone https://github.com/mairp/specstride && cd specstride
 mkdir -p /tmp/demo/specs/001-greeting && cp examples/speckit-tasks.example.md /tmp/demo/specs/001-greeting/tasks.md
-SPECSTRIDE_PROPOSER=claude SPECSTRIDE_CRITIC=claude ./specstride run -w /tmp/demo
+SPECSTRIDE_PROPOSER=claude SPECSTRIDE_CRITIC=claude ./specstride run -w /tmp/demo --verification off
 ```
+
+`--verification off` skips the pre-loop test plan: the default (`required`) needs a test command it can discover, and the empty demo directory has none yet, so it would stop with exit 3. Leave verification on in a real project.
 
 Then run `./specstride watch -w /tmp/demo` in another terminal to follow it. The full setup is in [Quick start](#quick-start).
 
@@ -649,12 +651,13 @@ source ~/.bashrc
 
 mkdir -p /tmp/specstride-demo/specs/001-greeting
 cp examples/speckit-tasks.example.md /tmp/specstride-demo/specs/001-greeting/tasks.md
-specstride run -w /tmp/specstride-demo       # discovers specs/001-greeting/tasks.md
+specstride run -w /tmp/specstride-demo --verification off   # discovers specs/001-greeting/tasks.md
 ```
 
 (Not set up yet? The one-off equivalent calls the script directly:
-`"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo` — or `./specstride run -w
-/tmp/specstride-demo` from inside the clone.)
+`"$SPECSTRIDE_HOME"/specstride run -w /tmp/specstride-demo --verification off` — or `./specstride run -w
+/tmp/specstride-demo --verification off` from inside the clone. The flag is explained under
+[Pre-loop test automation](#pre-loop-test-automation).)
 
 Pick the backends with `SPECSTRIDE_PROPOSER` and `SPECSTRIDE_CRITIC` (in `.env` or the
 environment): `claude`, `codex`, `dsh`, or `bebop` (see **Configuration**). The two roles are
@@ -1116,7 +1119,7 @@ A runnable Spec Kit example lives at
 
 ```bash
 mkdir -p /tmp/specstride-speckit && cp examples/speckit-tasks.example.md /tmp/specstride-speckit/tasks.md
-specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md
+specstride run -w /tmp/specstride-speckit -s /tmp/specstride-speckit/tasks.md --verification off
 ```
 
 **`openspec-change`** — an active
