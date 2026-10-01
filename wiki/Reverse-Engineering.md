@@ -126,7 +126,26 @@ Every driver phase carries it, and the gates enforce the parts a program can che
 `reverse.py guard` re-walks the source after every phase and fails the gate when any file outside
 the output and state directories was added, changed or deleted, when `git HEAD` moved, when
 `git status` shows a new entry outside those two directories, or when a `testautomation/`
-directory appeared. `--mode` accepts only `source-aware`; black-box and runtime-assisted reverse
+directory appeared.
+
+The walk always leaves out harness runtime state that an operator's Claude Code session or
+plugin rewrites while a run is live: `.claude/autoharness/` and `.claude/settings.local.json`
+(`HARNESS_STATE_EXCLUDES` in `lib/reverse_inventory.py`). They are not in a fresh baseline,
+and the guard ignores them even in an older baseline that recorded them. Everything else under
+`.claude/` (skills, commands, agents, `settings.json`) is source and stays guarded.
+
+When the guard fails only on paths that no tool call of the attempt named (by the
+`agent_tool` targets recorded in `events.jsonl`), the change came from outside the run: another
+session or tool in the workdir. The orchestrator then emits `verification_infra` with the
+paths and stops with exit 4 (`run_stop reason=verification_infra`). That failure is not
+counted as a reject. If the attempt touched the paths, or the failure also includes a moved
+HEAD, a failed lint or an unrecorded stream, it is an ordinary reject. The policy, the
+accelerator and diagnostician prompts, and the gate feedback all forbid deleting, rewriting or
+restoring files outside the output and state dirs to make the guard pass; the agent is told to
+note it and stop. Fix the cause, add the paths to the baseline `inventory.json` `excludes` if
+they are not source, and `specstride resume`.
+
+`--mode` accepts only `source-aware`; black-box and runtime-assisted reverse
 engineering are refused, because they need a permission and side-effect policy nobody has
 written.
 
