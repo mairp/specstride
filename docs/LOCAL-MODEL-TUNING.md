@@ -1,6 +1,6 @@
 # Running Specstride against a local model — measured tuning and failure taxonomy
 
-Derived from two loops on `mairp` (2026-09-01/02): `ainetops` spec-001 phase 8 and
+Derived from two loops on `mairp` (2026-09-01/02): `project C` spec-001 phase 8 and
 spec-002 phases 1–3, both `dsh:qwen3.8-27b` as proposer AND critic on a single
 RTX 3090 (24 GB). Every value below was measured, not guessed. Every default that
 was left alone cost hours.
@@ -32,7 +32,7 @@ their own and would mask a real stall. But an **evidence / qualification phase
 writes its entire work product into `.specstride/features/<feature>/gates/proofs/`**,
 so the proposer can work flat out and score ZERO progress.
 
-Measured, ainetops 001 phase 8, 09:42–11:00 (passes 7 and 8, both killed
+Measured, project C 001 phase 8, 09:42–11:00 (passes 7 and 8, both killed
 `progress_stall`): **21 proof files written, 1 repo file in 78 minutes.** The
 proposer's own summary for that window: "staged 36 fresh line-numbered proof
 slices under gates/proofs/". It was doing exactly what the phase asks.

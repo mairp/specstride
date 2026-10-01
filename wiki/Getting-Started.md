@@ -42,7 +42,7 @@ Add to `~/.bashrc` (or `~/.zshrc`):
 
 ```bash
 # ── Specstride ─────────────────────────────────────────────────────────────
-export SPECSTRIDE_HOME="/root/specstride"          # wherever you cloned it — set once
+export SPECSTRIDE_HOME="$HOME/specstride"          # wherever you cloned it — set once
 export SPECSTRIDE_LIVE_DETAIL=full             # richest live view
 
 # `specstride` owns its own run-vs-inspect routing, so this is just a pointer.

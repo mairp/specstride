@@ -1,7 +1,7 @@
 """The yield protocol: a pass that ends cleanly while its job keeps running.
 
 A pass boundary and a measurement boundary are independent, and until the yield
-existed the loop had no way to say so. Measured on semantic-router-sovereign
+existed the loop had no way to say so. Measured on project B
 phase 15 (2026-09-11): a 93-minute live suite inside a 90-minute pass killed
 three passes, 4.5 hours, 79-85 % of it literal `sleep` — and the first kill took
 the measurement with it, because the job lived in the pass's process tree.
@@ -456,7 +456,7 @@ def test_the_orchestrator_tells_the_proposer_the_protocol_exists(tmp_path):
 # ── the agent is never left without the protocol ────────────────────────────
 def _budget_script(tmp_path, name, *, assembled=200_000, protected=None):
     """Drive the real append_budgeted_block against a prompt that is already over
-    budget, as it was for every phase from 5 on in agentic-netops-srl 004."""
+    budget, as it was for every phase from 5 on in project A 004."""
     orchestrator = Path(__file__).parents[1] / "orchestrator.sh"
     source = orchestrator.read_text()
     body = source.split("append_budgeted_block() {", 1)[1].split("\n}\n", 1)[0]
@@ -483,7 +483,7 @@ def _budget_script(tmp_path, name, *, assembled=200_000, protected=None):
 
 def test_the_yield_contract_is_kept_even_over_the_prompt_budget(tmp_path):
     """Appended last, it was the block dropped whenever the rest of the prompt was
-    already over budget. That was every phase from 5 on in agentic-netops-srl 004,
+    already over budget. That was every phase from 5 on in project A 004,
     and it cost phase 15 nineteen of its thirty iterations."""
     prompt, log, emitted = _budget_script(tmp_path, "yield_contract")
     assert prompt.endswith("THE BLOCK BODY\n")
@@ -559,7 +559,7 @@ def test_the_resume_prompt_lists_a_failure_the_log_slice_elides(tmp_path):
 
 def test_a_grep_predicate_anchored_with_caret_matches_a_later_line(tmp_path):
     """`^MARKER` must match the marker at the start of ANY line, not only at the
-    start of the file (agentic-netops-srl 004 phase 16, 2026-09-29: a
+    start of the file (project A 004 phase 16, 2026-09-29: a
     `^DECISION: APPROVED` wait never resumed because the line was not line 1)."""
     decision = tmp_path / "DECISION.md"
     decision.write_text("# heading\nsome text\n")
