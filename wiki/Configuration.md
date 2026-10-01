@@ -138,7 +138,7 @@ that builds its harness flags):
 
 - `--setting-sources ""`: no settings file is read, so no plugin, hook, settings-declared MCP
   server or auto-loaded `CLAUDE.md`. OAuth still works.
-- `--strict-mcp-config`: no MCP server from `~/.claude.json` or claude.ai connectors either.
+- `--strict-mcp-config`: no MCP server from `~/.claude.json` or Claude account connectors either.
 - One `--settings` JSON: your user settings' `env` (e.g. the OTEL exporter variables),
   `effortLevel`, and `model` when the run passes no `--model`. Nothing else is carried. claude
   does not merge two `--settings` flags (the last one replaces the first), so anything else a

@@ -22,7 +22,7 @@ stream-json `init` record:
   CLAUDE.md is auto-loaded (Principle VIII: auto-loaded context is off by
   default). OAuth keeps working.
 - `--strict-mcp-config`   — also drops MCP servers that come from outside the
-  settings files (~/.claude.json, claude.ai connectors).
+  settings files (~/.claude.json, Claude account connectors).
 - `--settings <json>`     — the ONLY settings layer left. It carries a small
   allowlist from the operator's user settings that changes neither tools nor
   context — `env` (e.g. the OTEL exporter variables), `effortLevel` and, when
