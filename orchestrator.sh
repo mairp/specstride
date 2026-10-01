@@ -934,7 +934,10 @@ log "  workdir  : $WORKDIR"
 log "  specs    : $SPECS  ($PHASE_COUNT phases: ${PHASES[*]})"
 log "  feature  : $SLUG   (state: $STATE_REL/)"
 log "  proposer : $PROPOSER_BACKEND$([[ "$PROPOSER_INHERIT_PLUGINS" == 1 ]] && printf '  (inherits operator plugins/hooks/MCP)')"
-log "  critic   : $CRITIC_BACKEND"
+# The model the critic will call and the window its prompts are sized for, from the
+# one resolver both use (#110): a mismatch used to surface only as trim lines.
+IFS=$'\t' read -r CRITIC_MODEL CRITIC_WINDOW < <(python3 "$LIB_DIR/critic.py" --describe "$CRITIC_BACKEND" 2>/dev/null)
+log "  critic   : $CRITIC_BACKEND${CRITIC_MODEL:+  (model ${CRITIC_MODEL}, window ${CRITIC_WINDOW} tokens)}"
 log "  max-rej  : $MAX_REJECTS   max-iter/phase: $MAX_ITER"
 log "  timeouts : proposer ${PROPOSER_TIMEOUT}s  critic ${CRITIC_TIMEOUT}s   wall: ${MAX_WALL_MIN}min"
 log "  git      : $GIT_COMMITS"
@@ -986,7 +989,8 @@ specstride_emit run_start workdir "$WORKDIR" phases "$PHASE_COUNT" feature "$SLU
   proposer "$PROPOSER_BACKEND" critic "$CRITIC_BACKEND" resume "${CUR_PHASE:-done}" \
   states "$(banner_states)" \
   verification "$VERIFICATION" verification_plan "$VERIFICATION_JSON" \
-  inherit_plugins "$PROPOSER_INHERIT_PLUGINS"
+  inherit_plugins "$PROPOSER_INHERIT_PLUGINS" \
+  critic_model "${CRITIC_MODEL:-}" critic_window "${CRITIC_WINDOW:-}"
 
 run_release_verification() {
   [[ "$VERIFICATION" == "required" ]] || return 0

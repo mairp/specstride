@@ -427,3 +427,29 @@ def test_help_lists_the_reverse_verb():
     assert "specstride reverse --lint <FEATURE_DIR> [--src SRC] [--upto N] [--json]" in out
     assert "Also `specstride --reverse <SRC> …`" in out
     assert out.rstrip().endswith("orchestrator.sh --help for launch flags.")
+
+
+# ── status: critic prompts still over their window (#110) ────────────────────
+def _append_events(wd, *events):
+    ev = wd / ".specstride" / "events.jsonl"
+    with ev.open("a") as fh:
+        for e in events:
+            fh.write(json.dumps(e) + "\n")
+
+
+def test_status_warns_when_critic_prompts_stay_over_the_window(workdir):
+    assert "still over" not in run("status", workdir)
+    over = {"event": "critic_over_budget", "run_id": "r1", "phase": 12, "attempt": 1,
+            "provider": "dsh", "model": "compass-gpt5-high/gpt-5", "window": 98304,
+            "notes": "STILL OVER by 10783 B after shrinking context,grounding,evidence"}
+    _append_events(workdir, over, dict(over, phase=14))
+    out = run("status", workdir)
+    assert "WARN: 2 critic prompt(s) still over the 98304-token window" in out
+    assert "model compass-gpt5-high/gpt-5" in out and "last at phase 14" in out
+
+
+def test_status_names_a_verification_infra_stop(workdir):
+    _append_events(workdir, {"event": "run_stop", "run_id": "r1", "reason": "verification_infra",
+                             "phase": "33"})
+    out = run("status", workdir)
+    assert "HALTED at phase 33" in out and "no tool call of the attempt touched" in out

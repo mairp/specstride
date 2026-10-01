@@ -97,7 +97,7 @@ See `.env.example` for the full set. The load-bearing ones:
 |---|---|---|
 | `SPECSTRIDE_PROPOSER` / `SPECSTRIDE_CRITIC` | `dsh` / `claude` | backend per role |
 | `SPECSTRIDE_DSH_BIN` / `SPECSTRIDE_DSH_PROFILE` | `dsh` / `headless` | DeepSeek Harness executable and profile |
-| `SPECSTRIDE_DSH_MODEL` / `SPECSTRIDE_DSH_CRITIC_MODEL` | empty | optional DSH model override, e.g. `zai/glm-5.3`; bare `glm-*` maps to `zai`, `qwen3.8-27b` maps to LiteLLM `local-high/qwen3.8-27b-q5` |
+| `SPECSTRIDE_DSH_MODEL` / `SPECSTRIDE_DSH_CRITIC_MODEL` | empty | optional DSH model override, e.g. `zai/glm-5.3`; bare `glm-*` maps to `zai`, `qwen3.8-27b` maps to LiteLLM `local-high/qwen3.8-27b-q5`. A plain `--critic dsh` calls, and sizes its prompts for, `SPECSTRIDE_DSH_CRITIC_MODEL`, else `SPECSTRIDE_DSH_MODEL` (a `dsh:<ref>` qualifier beats both); the run header prints the resolved model and window |
 | `SPECSTRIDE_DSH_PROVIDER` / `SPECSTRIDE_DSH_CRITIC_PROVIDER` | empty | provider for bare DSH model ids when they are not `glm-*` |
 | `SPECSTRIDE_DSH_REASONING_EFFORT` / `SPECSTRIDE_DSH_CRITIC_REASONING_EFFORT` | empty | optional DSH reasoning override such as `high` or `max` |
 | `SPECSTRIDE_DSH_PLUGIN_ALLOWLIST` | empty | comma-separated exact `package@semver` specs the DSH proposer may request and install |

@@ -385,11 +385,39 @@ else:
         print("  state: HALTED at phase %s — the phase's work does not fit one pass "
               "(consecutive hard_cap kills). Make the long step outlive the pass "
               "(--long-job-cmd) or split the phase; raising the cap is the last resort" % ph)
+    elif r == "verification_infra":
+        print("  state: HALTED at phase %s — the source guard failed on files no tool call of "
+              "the attempt touched (another session or tool in the workdir); see run.log, "
+              "then: specstride resume" % ph)
     else:
         print("  state: HALTED at phase %s — %s" % (ph, r))
 PYEOF
     else
       echo "  state: no run recorded yet"
+    fi
+    # A critic prompt still over its window after grounding was shrunk to the floor
+    # predicts grounding-starved rejections (#110): say so, with the window it used.
+    if [[ -n "$STATUS_EV" && -f "$STATUS_EV" ]]; then
+      python3 - "$STATUS_EV" <<'PYEOF'
+import json, sys
+over = []
+try:
+    for line in open(sys.argv[1]):
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        if o.get("event") == "critic_over_budget":
+            over.append(o)
+except OSError:
+    pass
+if over:
+    last = over[-1]
+    print("  WARN: %d critic prompt(s) still over the %s-token window after shrinking (model %s,"
+          " last at phase %s) — expect grounding-starved rejections; check the critic model /"
+          " SPECSTRIDE_CRITIC_CONTEXT_TOKENS" % (len(over), last.get("window", "?"),
+                                                 last.get("model") or "?", last.get("phase", "?")))
+PYEOF
     fi
     if [[ -f "$SPECS" ]]; then
       echo
