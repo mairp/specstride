@@ -1467,8 +1467,10 @@ If Specstride built your project, say so with this badge:
 ```
 
 Projects carrying it: [agentic-netops](https://github.com/mairp/agentic-netops),
-[agentic-netops-srl](https://github.com/mairp/agentic-netops-srl),
-[mixture-of-loops](https://github.com/mairp/mixture-of-loops), and Specstride itself.
+[agentic-netops-srl](https://github.com/mairp/agentic-netops-srl) and
+[mixture-of-loops](https://github.com/mairp/mixture-of-loops).
+
+Specstride itself was built with the first version of the Ralph loop it grew out of.
 
 ## Branches
 
