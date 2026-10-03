@@ -1456,6 +1456,20 @@ The OTLP shipper mirrors the Loki shipper's `add()`/`flush()` seam and is covere
 by unit, characterization, and old-vs-new **parity** tests
 (`lib/test_telemetry_parity.py` and the shipper's own test module under `lib/`).
 
+## Built with Specstride
+
+If Specstride built your project, say so with this badge:
+
+[![Built with Specstride](https://img.shields.io/badge/built%20with-Specstride-5a9a0a)](https://github.com/mairp/specstride)
+
+```markdown
+[![Built with Specstride](https://img.shields.io/badge/built%20with-Specstride-5a9a0a)](https://github.com/mairp/specstride)
+```
+
+Projects carrying it: [agentic-netops](https://github.com/mairp/agentic-netops),
+[agentic-netops-srl](https://github.com/mairp/agentic-netops-srl),
+[mixture-of-loops](https://github.com/mairp/mixture-of-loops), and Specstride itself.
+
 ## Branches
 
 Code is provider-agnostic and lives entirely on `main`. Branches differ *only* in
