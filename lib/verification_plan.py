@@ -1568,9 +1568,21 @@ def _execute_command(command):
     # replacement: PATH and the rest of the run's environment still apply.
     command_env = os.environ.copy()
     command_env.update(command.get("env") or {})
+    # 2026-10-05: chains of different lanes ran unbounded (`node --test` defaults to
+    # one test file per core), drove the host to load ~100 on 22 cores, and the
+    # load-sensitive CT-148 timing characterizations failed in every overlapping
+    # release gate. Every gate command now runs in its own scope with a CPU quota,
+    # so N concurrent lanes can use at most N x quota cores. Override or disable
+    # with SPECSTRIDE_GATE_CPU_QUOTA (empty or "0" disables the wrap).
+    quota = os.environ.get("SPECSTRIDE_GATE_CPU_QUOTA", "400%")
+    argv = [command["executable"]] + command["args"]
+    if quota and quota != "0":
+        argv = ["systemd-run", "--scope", "--quiet", "--collect",
+                "--unit", f"specstride-gate-{command['id'][-12:]}",
+                "-p", f"CPUQuota={quota}", "--"] + argv
     try:
         result = subprocess.run(
-            [command["executable"]] + command["args"],
+            argv,
             cwd=command["cwd"],
             shell=False,
             capture_output=True,
@@ -1579,13 +1591,13 @@ def _execute_command(command):
             env=command_env,
         )
         code = result.returncode
-        stdout = (result.stdout or "")[:64000]
-        stderr = (result.stderr or "")[:64000]
+        stdout = (result.stdout or "")[:200000]
+        stderr = (result.stderr or "")[:200000]
         signal = None
     except subprocess.TimeoutExpired as exc:
         code = None
-        stdout = _output_text(exc.stdout)[:64000]
-        stderr = (_output_text(exc.stderr) + "\ncommand timed out")[:64000]
+        stdout = _output_text(exc.stdout)[:200000]
+        stderr = (_output_text(exc.stderr) + "\ncommand timed out")[:200000]
         signal = "TIMEOUT"
     except OSError as exc:
         code = None
