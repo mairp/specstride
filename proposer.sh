@@ -595,7 +595,10 @@ run_agent() {
       # sub-limit chunks at existing space characters: each split removes one
       # space that the join restores, making the reconstructed task
       # byte-identical to the original. Chunk budget is in characters and
-      # sized so a worst-case multibyte chunk stays under the byte limit.
+      # sized so the largest possible multibyte chunk stays under the byte
+      # limit. (Never write the bare word for a bash switch statement in this
+      # comment: the backend parity test counts those tokens to bound the
+      # dispatch arms of run_agent.)
       local -a dsh_task=()
       local dsh_rest="$prompt" dsh_chunk_max=24000 dsh_cut dsh_window
       while [[ -n "$dsh_rest" ]]; do

@@ -140,6 +140,12 @@ def extract_proposer_arms(text):
     depth = 0
     cend = None
     for i in range(cstart, len(lines)):
+        # Comments cannot hold statements: count only real code (2026-10-06:
+        # a chunker comment saying "worst-case" counted as a case keyword,
+        # the bounds overshot to EOF, and a hard_cap arm from an unrelated
+        # function leaked into the dispatch parity check).
+        if lines[i].strip().startswith("#"):
+            continue
         if re.search(r"\bcase\b", lines[i]):
             depth += 1
         elif re.search(r"\besac\b", lines[i]):

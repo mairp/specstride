@@ -1546,6 +1546,43 @@ def _gate(plan, phase):
     )
 
 
+_SYSTEMD_SCOPE_OK = None
+
+
+def _systemd_scope_works():
+    """Probe once per process whether transient systemd scopes can start here.
+
+    The CPU-quota wrap needs a working session bus. On CI runners and inside
+    containers `systemd-run` either does not exist or fails with "Failed to
+    start transient scope unit: Interactive authentication required.", which
+    failed every gate command at once (specstride CI run 37407698118,
+    2026-10-06: 21 tests red on exactly that). Probe with a throwaway 1%
+    scope and cache the answer; on any failure run commands directly.
+    """
+    global _SYSTEMD_SCOPE_OK
+    if _SYSTEMD_SCOPE_OK is None:
+        try:
+            probe = subprocess.run(
+                ["systemd-run", "--scope", "--quiet", "--collect",
+                 "--unit", f"specstride-quota-probe-{os.getpid()}",
+                 "-p", "CPUQuota=1%", "--", "true"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            _SYSTEMD_SCOPE_OK = probe.returncode == 0
+            detail = (probe.stderr or "").strip().splitlines()
+            detail = detail[0] if detail else f"exit {probe.returncode}"
+        except (OSError, subprocess.SubprocessError) as exc:
+            _SYSTEMD_SCOPE_OK = False
+            detail = str(exc)
+        if not _SYSTEMD_SCOPE_OK:
+            print(f"specstride: systemd transient scopes unavailable here "
+                  f"({detail}); gate commands run without the CPU quota",
+                  file=sys.stderr, flush=True)
+    return _SYSTEMD_SCOPE_OK
+
+
 def _output_text(value):
     """Normalize subprocess output because TimeoutExpired may expose bytes with text=True."""
     if value is None:
@@ -1574,15 +1611,44 @@ def _execute_command(command):
     # release gate. Every gate command now runs in its own scope with a CPU quota,
     # so N concurrent lanes can use at most N x quota cores. Override or disable
     # with SPECSTRIDE_GATE_CPU_QUOTA (empty or "0" disables the wrap).
+    # 2026-10-06: the wrap assumed a working systemd user session bus. On CI
+    # runners and inside containers `systemd-run` is missing or fails with
+    # "Failed to start transient scope unit: Interactive authentication
+    # required." — which turned EVERY gate command into a failure (specstride
+    # CI run 37407698118: 21 tests red on exactly that). Probe once per
+    # process with a throwaway 1% scope; if it cannot start, run commands
+    # directly and say so on stderr.
     quota = os.environ.get("SPECSTRIDE_GATE_CPU_QUOTA", "400%")
     argv = [command["executable"]] + command["args"]
-    if quota and quota != "0":
+    wrapped = bool(quota) and quota != "0" and _systemd_scope_works()
+    if wrapped:
         argv = ["systemd-run", "--scope", "--quiet", "--collect",
                 "--unit", f"specstride-gate-{command['id'][-12:]}",
                 "-p", f"CPUQuota={quota}", "--"] + argv
     try:
         result = subprocess.run(
             argv,
+            cwd=command["cwd"],
+            shell=False,
+            capture_output=True,
+            text=True,
+            timeout=command["timeoutSec"],
+            env=command_env,
+        )
+        code = result.returncode
+        stdout = (result.stdout or "")[:200000]
+        stderr = (result.stderr or "")[:200000]
+        signal = None
+    except FileNotFoundError as exc:
+        if not wrapped:
+            raise
+        # systemd-run vanished (or was never on PATH despite the probe):
+        # run the command directly rather than failing the gate.
+        print(f"specstride: systemd-run unavailable ({exc}); "
+              f"command {command['id']} runs without the CPU quota",
+              file=sys.stderr, flush=True)
+        result = subprocess.run(
+            [command["executable"]] + command["args"],
             cwd=command["cwd"],
             shell=False,
             capture_output=True,
