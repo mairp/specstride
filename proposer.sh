@@ -588,9 +588,47 @@ run_agent() {
       dsh_home_eff="${overlay_dir:-${DSH_HOME:-$HOME/.dsh}}"
       child_otel_setup dsh
       [[ -n "$CHILD_OTEL_RES" ]] && CHILD_OTEL_ENV+=( "OTEL_RESOURCE_ATTRIBUTES=$CHILD_OTEL_RES" )
+      # A phase prompt can exceed the kernel's per-argument exec limit
+      # (MAX_ARG_STRLEN, 128 KiB), which kills the launch with E2BIG (#332:
+      # 512 KB prompt). The headless app joins multiple task arguments with a
+      # single space (program.args.join(" ")), so split the prompt into
+      # sub-limit chunks at existing space characters: each split removes one
+      # space that the join restores, making the reconstructed task
+      # byte-identical to the original. Chunk budget is in characters and
+      # sized so a worst-case multibyte chunk stays under the byte limit.
+      local -a dsh_task=()
+      local dsh_rest="$prompt" dsh_chunk_max=24000 dsh_cut dsh_window
+      while [[ -n "$dsh_rest" ]]; do
+        if (( ${#dsh_rest} <= dsh_chunk_max )); then
+          dsh_task+=( "$dsh_rest" ); break
+        fi
+        dsh_cut="$dsh_chunk_max"
+        dsh_window="${dsh_rest:0:dsh_chunk_max}"
+        if [[ "$dsh_window" == *" "* ]]; then
+          # Prefer a space near the end of the chunk; each split removes one
+          # space the join re-adds, so the task is reconstructed exactly.
+          for (( dsh_cut=dsh_chunk_max-1; dsh_cut>=dsh_chunk_max/2; dsh_cut-- )); do
+            [[ "${dsh_window:dsh_cut:1}" == " " ]] && break
+          done
+          # A chunk that begins with "-" is parsed as an option by the harness
+          # CLI, not as task text (live 2026-10-05, feature 143 phase 6: the cut
+          # landed right before "--test-name-pattern", dsh failed with
+          # "error: unknown option" in ~2 s, and 30 passes burned to max-iter).
+          # Walk the cut back a space at a time until the next chunk starts
+          # with a word character.
+          while (( dsh_cut > 1 )) && [[ "${dsh_rest:dsh_cut+1:1}" == "-" ]]; do
+            dsh_cut=$(( dsh_cut - 1 ))
+            while (( dsh_cut > 1 )) && [[ "${dsh_rest:dsh_cut:1}" != " " ]]; do
+              dsh_cut=$(( dsh_cut - 1 ))
+            done
+          done
+        fi
+        dsh_task+=( "${dsh_rest:0:dsh_cut}" )
+        dsh_rest="${dsh_rest:dsh_cut+1}"
+      done
       DSH_HOME="$dsh_home_eff" \
       DSH_PERMISSION_MODE="${SPECSTRIDE_DSH_PERMISSION_MODE:-${DSH_PERMISSION_MODE:-workspace-write}}" \
-        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${CHILD_OTEL_ENV[@]}" "$dsh_bin" "${dsh_args[@]}" "$prompt"
+        run_with_idle_watchdog "$TIMEOUT" "$IDLE_TIMEOUT" "${CHILD_OTEL_ENV[@]}" "$dsh_bin" "${dsh_args[@]}" "${dsh_task[@]}"
       rc=$?
       if [[ -n "${overlay_dir:-}" ]]; then
         rm -rf "$overlay_dir"
