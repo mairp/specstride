@@ -997,11 +997,18 @@ run_release_verification() {
   local release_evidence="$RUN_DIR/verification/release.json"
   local release_rc
   log "----- verification: release gate (fixed argv) -----"
-  python3 "$LIB_DIR/verification_plan.py" run \
-    --plan "$VERIFICATION_JSON" \
-    --specs "$SPECS" \
-    --phase release \
-    --evidence-output "$release_evidence" 2>&1 | emit_out
+  # One release gate on the host at a time (live 2026-10-05): two lanes' gates
+  # overlap and their full root chains break each other's timing-sensitive
+  # suites (148's time-limit characterizations die under load; whole chains
+  # were truncated mid-suite). The lock is host-global, never per-workdir.
+  (
+    flock -x 9 || exit 1
+    python3 "$LIB_DIR/verification_plan.py" run \
+      --plan "$VERIFICATION_JSON" \
+      --specs "$SPECS" \
+      --phase release \
+      --evidence-output "$release_evidence"
+  ) 9>"/tmp/specstride-release-gate.lock" 2>&1 | emit_out
   release_rc="${PIPESTATUS[0]}"
   if [[ "$release_rc" -ne 0 ]]; then
     log "# HALT — release verification failed (exit $release_rc)."
