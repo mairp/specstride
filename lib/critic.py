@@ -1743,6 +1743,16 @@ def run_diagnostician(args, workdir, n, feature_dir, gates_dir, gates_rel, secti
     spec_dirs = [d for d in extract_dirs(ground_sec, workdir, search_dirs)
                  if d not in set(paths)]
     context_tokens = _critic_context_tokens(args.provider)
+    # 2026-10-12 (004-srv6-service-requests phase 2): the diagnostician builds the
+    # most code-dense prompt in this file — full, untruncated sources — and code
+    # tokenizes well below the fleet's 3.18 B/t prose measurement (~2.5 B/t), so a
+    # fit-to-window pass at the full window still assembled more tokens than pi-ai
+    # accepts and every diagnostician call died
+    # `CONTEXT_WINDOW_EXCEEDED: pi-ai detected context overflow for model "gpt-5"`
+    # (2026-10-12 00:18 and 05:52 +04). Apply a 25% window haircut before any budget
+    # is derived here so the assembler targets what the route actually accepts.
+    # The critic's own grounding path (GROUNDING_TOTAL_CAP) is unaffected.
+    context_tokens = int(context_tokens * 3) // 4
     files_block = (full_dump_snapshot(
                       paths + spec_dirs, workdir, search_dirs, members=members,
                       file_cap=_scaled_cap(DIAGNOSTICIAN_FILE_CAP, context_tokens),
