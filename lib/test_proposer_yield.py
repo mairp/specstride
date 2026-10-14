@@ -574,3 +574,113 @@ def test_a_grep_predicate_anchored_with_caret_matches_a_later_line(tmp_path):
     resumes = [e for e in events if e["event"] == "yield_resume"]
     assert resumes, result.stderr
     assert [e for e in events if e["event"] == "yield_timeout"] == []
+
+
+# ── infrastructure awareness (2026-10-14) ─────────────────────────────────────
+# A four-hour replay chain ran on a lab whose bgp unit systemd refused to start,
+# and a file_exists wait sat out its whole deadline after its job had died. The
+# loop could see neither. These pin the three things that make it see.
+
+
+def _health_cmd(tmp_path, healthy_file):
+    """A health check that is healthy while `healthy_file` exists."""
+    path = tmp_path / "health.sh"
+    path.write_text(f'#!/bin/bash\n[ -f "{healthy_file}" ] && exit 0\n'
+                    'echo "bgp.service: start-limit-hit on leaf01"\nexit 3\n')
+    path.chmod(0o755)
+    return str(path)
+
+
+def test_a_pass_on_unhealthy_infrastructure_is_told_so_first(tmp_path):
+    agent = _agent(tmp_path, "exit 0\n")
+    result, events = _run(tmp_path, agent, max_iter=1, env_extra={
+        "SPECSTRIDE_HEALTH_CMD": _health_cmd(tmp_path, tmp_path / "never")})
+    prompt = (tmp_path / "prompts.log").read_text()
+    assert "INFRASTRUCTURE HEALTH CHECK FAILED" in prompt, result.stderr
+    assert "start-limit-hit on leaf01" in prompt
+    failed = [e for e in events if e["event"] == "health_check_failed"]
+    assert failed and failed[0]["where"] == "pass_start"
+
+
+def test_a_healthy_check_adds_nothing_to_the_prompt(tmp_path):
+    healthy = tmp_path / "ok"
+    healthy.write_text("")
+    agent = _agent(tmp_path, "exit 0\n")
+    _run(tmp_path, agent, max_iter=1, env_extra={
+        "SPECSTRIDE_HEALTH_CMD": _health_cmd(tmp_path, healthy)})
+    assert "HEALTH CHECK FAILED" not in (tmp_path / "prompts.log").read_text()
+
+
+def test_a_wait_ends_early_when_its_job_dies_with_the_predicate_unmet(tmp_path):
+    """file_exists on a file the job never writes: before, the wait sat out the
+    whole deadline; now it ends as soon as the job is gone."""
+    document = _yield_json(
+        job={"mode": "launch", "argv": ["/bin/sh", "-c", "sleep 1; exit 5"]},
+        resume_when={"kind": "file_exists", "path": str(tmp_path / "never-written")},
+        deadline_sec=120)
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1, run_timeout=100)
+    early = [e for e in events if e["event"] == "yield_ended_early"]
+    assert early and early[0]["reason"] == "job_died", result.stderr
+    assert int(early[0]["waited_sec"]) < 60
+    prompts = (tmp_path / "prompts.log").read_text()
+    assert "ended EARLY (job_died)" in prompts
+    assert "do not assume it finished" in prompts
+
+
+def test_a_wait_ends_early_when_the_infrastructure_stays_unhealthy(tmp_path):
+    healthy = tmp_path / "ok"
+    healthy.write_text("")
+    document = _yield_json(
+        job={"mode": "launch", "argv": ["/bin/sh", "-c", f"sleep 2; rm {healthy}; sleep 60"]},
+        deadline_sec=120)
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1, run_timeout=100, env_extra={
+                              "SPECSTRIDE_HEALTH_CMD": _health_cmd(tmp_path, healthy),
+                              "SPECSTRIDE_HEALTH_EVERY": "1",
+                              "SPECSTRIDE_HEALTH_FAILS": "2"})
+    early = [e for e in events if e["event"] == "yield_ended_early"]
+    assert early and early[0]["reason"] == "unhealthy", result.stderr
+    prompts = (tmp_path / "prompts.log").read_text()
+    assert "ended EARLY (unhealthy)" in prompts
+    assert "STILL RUNNING" in prompts
+    started = next(e for e in events if e["event"] == "yield_job_start")
+    assert _alive(int(started["pid"])), "the job is the agent's to stop, not specstride's"
+    os.kill(int(started["pid"]), 9)
+
+
+def test_a_job_that_takes_the_infrastructure_down_on_purpose_can_opt_out(tmp_path):
+    document = _yield_json(
+        job={"mode": "launch", "argv": ["/bin/sh", "-c", "sleep 4"]},
+        requires_healthy_infra=False)
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1, run_timeout=100, env_extra={
+                              "SPECSTRIDE_HEALTH_CMD": _health_cmd(tmp_path, tmp_path / "never"),
+                              "SPECSTRIDE_HEALTH_EVERY": "1"})
+    assert [e for e in events if e["event"] == "yield_resume"], result.stderr
+    assert not [e for e in events if e["event"] == "yield_ended_early"]
+
+
+def test_requires_healthy_infra_must_be_a_boolean(tmp_path):
+    document = _yield_json(requires_healthy_infra="no")
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1)
+    invalid = [e for e in events if e["event"] == "yield_invalid"]
+    assert invalid and "requires_healthy_infra" in invalid[0]["reason"]
+
+
+def test_a_launch_yield_waiting_on_a_file_nobody_writes_ends_when_the_job_exits(tmp_path):
+    """Measured live 2026-10-14: a launch-mode yield named an exit_code_file path
+    that only the agent's own (ignored) launch recipe would have written. The job
+    exited rc=1; specstride wrote its OWN rc file; the wait would have sat out
+    7200 s and halted the run."""
+    document = _yield_json(
+        job={"mode": "launch", "argv": ["/bin/sh", "-c", "exit 1"]},
+        resume_when={"kind": "exit_code_file", "path": str(tmp_path / "agent-recipe.exit")},
+        deadline_sec=600)
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1, run_timeout=100)
+    early = [e for e in events if e["event"] == "yield_ended_early"]
+    assert early and early[0]["reason"] == "job_died", result.stderr
+    assert int(early[0]["waited_sec"]) < 60
+    assert result.returncode != 9

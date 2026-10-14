@@ -292,6 +292,10 @@ release suite:
 - `env` is an overlay on the run environment, not a replacement, and is rendered
   into the command line the proposer and `TEST_PLAN.md` see.
 - Commands still execute with `shell=False` by argv. There is no shell string form.
+- The runner executes `[executable] + args`, so an `args[0]` that repeats the
+  executable (`"executable": "bash", "args": ["bash", "-c", ...]` runs
+  `bash bash -c ...`, exit 126 on every gate) aborts the preflight. A shell entry
+  (`bash`/`sh`/...) is also syntax-checked with `-n`, and a script it names must exist.
 - The document's hash is bound into the plan hash, so editing it after planning
   invalidates the plan rather than quietly changing what a gate checks.
 - Declared commands satisfy `--verification required` on their own: a project with
@@ -554,6 +558,45 @@ There is **no file-watcher**. Detection is deterministic: the proposer loop's
 gate is a plain `test -f .specstride/gates/GATE<N>-EVIDENCE.md`, and because that loop has already
 exited when control returns, the orchestrator hands the critic the exact path —
 no race, no half-written file.
+
+### Infrastructure health (`--health-cmd`)
+
+A loop that measures a live environment needs to see that environment. Without a
+health check, nothing in specstride looks at it: a pass, a yield wait and a gate
+only see files and processes. `--health-cmd PATH` (or `SPECSTRIDE_HEALTH_CMD`)
+names an executable, run with no arguments in the workdir; exit 0 means healthy.
+
+- **Before every proposer pass.** When it fails, the pass's prompt opens its
+  problem list with `INFRASTRUCTURE HEALTH CHECK FAILED` and the check's last 40
+  lines, and is told to heal first and not to launch or yield on a job that needs
+  a healthy environment. A `health_check_failed` event is emitted.
+- **During a yield wait.** Every `SPECSTRIDE_HEALTH_EVERY` (10) polls; after
+  `SPECSTRIDE_HEALTH_FAILS` (2) consecutive failures the wait ends early and the
+  agent is resumed with the reason. The job is left running: whether to stop it
+  is the agent's decision. A job that takes the environment down on purpose (a
+  re-provision) opts out with `"requires_healthy_infra": false` in its yield.
+- The path is resolved and checked at start-up (a missing check aborts) and is
+  saved for `specstride resume`.
+
+Independently of the health check, a yield on `file_exists`/`file_stable`/`grep`
+now also ends early when the job specstride launched or adopted is gone and the
+condition is still unmet (`yield_ended_early reason=job_died`), instead of
+waiting out its whole `deadline_sec`.
+
+### Cumulative rejections and NEEDS-GROUNDING on disk
+
+A critic reports a subset of what is wrong each attempt, so a shorter rejection
+list is not acceptance of the rest. Below a machine-generated marker in
+`GATE<N>-FEEDBACK.md`, specstride appends:
+
+- **Rejected in earlier attempts, NOT re-examined this time**: every criterion an
+  earlier attempt of this phase rejected that the new verdict does not mention,
+  with its earlier reason (closing notes that ACCEPT criteria are skipped).
+- **NEEDS-GROUNDING paths checked against the disk**: which paths exist (a
+  citation or slice problem; do not re-record) and which are truly absent.
+
+The diagnostician reads the same file. The unmet-criteria signature and the
+oscillation breaker read only the critic's own words above the marker.
 
 ### Diagnostician (stuck-loop mitigation)
 

@@ -640,6 +640,7 @@ for o in keep[-5:]:
     # Without this a resume re-plans from the discovered heuristic alone and every
     # later gate quietly narrows to it (older confs won't carry the key).
     [[ -n "${VERIFICATION_COMMANDS:-}" ]] && args+=( --verification-commands "$VERIFICATION_COMMANDS" )
+    [[ -n "${HEALTH_CMD:-}" ]] && args+=( --health-cmd "$HEALTH_CMD" )
     [[ -n "${GENERATE_TESTS:-}" ]] && args+=( --generate-tests "$GENERATE_TESTS" )
     # The pass ceiling and its per-phase overrides (older confs won't carry
     # either): a resume that drops them runs each phase under a different budget

@@ -81,6 +81,12 @@ OPTIONS
                           (4), SPECSTRIDE_YIELD_COUNTS_AS_ITER (false),
                           SPECSTRIDE_YIELD_ALLOW_COMMAND (false — the `command`
                           predicate runs outside any pass and ships disabled).
+                          SPECSTRIDE_HEALTH_CMD (unset): an executable health
+                          check run before each pass and every
+                          SPECSTRIDE_HEALTH_EVERY (10) polls of a yield; after
+                          SPECSTRIDE_HEALTH_FAILS (2) failures in a row the wait
+                          ends early. A dead job with its predicate unmet also
+                          ends the wait (the agent is resumed with the reason).
   --repeat-limit N        Kill the pass when the agent has issued the SAME tool
                           call (identical tool + target) N times in this pass and
                           is still issuing it (default: 12; 0 disables). Catches
@@ -1309,9 +1315,23 @@ EOF2
 # labelled NEW / RECURRING across this feature's jobs (lib/failure_ledger.py).
 : "${SPECSTRIDE_FAILURE_LEDGER:=true}"
 : "${SPECSTRIDE_FAILURE_LEDGER_MAX:=150}"
+# Infrastructure health. The loop measures a live environment, but until now
+# nothing in it looked at that environment: on 2026-10-13 a four-hour replay
+# chain ran on a lab whose bgp unit systemd had refused to start, and the loop
+# only learned when the yield deadline killed the run. SPECSTRIDE_HEALTH_CMD is an
+# executable (no arguments, run in the workdir); exit 0 means healthy and its
+# output is shown to the agent when it is not. Empty = no health checks.
+: "${SPECSTRIDE_HEALTH_CMD:=}"
+: "${SPECSTRIDE_HEALTH_TIMEOUT:=180}"
+# During a yield: check every Nth poll tick, and end the wait after this many
+# consecutive failures (one failure can be a blip; a fault that persists is not).
+: "${SPECSTRIDE_HEALTH_EVERY:=10}"
+: "${SPECSTRIDE_HEALTH_FAILS:=2}"
+HEALTH_OUT=""; HEALTH_RC=0
 
 YIELD_REASON=""; YIELD_MODE=""; YIELD_JOB_CWD=""; YIELD_JOB_LOG=""
 YIELD_DEADLINE=""; YIELD_PREDICATE=""; YIELD_ON_RESUME=""; YIELD_ADOPT_PID=""
+YIELD_NEEDS_HEALTHY="true"
 YIELD_JOB_PID=""; YIELD_JOB_RC=""; YIELD_STARTED_AT=""; YIELD_INDEX=0
 YIELD_RESUME_BLOCK=""
 YIELD_ARGV=()
@@ -1319,8 +1339,9 @@ YIELD_ARGV=()
 # The schema owner and the predicate evaluator, in one place. Bash cannot parse
 # JSON and must not try; this is the same shim shape specstride_spec_* uses.
 #   _yield_py validate <artifact> <workdir> <allow-command>
-#     -> 8 lines (reason, mode, cwd, log, deadline_sec, predicate kind,
-#        on_resume, adopt pid), or exit 2 with one line saying what is wrong.
+#     -> 9 lines (reason, mode, cwd, log, deadline_sec, predicate kind,
+#        on_resume, adopt pid, requires_healthy_infra), or exit 2 with one line
+#        saying what is wrong.
 #   _yield_py argv <artifact> <workdir> <allow-command>   -> one argv entry/line
 #   _yield_py check <artifact> <workdir> <allow-command> <launched-pid> <rc-file>
 #     -> exit 0 satisfied, 1 not yet, 2 unsatisfiable
@@ -1427,9 +1448,16 @@ if kind == "command":
             isinstance(entry, str) and entry for entry in command_argv):
         die("resume_when.argv must be a non-empty array of non-empty strings (fixed argv, never a shell string)")
 
+# Whether the job needs the infrastructure healthy WHILE it runs. Default yes:
+# a replay or a live suite measures the infra. A job that tears it down on
+# purpose (a re-provision) says false, and the health check is skipped for it.
+needs_healthy = document.get("requires_healthy_infra", True)
+if not isinstance(needs_healthy, bool):
+    die("requires_healthy_infra must be true or false")
+
 if cmd == "validate":
     for field in (one_line(reason), mode, cwd, log, str(deadline), kind,
-                  one_line(on_resume), adopt_pid):
+                  one_line(on_resume), adopt_pid, "true" if needs_healthy else "false"):
         print(field)
     sys.exit(0)
 
@@ -1527,6 +1555,7 @@ read_yield() {
   YIELD_JOB_CWD="${fields[2]:-}"; YIELD_JOB_LOG="${fields[3]:-}"
   YIELD_DEADLINE="${fields[4]:-}"; YIELD_PREDICATE="${fields[5]:-}"
   YIELD_ON_RESUME="${fields[6]:-}"; YIELD_ADOPT_PID="${fields[7]:-}"
+  YIELD_NEEDS_HEALTHY="${fields[8]:-true}"
   return 0
 }
 
@@ -1601,10 +1630,40 @@ yield_take_job() {
   return 0
 }
 
+# Run the operator's health check once. Returns 0 when healthy (or when no check
+# is configured); otherwise sets HEALTH_RC and HEALTH_OUT (bounded tail).
+run_health_check() {
+  [[ -n "$SPECSTRIDE_HEALTH_CMD" ]] || return 0
+  local out rc
+  out="$(cd "$WORKDIR" && timeout "$SPECSTRIDE_HEALTH_TIMEOUT" "$SPECSTRIDE_HEALTH_CMD" 2>&1)"
+  rc=$?
+  (( rc == 0 )) && return 0
+  HEALTH_RC="$rc"
+  HEALTH_OUT="$(printf '%s\n' "$out" | tail -n 40)"
+  return 1
+}
+
+# What a pass is told when the infrastructure is not healthy as it starts.
+health_block() {
+  cat <<EOF2
+## INFRASTRUCTURE HEALTH CHECK FAILED — read this before anything else
+Specstride ran the operator's health check (\`$SPECSTRIDE_HEALTH_CMD\`) before this
+pass and it exited $HEALTH_RC. Last lines of its output:
+\`\`\`
+$HEALTH_OUT
+\`\`\`
+Any measurement taken on this infrastructure now is not evidence. First diagnose
+and heal it, then confirm with the same check. If the failure is the intended
+state of a step you are in the middle of (you are rebuilding it), say so in one
+line and continue that step. Do NOT launch or yield on a job that needs the
+infrastructure healthy while this check fails.
+EOF2
+}
+
 # Poll the predicate with NO model session open. Prints exactly one word:
-# satisfied | timeout | stop | wall_budget.
+# satisfied | timeout | stop | wall_budget | job_died | unhealthy.
 wait_for_yield() {
-  local tick="$SPECSTRIDE_YIELD_POLL" ticks=0 waited=0 now rc
+  local tick="$SPECSTRIDE_YIELD_POLL" ticks=0 waited=0 now rc health_fails=0
   local started="$YIELD_STARTED_AT"
   while :; do
     # stop.flag is checked every tick, not only at pass boundaries: a yield can
@@ -1615,6 +1674,17 @@ wait_for_yield() {
     rc=$?
     if (( rc == 0 )); then echo satisfied; return 0; fi
     if (( rc == 2 )); then echo timeout; return 0; fi   # unsatisfiable: fail closed
+    # A file/grep predicate cannot see its job die: on 2026-10-13 a replay chain
+    # died and the wait sat out the rest of its deadline. When the job specstride
+    # knows is gone and the predicate is still unmet (re-checked once, in case the
+    # job wrote its file on the way out), the wait is over.
+    if [[ -n "$YIELD_JOB_PID" ]] && ! kill -0 "$YIELD_JOB_PID" 2>/dev/null; then
+      if _yield_py check "$YIELD_ARTIFACT" "$WORKDIR" "$SPECSTRIDE_YIELD_ALLOW_COMMAND" \
+           "$YIELD_JOB_PID" "$YIELD_JOB_RC" >/dev/null 2>&1; then
+        echo satisfied; return 0
+      fi
+      echo job_died; return 0
+    fi
     now="$(date +%s)"; waited=$(( now - started ))
     (( waited >= YIELD_DEADLINE )) && { echo timeout; return 0; }
     # The run's own wall-clock budget must be honoured DURING a yield too: the
@@ -1626,6 +1696,20 @@ wait_for_yield() {
     fi
     sleep "$tick"
     ticks=$(( ticks + 1 ))
+    if [[ "$YIELD_NEEDS_HEALTHY" == "true" && -n "$SPECSTRIDE_HEALTH_CMD" ]] \
+       && (( SPECSTRIDE_HEALTH_EVERY > 0 && ticks % SPECSTRIDE_HEALTH_EVERY == 0 )); then
+      if run_health_check; then
+        health_fails=0
+      else
+        health_fails=$(( health_fails + 1 ))
+        specstride_emit health_check_failed iter "$CURRENT_ITER" where yield rc "$HEALTH_RC" \
+          consecutive "$health_fails" yield_index "$YIELD_INDEX"
+        if (( health_fails >= SPECSTRIDE_HEALTH_FAILS )); then
+          printf '%s\n' "$HEALTH_OUT" > "$YIELD_JOB_DIR/health-${RUN_ID}-yield${YIELD_INDEX}.out" 2>/dev/null
+          echo unhealthy; return 0
+        fi
+      fi
+    fi
     if (( SPECSTRIDE_YIELD_WAIT_EVERY > 0 && ticks % SPECSTRIDE_YIELD_WAIT_EVERY == 0 )); then
       specstride_emit yield_wait iter "$CURRENT_ITER" elapsed "$(( $(date +%s) - started ))" \
         predicate_kind "$YIELD_PREDICATE" yield_index "$YIELD_INDEX"
@@ -1676,6 +1760,35 @@ EOF2
     fi
   fi
   printf '\nThis pass is the RESUME of that work: read the result above, write what it\nsupports, and end the pass.\n'
+}
+
+# What the next pass is told when the wait ended early: the job died with its
+# predicate unmet, or the infrastructure it needs stopped being healthy.
+yield_ended_early_block() {
+  local why="$1" waited="$2" state
+  if [[ -n "$YIELD_JOB_PID" ]] && kill -0 "$YIELD_JOB_PID" 2>/dev/null; then
+    state="STILL RUNNING (pid $YIELD_JOB_PID)"
+  else
+    state="not running"
+  fi
+  printf '## The wait on your yielded job ended EARLY (%s)\n' "$why"
+  printf 'You yielded on: "%s". Specstride stopped waiting after %ss.\n' "$YIELD_REASON" "$waited"
+  printf 'Job: %s. Log: %s\n' "$state" "$YIELD_JOB_LOG"
+  if [[ "$why" == job_died ]]; then
+    printf 'The job ended but its resume condition (%s) was never met: it failed or\n' "$YIELD_PREDICATE"
+    printf 'was killed. Read its log before deciding anything; do not assume it finished.\n'
+  else
+    printf 'The health check failed %s times in a row while the job ran:\n```\n%s\n```\n' \
+      "$SPECSTRIDE_HEALTH_FAILS" "$HEALTH_OUT"
+    printf 'Results the job produces from now on are measured on unhealthy infrastructure.\n'
+    printf 'Decide: stop the job (kill the pid above) and heal, or, if the job itself is\n'
+    printf 'the cause and will restore health, say why and yield on it again.\n'
+  fi
+  if [[ -f "$YIELD_JOB_LOG" ]]; then
+    printf '\n### Last lines of its log\n```\n'
+    tail -n "$SPECSTRIDE_YIELD_LOG_TAIL" "$YIELD_JOB_LOG"
+    printf '```\n'
+  fi
 }
 
 # One iteration. For claude/bebop the agent's stream-json is piped through the
@@ -2107,6 +2220,13 @@ for (( i=1; i<=MAX_ITER; i++ )); do
     pass_prompt="${pass_prompt}"$'\n\n'"${SHORT_PASS_BLOCK}"
     SHORT_PASS_BLOCK=""
   fi
+  # The infrastructure's state goes FIRST in the agent's reading order of
+  # problems: a pass that starts on a sick environment must know before it
+  # measures anything.
+  if ! run_health_check; then
+    specstride_emit health_check_failed iter "$i" where pass_start rc "$HEALTH_RC"
+    pass_prompt="${pass_prompt}"$'\n\n'"$(health_block)"
+  fi
   # Consumed: the sidecar describes the pass that just ended, never an older one.
   rm -f "$KILL_SIDECAR" "$KILL_SIDECAR.path"
   # Likewise the yield artifact: only what THIS pass writes may be acted on.
@@ -2241,6 +2361,17 @@ for (( i=1; i<=MAX_ITER; i++ )); do
             deadline_sec "$YIELD_DEADLINE" predicate_kind "$YIELD_PREDICATE" job_log "$YIELD_JOB_LOG"
           specstride_emit run_stop reason proposer_yield_timeout iter "$i"
           exit 9
+          ;;
+        job_died|unhealthy)
+          echo "proposer.sh: the wait ended early ($yield_outcome) after ${yield_waited}s — resuming the agent with what happened. Job log: $YIELD_JOB_LOG" >&2
+          specstride_emit yield_ended_early iter "$i" reason "$yield_outcome" waited_sec "$yield_waited" \
+            predicate_kind "$YIELD_PREDICATE" job_pid "$YIELD_JOB_PID" job_log "$YIELD_JOB_LOG" \
+            yield_index "$YIELD_INDEX"
+          YIELD_RESUME_BLOCK="$(yield_ended_early_block "$yield_outcome" "$yield_waited")"
+          rm -f "$YIELD_ARTIFACT"
+          specstride_emit iter_done iter "$i" evidence missing yielded true waited_sec "$yield_waited"
+          [[ "$SPECSTRIDE_YIELD_COUNTS_AS_ITER" == "true" ]] || i=$(( i - 1 ))
+          continue
           ;;
         wall_budget)
           echo "proposer.sh: the run's wall-clock budget expired during a yield after ${yield_waited}s — halting (exit 9). The job is left alone; its log is $YIELD_JOB_LOG." >&2
