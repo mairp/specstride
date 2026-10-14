@@ -118,6 +118,11 @@ OPTIONS
                         commands, never the discovered ones; every phase then
                         needs a declared command). Also
                         SPECSTRIDE_VERIFICATION_COMMANDS.
+  --health-cmd PATH     Infrastructure health check: an executable run (no args,
+                        in the workdir) before every proposer pass and every few
+                        polls of a yield wait. Non-zero exit = unhealthy: the pass
+                        is told so first, and a yield wait on a job that needs a
+                        healthy environment ends early. Also SPECSTRIDE_HEALTH_CMD.
   --generate-tests DIR  Safely scaffold tests below this absolute directory (default:
                          <workdir>/testautomation/<feature>/generated).
                         Existing changed artifacts are never overwritten. Supplying
@@ -234,6 +239,7 @@ VERIFICATION="${SPECSTRIDE_VERIFICATION:-required}"
 TEST_PLAN="${SPECSTRIDE_TEST_PLAN:-}"
 VERIFICATION_COMMANDS="${SPECSTRIDE_VERIFICATION_COMMANDS:-}"
 GENERATE_TESTS="${SPECSTRIDE_GENERATE_TESTS:-}"
+HEALTH_CMD="${SPECSTRIDE_HEALTH_CMD:-}"
 LONG_JOB_PHASE="${SPECSTRIDE_LONG_JOB_PHASE:-}"
 LONG_JOB_CMD="${SPECSTRIDE_LONG_JOB_CMD:-}"
 
@@ -256,6 +262,7 @@ while [[ $# -gt 0 ]]; do
     --test-plan)     TEST_PLAN="${2:?}"; shift 2 ;;
     --verification-commands) VERIFICATION_COMMANDS="${2:?}"; shift 2 ;;
     --generate-tests) GENERATE_TESTS="${2:?}"; shift 2 ;;
+    --health-cmd)   HEALTH_CMD="${2:?}"; shift 2 ;;
     --telemetry)    TELEMETRY="true"; shift ;;
     --loki-url)     LOKI_URL="${2:?}"; shift 2 ;;
     --otel)         OTEL="true"; shift ;;
@@ -678,6 +685,8 @@ write_last_run_conf() {
     # A resume that drops the declared commands re-plans with the discovered
     # heuristic alone and every later gate silently narrows to it.
     printf 'VERIFICATION_COMMANDS=%q\n' "$VERIFICATION_COMMANDS"
+    # A resume that drops the health check runs blind again — the failure it exists for.
+    printf 'HEALTH_CMD=%q\n' "$HEALTH_CMD"
     # The long job is part of a phase's contract, not a launch-time nicety: a
     # resume that drops it silently starves the phase of the very evidence it
     # gates on, with nothing in the log saying so.
@@ -853,6 +862,20 @@ if [[ "$VERIFICATION" != "off" ]]; then
   fi
 fi
 
+# ── infrastructure health check ──────────────────────────────────────────────
+# Resolved and refused here, once, like the declared commands: a health check
+# that silently does not exist is a loop that silently runs blind.
+if [[ -n "$HEALTH_CMD" ]]; then
+  case "$HEALTH_CMD" in /*) : ;; *) HEALTH_CMD="$LAUNCH_DIR/$HEALTH_CMD" ;; esac
+  if [[ ! -f "$HEALTH_CMD" || ! -x "$HEALTH_CMD" ]]; then
+    echo "orchestrator.sh: --health-cmd is not an executable file: $HEALTH_CMD" >&2
+    exit "$E_SPEC"
+  fi
+  export SPECSTRIDE_HEALTH_CMD="$HEALTH_CMD"
+else
+  unset SPECSTRIDE_HEALTH_CMD
+fi
+
 # ── per-phase pass ceilings: the declared document's own map ──────────────────
 # Route 3 of §4.1. A phase's pass ceiling is a property of the work that phase
 # has to do, and the verification-commands document is already where the operator
@@ -953,6 +976,7 @@ if [[ "$OTEL" == "true" ]]; then
   log "  otel     : $(specstride_telemetry_status_line otel "$OTEL_URL" "$SPECSTRIDE_EVENTS")"
 fi
 log "  verify   : $VERIFICATION$( [[ "$VERIFICATION" != "off" ]] && echo "  plan: $TEST_PLAN" )$( [[ -n "$GENERATE_TESTS" ]] && echo "  scaffolds: $GENERATE_TESTS" )"
+log "  health   : ${HEALTH_CMD:-none — the loop cannot see its infrastructure (--health-cmd)}"
 log "  resume   : phase ${CUR_PHASE:-<all approved>}$( [[ -n "$START_PHASE" ]] && echo " (--start-phase)" )"
 log "  run_id   : $SPECSTRIDE_RUN_ID"
 log "  stop with: touch $STOP_FLAG"
@@ -1534,6 +1558,10 @@ emit_yield_contract() {
   echo "- \`deadline_sec\` is REQUIRED — the run holds this workdir for the whole wait."
   echo "- \`on_resume\` is handed back to you verbatim next pass, with the job's exit code"
   echo "  and a bounded slice of its log. Say what you will do with them."
+  echo "- The wait also ends EARLY, and you are resumed with the reason, when the job dies"
+  echo "  with its resume condition unmet, or when the operator's infrastructure health"
+  echo "  check keeps failing while it runs. For a job that takes the infrastructure down"
+  echo "  on purpose (a re-provision, a rebuild), add \`\"requires_healthy_infra\": false\`."
   echo "A yield is not a failure: it does not count as an error, it is not a stall, and"
   echo "by default it does not even burn an iteration. Yielding on a 90-minute job is"
   echo "the CORRECT move; waiting for it inside the pass is the expensive one."

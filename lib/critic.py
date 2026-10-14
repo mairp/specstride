@@ -2907,6 +2907,88 @@ def _write_transcript(path, nonce, verdict, detail, prompt, reply, args):
         warn("could not write transcript %s: %s" % (path, e))
 
 
+MACHINE_MARKER = "<!-- specstride:machine-generated: criterion ids below are not this verdict's -->"
+_CRITERION_RE = re.compile(r"\bT\d{2,}[a-z]?\b")
+_NOTES_RE = re.compile(r"^\s*(?:#+\s*)?(?:notes?|satisfied|met criteria|accepted)\b", re.I)
+_MET_RE = re.compile(r"\b(?:satisf(?:y|ies|ied)|sufficient(?:ly)?|accepted|(?:is|are) met|no rejection)\b", re.I)
+
+
+def _verdict_part(text):
+    """The critic's own words in a feedback file: everything before the marker."""
+    return text.split(MACHINE_MARKER, 1)[0]
+
+
+def _earlier_rejections(gates_dir, n):
+    """[(label, verdict text)] of this phase's earlier rejections, oldest first."""
+    feature_dir = os.path.dirname(gates_dir)
+    attempts_dir = os.path.join(feature_dir, "attempts", "phase%d" % n)
+    found = []
+    if os.path.isdir(attempts_dir):
+        def order(name):
+            digits = re.findall(r"\d+", name)
+            return (int(digits[-1]) if digits else 0, name)
+        for d in sorted(os.listdir(attempts_dir), key=order):
+            fb = os.path.join(attempts_dir, d, "GATE%d-FEEDBACK.md" % n)
+            try:
+                with open(fb, encoding="utf-8", errors="replace") as fh:
+                    found.append((d, _verdict_part(fh.read())))
+            except OSError:
+                pass
+    current = os.path.join(gates_dir, "GATE%d-FEEDBACK.md" % n)
+    try:
+        with open(current, encoding="utf-8", errors="replace") as fh:
+            text = _verdict_part(fh.read())
+        if not any(text == t for _, t in found):
+            found.append(("previous attempt", text))
+    except OSError:
+        pass
+    return found
+
+
+def carried_criteria(earlier, reply, limit=40):
+    """Criteria an earlier attempt rejected that this verdict does not mention.
+
+    The critic reports a subset of what is wrong each time, so a shorter list is
+    not acceptance of the rest. Measured live (2026-10-14, a SONiC feasibility
+    phase): a recipe-doc defect was rejected in attempt 2, absent from attempt
+    3's list with the file unchanged, and rejected again in attempt 4; proposer
+    and operator alike read attempt 3 as "everything else accepted"."""
+    now = set(_CRITERION_RE.findall(reply or ""))
+    out, seen = [], set()
+    for label, text in reversed(earlier):
+        for line in text.splitlines():
+            # A verdict's closing notes name criteria it ACCEPTED ("All other items
+            # from T044 through T124 are sufficiently grounded"): stop there, and
+            # skip any single line that says a criterion is met.
+            if _NOTES_RE.match(line):
+                break
+            if _MET_RE.search(line):
+                continue
+            for cid in _CRITERION_RE.findall(line):
+                if cid in now or cid in seen:
+                    continue
+                seen.add(cid)
+                out.append((cid, label, " ".join(line.split())[:200]))
+    out.sort(key=lambda item: (int(re.sub(r"\D", "", item[0]) or 0), item[0]))
+    return out[:limit], max(0, len(out) - limit)
+
+
+def grounding_paths_on_disk(reply, workdir):
+    """Split the verdict's NEEDS-GROUNDING paths into (present, absent) on disk.
+
+    A path the critic could not SEE is not a path that is missing. Measured live
+    (2026-10-14): 67 NEEDS-GROUNDING lines for proofs that all existed; the
+    diagnostician turned them into "re-record all 60 proofs"."""
+    present, absent = [], []
+    for raw in _NEEDS_GROUNDING_RE.findall(reply or ""):
+        path = _strip_line_suffix(raw.strip().rstrip(".,;:)"))
+        full = _resolve_cited(path, workdir, None) if workdir else None
+        bucket = present if full and os.path.exists(full) else absent
+        if path not in bucket:
+            bucket.append(path)
+    return present, absent
+
+
 def _finish_reject(gates_dir, n, title, args, nonce, prompt, reply, verdict, detail,
                    transcript, events_path, debug, gap=None):
     """Common REJECT/ MALFORMED path: write GATE<N>-FEEDBACK.md + transcript, emit.
@@ -2917,6 +2999,13 @@ def _finish_reject(gates_dir, n, title, args, nonce, prompt, reply, verdict, det
     re-creating/copying it (the exact loop that HALTed project D twice)."""
     feedback = os.path.join(gates_dir, "GATE%d-FEEDBACK.md" % n)
     reason = _first_reason_line(reply) or detail
+    # Read BEFORE the overwrite below: the previous attempt's feedback may still
+    # be the live file.
+    carried, carried_more = ([], 0)
+    present, absent = ([], [])
+    if verdict == "REJECTED":
+        carried, carried_more = carried_criteria(_earlier_rejections(gates_dir, n), reply)
+        present, absent = grounding_paths_on_disk(reply, getattr(args, "workdir", ""))
     try:
         with open(feedback, "w", encoding="utf-8") as fh:
             fh.write("# Phase %d — critic feedback (%s)\n\n" % (n, verdict))
@@ -2941,6 +3030,37 @@ def _finish_reject(gates_dir, n, title, args, nonce, prompt, reply, verdict, det
                     % os.path.basename(gap[0]))
                 for g in gap:
                     fh.write("- `%s`\n" % g)
+            if present or absent or carried:
+                fh.write("\n\n%s\n" % MACHINE_MARKER)
+            if present or absent:
+                fh.write(
+                    "\n---\n## NEEDS-GROUNDING paths checked against the disk "
+                    "(machine-generated)\n")
+            if present:
+                fh.write(
+                    "PRESENT on disk (%d): the critic could not SEE these — a citation "
+                    "or grounding-slice problem, not missing work. Put their decisive "
+                    "lines where the critic reads them. Do NOT re-record, regenerate or "
+                    "re-run them unless the critic names a defect in their CONTENT:\n"
+                    % len(present))
+                for path in present:
+                    fh.write("- `%s`\n" % path)
+            if absent:
+                fh.write("ABSENT from disk (%d): genuinely missing:\n" % len(absent))
+                for path in absent:
+                    fh.write("- `%s`\n" % path)
+            if carried:
+                fh.write(
+                    "\n---\n## Rejected in earlier attempts, NOT re-examined this time "
+                    "(machine-generated)\n"
+                    "The critic's list above is not cumulative: it reports a subset of "
+                    "what is wrong each time. These were rejected before and nothing "
+                    "says they are fixed. Check each one against its earlier reason "
+                    "before you resubmit:\n")
+                for cid, label, line in carried:
+                    fh.write("- %s (%s): %s\n" % (cid, label, line))
+                if carried_more:
+                    fh.write("- ... and %d more in the attempts/ archive\n" % carried_more)
     except OSError as e:
         warn("could not write feedback %s: %s" % (feedback, e))
     _write_transcript(transcript, nonce, verdict, detail, prompt, reply, args)
