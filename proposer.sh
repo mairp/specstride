@@ -1327,7 +1327,12 @@ EOF2
 # consecutive failures (one failure can be a blip; a fault that persists is not).
 : "${SPECSTRIDE_HEALTH_EVERY:=10}"
 : "${SPECSTRIDE_HEALTH_FAILS:=2}"
+# `auto`: the PROPOSER owns the check. It writes an executable at
+# SPECSTRIDE_HEALTH_AUTO_PATH (default <feature dir>/health-check) the first time a
+# phase touches live infrastructure, and specstride adopts it from then on.
+: "${SPECSTRIDE_HEALTH_AUTO_PATH:=$FEATURE_DIR/health-check}"
 HEALTH_OUT=""; HEALTH_RC=0
+HEALTH_ACTIVE=""; HEALTH_PROBLEM=""
 
 YIELD_REASON=""; YIELD_MODE=""; YIELD_JOB_CWD=""; YIELD_JOB_LOG=""
 YIELD_DEADLINE=""; YIELD_PREDICATE=""; YIELD_ON_RESUME=""; YIELD_ADOPT_PID=""
@@ -1632,10 +1637,75 @@ yield_take_job() {
 
 # Run the operator's health check once. Returns 0 when healthy (or when no check
 # is configured); otherwise sets HEALTH_RC and HEALTH_OUT (bounded tail).
-run_health_check() {
+# A proposer-written check is only worth running if it can fail. Refuse the
+# hollow shapes a model under pressure writes: empty, or nothing but `exit 0`.
+health_lint() {
+  local path="$1" body
+  body="$(grep -vE '^[[:space:]]*(#|$)' "$path" 2>/dev/null \
+          | grep -vE '^[[:space:]]*(set[[:space:]].*|exit[[:space:]]+0|true|:)[[:space:]]*;?[[:space:]]*$')"
+  [[ -n "$body" ]] || { echo "it does nothing but succeed (empty, or only 'exit 0'/'true')"; return 1; }
+  if head -n1 "$path" | grep -qE '^#!.*\b(ba|da|z|k)?sh\b'; then
+    bash -n "$path" 2>/dev/null || { echo "it has a shell syntax error (bash -n)"; return 1; }
+  fi
+  return 0
+}
+
+# Which check runs now. Sets HEALTH_ACTIVE (empty = none) and HEALTH_PROBLEM
+# (why an `auto` check is not usable yet).
+resolve_health_check() {
+  HEALTH_ACTIVE=""; HEALTH_PROBLEM=""
   [[ -n "$SPECSTRIDE_HEALTH_CMD" ]] || return 0
+  if [[ "$SPECSTRIDE_HEALTH_CMD" != auto ]]; then HEALTH_ACTIVE="$SPECSTRIDE_HEALTH_CMD"; return 0; fi
+  local path="$SPECSTRIDE_HEALTH_AUTO_PATH" why
+  if [[ ! -e "$path" ]]; then HEALTH_PROBLEM="missing"; return 0; fi
+  if [[ ! -x "$path" ]]; then HEALTH_PROBLEM="not executable (chmod +x it)"; return 0; fi
+  if ! why="$(health_lint "$path")"; then HEALTH_PROBLEM="refused: $why"; return 0; fi
+  HEALTH_ACTIVE="$path"
+}
+
+# An `auto` check the proposer changed since the last pass: say so, with the diff,
+# so weakening it is visible to the next pass and (cited in evidence) the critic.
+health_change_block() {
+  [[ "$SPECSTRIDE_HEALTH_CMD" == auto && -f "$SPECSTRIDE_HEALTH_AUTO_PATH" ]] || return 0
+  local prev="$FEATURE_DIR/.health-check.accepted" diff
+  if [[ ! -f "$prev" ]]; then
+    cp "$SPECSTRIDE_HEALTH_AUTO_PATH" "$prev" 2>/dev/null
+    specstride_emit health_check_adopted path "$SPECSTRIDE_HEALTH_AUTO_PATH"
+    return 0
+  fi
+  cmp -s "$prev" "$SPECSTRIDE_HEALTH_AUTO_PATH" && return 0
+  diff="$(diff -u "$prev" "$SPECSTRIDE_HEALTH_AUTO_PATH" | head -n 80)"
+  cp "$SPECSTRIDE_HEALTH_AUTO_PATH" "$prev" 2>/dev/null
+  specstride_emit health_check_changed path "$SPECSTRIDE_HEALTH_AUTO_PATH"
+  printf '## Your infrastructure health check CHANGED since the last pass\n'
+  printf 'File: %s. The change is recorded and must be cited in your evidence:\n```diff\n%s\n```\n' \
+    "$SPECSTRIDE_HEALTH_AUTO_PATH" "$diff"
+  printf 'A check made weaker so that it passes is a defect the critic will reject.\n'
+}
+
+# `auto` with no usable check yet: what the pass is told.
+health_missing_block() {
+  cat <<EOF2
+## Infrastructure health check: NOT WRITTEN YET ($HEALTH_PROBLEM)
+This run expects YOU to own the health check of the live infrastructure it works
+on. If this phase touches live infrastructure (a lab, cluster, VM, device), FIRST
+write an executable at:
+  $SPECSTRIDE_HEALTH_AUTO_PATH
+It runs with no arguments in the workdir and must exit 0 ONLY when everything this
+phase uses is healthy (reachability, services/units, control-plane sessions, the
+data path), print one line per problem otherwise, finish in under a minute, change
+nothing, and know which degraded states are INTENDED (e.g. a factory baseline).
+Specstride adopts it as soon as it exists and runs it before every pass and while
+it waits on your yielded jobs. Until it exists, a yield on a job that needs healthy
+infrastructure is refused. If this phase touches no live infrastructure, ignore this.
+EOF2
+}
+
+run_health_check() {
+  resolve_health_check
+  [[ -n "$HEALTH_ACTIVE" ]] || return 0
   local out rc
-  out="$(cd "$WORKDIR" && timeout "$SPECSTRIDE_HEALTH_TIMEOUT" "$SPECSTRIDE_HEALTH_CMD" 2>&1)"
+  out="$(cd "$WORKDIR" && timeout "$SPECSTRIDE_HEALTH_TIMEOUT" "$HEALTH_ACTIVE" 2>&1)"
   rc=$?
   (( rc == 0 )) && return 0
   HEALTH_RC="$rc"
@@ -1647,7 +1717,7 @@ run_health_check() {
 health_block() {
   cat <<EOF2
 ## INFRASTRUCTURE HEALTH CHECK FAILED — read this before anything else
-Specstride ran the operator's health check (\`$SPECSTRIDE_HEALTH_CMD\`) before this
+Specstride ran the health check (\`$HEALTH_ACTIVE\`) before this
 pass and it exited $HEALTH_RC. Last lines of its output:
 \`\`\`
 $HEALTH_OUT
@@ -2226,7 +2296,11 @@ for (( i=1; i<=MAX_ITER; i++ )); do
   if ! run_health_check; then
     specstride_emit health_check_failed iter "$i" where pass_start rc "$HEALTH_RC"
     pass_prompt="${pass_prompt}"$'\n\n'"$(health_block)"
+  elif [[ -n "$HEALTH_PROBLEM" ]]; then
+    pass_prompt="${pass_prompt}"$'\n\n'"$(health_missing_block)"
   fi
+  health_change="$(health_change_block)"
+  [[ -n "$health_change" ]] && pass_prompt="${pass_prompt}"$'\n\n'"${health_change}"
   # Consumed: the sidecar describes the pass that just ended, never an older one.
   rm -f "$KILL_SIDECAR" "$KILL_SIDECAR.path"
   # Likewise the yield artifact: only what THIS pass writes may be acted on.
@@ -2318,7 +2392,16 @@ for (( i=1; i<=MAX_ITER; i++ )); do
       rm -f "$YIELD_ARTIFACT"
       exit 9
     fi
-    if yield_take_job; then
+    resolve_health_check
+    if [[ "$YIELD_NEEDS_HEALTHY" == "true" && "$SPECSTRIDE_HEALTH_CMD" == auto && -z "$HEALTH_ACTIVE" ]]; then
+      # The forcing function of `auto`: the long jobs are exactly where running
+      # blind costs hours, so they wait until the check exists.
+      echo "proposer.sh: refusing the yield — this run's health check is $HEALTH_PROBLEM ($SPECSTRIDE_HEALTH_AUTO_PATH). Write it first, or mark a job that takes the infrastructure down on purpose with requires_healthy_infra: false." >&2
+      specstride_emit yield_invalid iter "$i" reason "health check $HEALTH_PROBLEM" \
+        artifact "$YIELD_ARTIFACT"
+      rm -f "$YIELD_ARTIFACT"
+      YIELD_INDEX=$(( YIELD_INDEX - 1 ))
+    elif yield_take_job; then
       YIELD_STARTED_AT="$(date +%s)"
       specstride_emit pass_yield iter "$i" reason "$YIELD_REASON" predicate_kind "$YIELD_PREDICATE" \
         deadline_sec "$YIELD_DEADLINE" job_mode "$YIELD_MODE" job_log "$YIELD_JOB_LOG" \

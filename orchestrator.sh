@@ -118,11 +118,15 @@ OPTIONS
                         commands, never the discovered ones; every phase then
                         needs a declared command). Also
                         SPECSTRIDE_VERIFICATION_COMMANDS.
-  --health-cmd PATH     Infrastructure health check: an executable run (no args,
+  --health-cmd PATH|auto
+                        Infrastructure health check: an executable run (no args,
                         in the workdir) before every proposer pass and every few
                         polls of a yield wait. Non-zero exit = unhealthy: the pass
                         is told so first, and a yield wait on a job that needs a
                         healthy environment ends early. Also SPECSTRIDE_HEALTH_CMD.
+                        `auto`: the proposer writes and owns the check at
+                        <feature state>/health-check (told so in its prompt);
+                        healthy-infra yields are refused until it exists.
   --generate-tests DIR  Safely scaffold tests below this absolute directory (default:
                          <workdir>/testautomation/<feature>/generated).
                         Existing changed artifacts are never overwritten. Supplying
@@ -865,7 +869,11 @@ fi
 # ── infrastructure health check ──────────────────────────────────────────────
 # Resolved and refused here, once, like the declared commands: a health check
 # that silently does not exist is a loop that silently runs blind.
-if [[ -n "$HEALTH_CMD" ]]; then
+if [[ "$HEALTH_CMD" == auto ]]; then
+  # The proposer writes and owns the check (proposer.sh resolve_health_check).
+  export SPECSTRIDE_HEALTH_CMD=auto
+  export SPECSTRIDE_HEALTH_AUTO_PATH="${SPECSTRIDE_HEALTH_AUTO_PATH:-$FEATURE_DIR/health-check}"
+elif [[ -n "$HEALTH_CMD" ]]; then
   case "$HEALTH_CMD" in /*) : ;; *) HEALTH_CMD="$LAUNCH_DIR/$HEALTH_CMD" ;; esac
   if [[ ! -f "$HEALTH_CMD" || ! -x "$HEALTH_CMD" ]]; then
     echo "orchestrator.sh: --health-cmd is not an executable file: $HEALTH_CMD" >&2
@@ -976,7 +984,11 @@ if [[ "$OTEL" == "true" ]]; then
   log "  otel     : $(specstride_telemetry_status_line otel "$OTEL_URL" "$SPECSTRIDE_EVENTS")"
 fi
 log "  verify   : $VERIFICATION$( [[ "$VERIFICATION" != "off" ]] && echo "  plan: $TEST_PLAN" )$( [[ -n "$GENERATE_TESTS" ]] && echo "  scaffolds: $GENERATE_TESTS" )"
-log "  health   : ${HEALTH_CMD:-none — the loop cannot see its infrastructure (--health-cmd)}"
+if [[ "$HEALTH_CMD" == auto ]]; then
+  log "  health   : auto — written by the proposer at ${SPECSTRIDE_HEALTH_AUTO_PATH#"$WORKDIR"/}$( [[ -x "$SPECSTRIDE_HEALTH_AUTO_PATH" ]] && echo " (present)" || echo " (not written yet)" )"
+else
+  log "  health   : ${HEALTH_CMD:-none — the loop cannot see its infrastructure (--health-cmd)}"
+fi
 log "  resume   : phase ${CUR_PHASE:-<all approved>}$( [[ -n "$START_PHASE" ]] && echo " (--start-phase)" )"
 log "  run_id   : $SPECSTRIDE_RUN_ID"
 log "  stop with: touch $STOP_FLAG"
@@ -1562,6 +1574,10 @@ emit_yield_contract() {
   echo "  with its resume condition unmet, or when the operator's infrastructure health"
   echo "  check keeps failing while it runs. For a job that takes the infrastructure down"
   echo "  on purpose (a re-provision, a rebuild), add \`\"requires_healthy_infra\": false\`."
+  if [[ "${SPECSTRIDE_HEALTH_CMD:-}" == auto ]]; then
+    echo "- This run's infrastructure health check is YOURS: ${SPECSTRIDE_HEALTH_AUTO_PATH#"$WORKDIR"/}."
+    echo "  Cite it by that path in GATE evidence whenever the phase touched live infrastructure."
+  fi
   echo "A yield is not a failure: it does not count as an error, it is not a stall, and"
   echo "by default it does not even burn an iteration. Yielding on a 90-minute job is"
   echo "the CORRECT move; waiting for it inside the pass is the expensive one."
