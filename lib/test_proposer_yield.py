@@ -758,3 +758,27 @@ def test_auto_shows_a_changed_check_as_a_diff(tmp_path):
     assert "health check CHANGED" in passes[1], result.stderr
     assert "+# weakened" in passes[1] and "-ping -c1" in passes[1]
     assert [e for e in events if e["event"] == "health_check_changed"]
+
+
+def test_a_yield_whose_completion_marker_already_exists_is_refused(tmp_path):
+    """Measured live 2026-10-14: an adopted chain's exit_code_file named a .rc an
+    earlier job had left behind; the wait ended after 0 s while the chain ran."""
+    stale = tmp_path / "chain.rc"
+    stale.write_text("0\n")
+    document = _yield_json(job={"mode": "launch", "argv": ["/bin/sh", "-c", "sleep 1"]},
+                           resume_when={"kind": "exit_code_file", "path": str(stale)})
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1)
+    invalid = [e for e in events if e["event"] == "yield_invalid"]
+    assert invalid and "already exists" in invalid[0]["reason"], result.stderr
+    assert not [e for e in events if e["event"] == "yield_job_start"]
+
+
+def test_a_fresh_marker_path_is_still_accepted(tmp_path):
+    marker = tmp_path / "fresh.rc"
+    document = _yield_json(job={"mode": "launch",
+                                "argv": ["/bin/sh", "-c", f"sleep 1; echo 0 > {marker}"]},
+                           resume_when={"kind": "exit_code_file", "path": str(marker)})
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1)
+    assert [e for e in events if e["event"] == "yield_resume"], result.stderr

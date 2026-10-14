@@ -1336,7 +1336,7 @@ HEALTH_ACTIVE=""; HEALTH_PROBLEM=""
 
 YIELD_REASON=""; YIELD_MODE=""; YIELD_JOB_CWD=""; YIELD_JOB_LOG=""
 YIELD_DEADLINE=""; YIELD_PREDICATE=""; YIELD_ON_RESUME=""; YIELD_ADOPT_PID=""
-YIELD_NEEDS_HEALTHY="true"
+YIELD_NEEDS_HEALTHY="true"; YIELD_MARKER_PATH=""
 YIELD_JOB_PID=""; YIELD_JOB_RC=""; YIELD_STARTED_AT=""; YIELD_INDEX=0
 YIELD_RESUME_BLOCK=""
 YIELD_ARGV=()
@@ -1344,9 +1344,9 @@ YIELD_ARGV=()
 # The schema owner and the predicate evaluator, in one place. Bash cannot parse
 # JSON and must not try; this is the same shim shape specstride_spec_* uses.
 #   _yield_py validate <artifact> <workdir> <allow-command>
-#     -> 9 lines (reason, mode, cwd, log, deadline_sec, predicate kind,
-#        on_resume, adopt pid, requires_healthy_infra), or exit 2 with one line
-#        saying what is wrong.
+#     -> 10 lines (reason, mode, cwd, log, deadline_sec, predicate kind,
+#        on_resume, adopt pid, requires_healthy_infra, explicit marker path for
+#        exit_code_file/file_exists), or exit 2 with one line saying what is wrong.
 #   _yield_py argv <artifact> <workdir> <allow-command>   -> one argv entry/line
 #   _yield_py check <artifact> <workdir> <allow-command> <launched-pid> <rc-file>
 #     -> exit 0 satisfied, 1 not yet, 2 unsatisfiable
@@ -1462,7 +1462,8 @@ if not isinstance(needs_healthy, bool):
 
 if cmd == "validate":
     for field in (one_line(reason), mode, cwd, log, str(deadline), kind,
-                  one_line(on_resume), adopt_pid, "true" if needs_healthy else "false"):
+                  one_line(on_resume), adopt_pid, "true" if needs_healthy else "false",
+                  resolve(predicate_path) if kind in ("exit_code_file", "file_exists") else ""):
         print(field)
     sys.exit(0)
 
@@ -1561,6 +1562,7 @@ read_yield() {
   YIELD_DEADLINE="${fields[4]:-}"; YIELD_PREDICATE="${fields[5]:-}"
   YIELD_ON_RESUME="${fields[6]:-}"; YIELD_ADOPT_PID="${fields[7]:-}"
   YIELD_NEEDS_HEALTHY="${fields[8]:-true}"
+  YIELD_MARKER_PATH="${fields[9]:-}"
   return 0
 }
 
@@ -2398,6 +2400,16 @@ for (( i=1; i<=MAX_ITER; i++ )); do
       # blind costs hours, so they wait until the check exists.
       echo "proposer.sh: refusing the yield — this run's health check is $HEALTH_PROBLEM ($SPECSTRIDE_HEALTH_AUTO_PATH). Write it first, or mark a job that takes the infrastructure down on purpose with requires_healthy_infra: false." >&2
       specstride_emit yield_invalid iter "$i" reason "health check $HEALTH_PROBLEM" \
+        artifact "$YIELD_ARTIFACT"
+      rm -f "$YIELD_ARTIFACT"
+      YIELD_INDEX=$(( YIELD_INDEX - 1 ))
+    elif [[ -n "$YIELD_MARKER_PATH" && -e "$YIELD_MARKER_PATH" ]]; then
+      # A completion marker that exists BEFORE the wait starts is stale: the wait
+      # would end at once and resume the agent on a job still running. Measured
+      # live 2026-10-14: an adopted chain's exit_code_file named a .rc left by an
+      # earlier job; "yield satisfied after 0s" while the chain took the lab down.
+      echo "proposer.sh: refusing the yield — its completion marker $YIELD_MARKER_PATH already exists before the job has ended (stale from an earlier job). Remove it before starting the job, name a fresh path, or use resume_when.kind pid." >&2
+      specstride_emit yield_invalid iter "$i" reason "completion marker already exists: $YIELD_MARKER_PATH" \
         artifact "$YIELD_ARTIFACT"
       rm -f "$YIELD_ARTIFACT"
       YIELD_INDEX=$(( YIELD_INDEX - 1 ))
