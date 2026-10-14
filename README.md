@@ -578,6 +578,22 @@ names an executable, run with no arguments in the workdir; exit 0 means healthy.
 - The path is resolved and checked at start-up (a missing check aborts) and is
   saved for `specstride resume`.
 
+**`--health-cmd auto`: the proposer owns the check.** When no operator script exists
+(a new lab, a new feature), the proposer writes it. Every pass is told the path
+(`<feature state>/health-check`) and the contract: no arguments, exit 0 only when
+everything the phase uses is healthy, one line per problem, under a minute, read-only,
+and aware of INTENDED degraded states (a factory baseline is not a fault). Specstride
+adopts it as soon as it is executable and runs it exactly like an operator's check.
+
+- Until it exists, a yield whose job needs healthy infrastructure is **refused**
+  ("write the health check first"); `"requires_healthy_infra": false` jobs still run.
+- A hollow check (empty, or nothing but `exit 0`/`true`) or one with a shell syntax
+  error is refused, and the pass is told why.
+- Every change to it between passes is emitted (`health_check_changed`) and shown to
+  the next pass as a diff; the proposer must cite the file in its gate evidence, so a
+  check weakened to pass is in front of the critic.
+- An explicit `--health-cmd PATH` always wins over `auto`.
+
 Independently of the health check, a yield on `file_exists`/`file_stable`/`grep`
 now also ends early when the job specstride launched or adopted is gone and the
 condition is still unmet (`yield_ended_early reason=job_died`), instead of

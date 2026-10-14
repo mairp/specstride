@@ -684,3 +684,77 @@ def test_a_launch_yield_waiting_on_a_file_nobody_writes_ends_when_the_job_exits(
     assert early and early[0]["reason"] == "job_died", result.stderr
     assert int(early[0]["waited_sec"]) < 60
     assert result.returncode != 9
+
+
+# ── --health-cmd auto: the proposer writes and owns the check ────────────────
+
+
+def _auto_path(tmp_path):
+    return tmp_path / ".specstride" / "features" / "f" / "health-check"
+
+
+def _auto_env():
+    return {"SPECSTRIDE_HEALTH_CMD": "auto"}
+
+
+def test_auto_with_no_check_tells_the_pass_to_write_one(tmp_path):
+    _run(tmp_path, _agent(tmp_path, "exit 0\n"), max_iter=1, env_extra=_auto_env())
+    prompt = (tmp_path / "prompts.log").read_text()
+    assert "NOT WRITTEN YET (missing)" in prompt
+    assert str(_auto_path(tmp_path)) in prompt
+
+
+def test_auto_refuses_a_healthy_infra_yield_until_the_check_exists(tmp_path):
+    document = _yield_json(job={"mode": "launch", "argv": ["/bin/sh", "-c", "sleep 1"]})
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1, env_extra=_auto_env())
+    invalid = [e for e in events if e["event"] == "yield_invalid"]
+    assert invalid and "health check missing" in invalid[0]["reason"], result.stderr
+    assert not [e for e in events if e["event"] == "yield_job_start"]
+
+
+def test_auto_still_allows_a_yield_that_takes_the_infra_down_on_purpose(tmp_path):
+    document = _yield_json(job={"mode": "launch", "argv": ["/bin/sh", "-c", "sleep 1"]},
+                           requires_healthy_infra=False)
+    result, events = _run(tmp_path, _agent(tmp_path, _writes_yield(tmp_path, document)),
+                          max_iter=1, env_extra=_auto_env())
+    assert [e for e in events if e["event"] == "yield_resume"], result.stderr
+
+
+def test_auto_refuses_a_hollow_check(tmp_path):
+    path = _auto_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("#!/bin/bash\n# always fine\nset -e\nexit 0\n")
+    path.chmod(0o755)
+    _run(tmp_path, _agent(tmp_path, "exit 0\n"), max_iter=1, env_extra=_auto_env())
+    assert "refused: it does nothing but succeed" in (tmp_path / "prompts.log").read_text()
+
+
+def test_auto_runs_the_check_the_proposer_wrote(tmp_path):
+    """Pass 1 writes a failing check; pass 2 starts with its output."""
+    path = _auto_path(tmp_path)
+    body = (f'if [ ! -e "{path}" ]; then\n'
+            f'  mkdir -p "$(dirname "{path}")"\n'
+            f"  printf '#!/bin/bash\\necho \"leaf01 bgp: inactive\"\\nexit 2\\n' > \"{path}\"\n"
+            f'  chmod +x "{path}"\n'
+            'fi\nexit 0\n')
+    result, events = _run(tmp_path, _agent(tmp_path, body), max_iter=2, env_extra=_auto_env())
+    passes = (tmp_path / "prompts.log").read_text().split("===PASS-END===")
+    assert "INFRASTRUCTURE HEALTH CHECK FAILED" not in passes[0]
+    assert "INFRASTRUCTURE HEALTH CHECK FAILED" in passes[1], result.stderr
+    assert "leaf01 bgp: inactive" in passes[1]
+    assert [e for e in events if e["event"] == "health_check_adopted"]
+
+
+def test_auto_shows_a_changed_check_as_a_diff(tmp_path):
+    path = _auto_path(tmp_path)
+    path.parent.mkdir(parents=True)
+    path.write_text("#!/bin/bash\nping -c1 -W1 127.0.0.1 >/dev/null || exit 3\n")
+    path.chmod(0o755)
+    body = (f'if ! grep -q weakened "{path}"; then\n'
+            f"  printf '#!/bin/bash\\n# weakened\\ntrue\\necho ok\\n' > \"{path}\"\nfi\nexit 0\n")
+    result, events = _run(tmp_path, _agent(tmp_path, body), max_iter=2, env_extra=_auto_env())
+    passes = (tmp_path / "prompts.log").read_text().split("===PASS-END===")
+    assert "health check CHANGED" in passes[1], result.stderr
+    assert "+# weakened" in passes[1] and "-ping -c1" in passes[1]
+    assert [e for e in events if e["event"] == "health_check_changed"]
