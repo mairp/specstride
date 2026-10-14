@@ -232,6 +232,50 @@ def _git_revision(workdir):
     }
 
 
+SHELLS = ("bash", "sh", "dash", "zsh", "ksh")
+
+
+def _lint_declared_argv(bad, resolved, args, cwd, environ):
+    """Refuse a declared command that can never succeed, at plan time.
+
+    The runner executes [executable] + args. An entry written as
+    {"executable": "bash", "args": ["bash", "-c", "..."]} therefore runs
+    `bash bash -c ...`, which exits 126 on every gate. Measured live
+    (2026-10-14): 20 such entries sat frozen in a plan for phases 4-11 and would
+    have failed every gate from phase 4 on regardless of the work. A shell
+    snippet with a syntax error fails the same way, so it is checked with -n.
+    """
+    if args:
+        first = args[0]
+        first_resolved = first if os.path.isabs(first) else shutil.which(
+            first, path=environ.get("PATH", ""))
+        if os.path.basename(first) == os.path.basename(resolved) or (
+            first_resolved and os.path.realpath(first_resolved) == os.path.realpath(resolved)
+        ):
+            raise bad(
+                "args[0] %r repeats the executable; the runner already runs "
+                "[executable] + args, so this would execute %s %s ... — drop args[0]"
+                % (first, os.path.basename(resolved), first)
+            )
+    if os.path.basename(resolved) not in SHELLS or not args:
+        return
+    if args[0] == "-c" and len(args) > 1:
+        check = [resolved, "-n", "-c", args[1]]
+    elif not args[0].startswith("-"):
+        script = args[0] if os.path.isabs(args[0]) else os.path.join(cwd, args[0])
+        if not os.path.isfile(script):
+            raise bad("shell script not found: %s" % script)
+        check = [resolved, "-n", script]
+    else:
+        return
+    try:
+        result = subprocess.run(check, cwd=cwd, capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise bad("shell syntax check could not run: %s" % exc)
+    if result.returncode != 0:
+        raise bad("shell syntax check failed: %s" % (result.stderr or result.stdout).strip()[:400])
+
+
 def _declared_entry_command(entry, index, environ):
     """One declared entry -> one plan command, or a VerificationError naming it."""
     def bad(message):
@@ -313,6 +357,7 @@ def _declared_entry_command(entry, index, environ):
             raise bad("executable %r not found on PATH" % executable)
     if not os.path.isfile(resolved) or not os.access(resolved, os.X_OK):
         raise bad("executable is not an executable file: %s" % resolved)
+    _lint_declared_argv(bad, resolved, args, cwd, environ)
 
     command = _command(
         entry.get("kind") or "verify",

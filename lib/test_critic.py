@@ -1474,3 +1474,73 @@ def test_wildcard_citation_grounds_its_matches():
         assert "`examples/migrations/irb-plan.yaml`" in snap
         assert "`examples/migrations/vpls-plan.yaml`" in snap
         assert "- `examples/none/*.yaml` — **MISSING**" in snap, snap
+
+
+# ── feedback annotations: cumulative criteria + NEEDS-GROUNDING on disk ───────
+# Measured live 2026-10-14 (a SONiC feasibility phase, 7 attempts): the critic
+# reported a different subset of real gaps each attempt, and 67 NEEDS-GROUNDING
+# lines for proofs that existed became "re-record all 60 proofs".
+
+
+def test_a_criterion_rejected_earlier_and_not_mentioned_now_is_carried():
+    earlier = [
+        ("attempt2", "- T082 docs §2 still says Status: empty\n- T089 docs §3 missing\n"),
+        ("attempt3", "- T061 v6 addresses not shown\n"),
+    ]
+    carried, more = critic_mod.carried_criteria(earlier, "- T061 still not shown\n")
+    ids = [cid for cid, _, _ in carried]
+    assert ids == ["T082", "T089"] and more == 0
+    assert carried[0][1] == "attempt2" and "Status: empty" in carried[0][2]
+
+
+def test_criteria_an_earlier_verdict_accepted_are_not_carried():
+    earlier = [("attempt6",
+                "- T040 baseline routes not shown\n\nNotes:\n"
+                "- All other items from T044 through T124 are sufficiently grounded.\n"),
+               ("attempt5", "- T086 capture verdict missing\n"
+                            "- T093 is met now per the slice\n")]
+    carried, _ = critic_mod.carried_criteria(earlier, "")
+    assert [cid for cid, _, _ in carried] == ["T040", "T086"]
+
+
+def test_carried_criteria_are_bounded():
+    earlier = [("a1", "\n".join("- T%03d gap" % i for i in range(100, 160)))]
+    carried, more = critic_mod.carried_criteria(earlier, "", limit=10)
+    assert len(carried) == 10 and more == 50
+
+
+def test_needs_grounding_paths_are_split_by_presence_on_disk(tmp_path):
+    (tmp_path / "proofs").mkdir()
+    (tmp_path / "proofs" / "a.out").write_text("x")
+    reply = ("- T061 NEEDS-GROUNDING:proofs/a.out\n"
+             "- T062 NEEDS-GROUNDING:`proofs/missing.out`.\n")
+    present, absent = critic_mod.grounding_paths_on_disk(reply, str(tmp_path))
+    assert present == ["proofs/a.out"] and absent == ["proofs/missing.out"]
+
+
+def test_the_machine_sections_stay_out_of_the_verdict_part():
+    text = "- T001 gap\n\n" + critic_mod.MACHINE_MARKER + "\n- T002 (attempt1): old\n"
+    assert critic_mod._verdict_part(text) == "- T001 gap\n\n"
+
+
+def test_a_rejection_writes_both_annotations_below_the_marker(tmp_path):
+    feature = tmp_path / ".specstride" / "features" / "f"
+    gates = feature / "gates"
+    gates.mkdir(parents=True)
+    old = feature / "attempts" / "phase3" / "attempt2"
+    old.mkdir(parents=True)
+    (old / "GATE3-FEEDBACK.md").write_text("- T082 docs still say Status: empty\n")
+    (tmp_path / "proofs").mkdir()
+    (tmp_path / "proofs" / "v6.out").write_text("x")
+    args = SimpleNamespace(phase=3, attempt=3, provider="fake", max_rejects=30,
+                           workdir=str(tmp_path))
+    reply = "- T061 NEEDS-GROUNDING:proofs/v6.out\nVERDICT abc: REJECTED\n"
+    with pytest.raises(SystemExit) as stop:
+        critic_mod._finish_reject(str(gates), 3, "t", args, "abc", "p", reply, "REJECTED",
+                                  "", str(tmp_path / "transcript"), str(tmp_path / "ev"), False)
+    assert stop.value.code == 10
+    text = (gates / "GATE3-FEEDBACK.md").read_text()
+    verdict, machine = text.split(critic_mod.MACHINE_MARKER)
+    assert "T082" not in verdict
+    assert "PRESENT on disk (1)" in machine and "`proofs/v6.out`" in machine
+    assert "- T082 (attempt2): - T082 docs still say Status: empty" in machine

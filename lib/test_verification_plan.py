@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -827,6 +828,51 @@ def test_malformed_declared_entries_are_refused(tmp_path):
         with pytest.raises(verification_plan.VerificationError) as excinfo:
             verification_plan.create_plan(workdir, specs, commands_path=document)
         assert expected in str(excinfo.value), (over, str(excinfo.value))
+
+
+def test_an_argv_that_repeats_its_executable_is_refused(tmp_path):
+    """`bash bash -c ...` exits 126 on every gate; measured live on 20 frozen
+    entries (2026-10-14). The plan must refuse it before the run starts."""
+    workdir, specs = project(tmp_path)
+    bash = shutil.which("bash")
+    document = commands_document(tmp_path, [declared_entry(
+        tmp_path, executable="bash", args=["bash", "-c", "true"])])
+    with pytest.raises(verification_plan.VerificationError) as excinfo:
+        verification_plan.create_plan(workdir, specs, commands_path=document)
+    assert "repeats the executable" in str(excinfo.value)
+    document = commands_document(tmp_path, [declared_entry(
+        tmp_path, executable=bash, args=[bash, "-c", "true"])])
+    with pytest.raises(verification_plan.VerificationError):
+        verification_plan.create_plan(workdir, specs, commands_path=document)
+
+
+def test_a_shell_snippet_with_a_syntax_error_is_refused(tmp_path):
+    workdir, specs = project(tmp_path)
+    document = commands_document(tmp_path, [declared_entry(
+        tmp_path, executable="bash", args=["-c", "if true; then echo x"])])
+    with pytest.raises(verification_plan.VerificationError) as excinfo:
+        verification_plan.create_plan(workdir, specs, commands_path=document)
+    assert "syntax check failed" in str(excinfo.value)
+
+
+def test_a_shell_script_that_is_missing_is_refused(tmp_path):
+    workdir, specs = project(tmp_path)
+    document = commands_document(tmp_path, [declared_entry(
+        tmp_path, executable="bash", args=["scripts/missing.sh"])])
+    with pytest.raises(verification_plan.VerificationError) as excinfo:
+        verification_plan.create_plan(workdir, specs, commands_path=document)
+    assert "script not found" in str(excinfo.value)
+
+
+def test_a_well_formed_shell_entry_is_accepted(tmp_path):
+    workdir, specs = project(tmp_path)
+    script = tmp_path / "check.sh"
+    script.write_text("#!/bin/bash\necho ok\n")
+    for args in (["-c", "cd . && echo ok"], [str(script)], ["check.sh", "--flag"]):
+        document = commands_document(tmp_path, [declared_entry(
+            tmp_path, executable="bash", args=args)])
+        plan = verification_plan.create_plan(workdir, specs, commands_path=document)
+        assert any(c.get("declaredId") == "p1-check" for c in plan["commands"]), args
 
 
 def test_duplicate_declared_ids_are_refused(tmp_path):
